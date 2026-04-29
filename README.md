@@ -102,14 +102,14 @@ lelab-frontend
 - `lelab-fullstack` - Starts both FastAPI backend (port 8000) and Vite frontend (port 8080) with auto-browser opening
 - `lelab-frontend` - Starts only the frontend development server with auto-browser opening
 
-**Frontend Repository:**
+**Frontend:**
 
-The frontend is automatically cloned from [leLab-space](https://github.com/jurmy24/leLab-space.git) when you run `lelab-frontend` or `lelab-fullstack`. The system will:
+The frontend lives in [`frontend/`](frontend/) inside this repo. Running `lelab-frontend` or `lelab-fullstack` will:
 
-1. Check if the frontend already exists in the parent directory
-2. Clone the repository if it doesn't exist
-3. Install dependencies with `npm install`
-4. Start the development server and auto-open your browser
+1. Run `npm install` in `frontend/`
+2. Start the Vite dev server and auto-open your browser
+
+The same `frontend/` directory is auto-deployed to the [LeLab Hugging Face Space](https://huggingface.co/spaces/lerobot/LeLab) by [`.github/workflows/sync_space.yml`](.github/workflows/sync_space.yml) on every push to `main` that touches `frontend/**`.
 
 ### Key Endpoints
 
@@ -132,21 +132,24 @@ leLab/
 │   ├── calibrating.py       # Robot calibration logic
 │   ├── training.py          # ML training logic
 │   ├── config.py            # Configuration management
-│   ├── scripts/             # Command-line scripts
-│   │   ├── backend.py       # Backend-only startup
-│   │   ├── frontend.py      # Frontend-only startup
-│   │   └── fullstack.py     # Full-stack startup
 │   └── static/              # Static web files
-├── ../leLab-space/   # React frontend (auto-cloned)
+├── scripts/                  # Command-line scripts
+│   ├── backend.py           # Backend-only startup
+│   ├── frontend.py          # Frontend-only startup
+│   └── fullstack.py         # Full-stack startup
+├── frontend/                 # React + Vite frontend (deployed to HF Space)
 │   ├── src/
 │   │   ├── components/      # React components
 │   │   ├── pages/           # Page components
 │   │   ├── hooks/           # Custom React hooks
 │   │   └── contexts/        # React contexts
 │   ├── public/              # Static assets
+│   ├── Dockerfile           # Used by HF Space build
 │   └── package.json         # Frontend dependencies
+├── .github/workflows/        # CI (auto-deploys frontend/ to HF Space)
 ├── pyproject.toml           # Python project configuration
-└── README.md               # This file
+├── LICENSE                  # Apache 2.0
+└── README.md                # This file
 ```
 
 ## 🔧 Development
@@ -164,7 +167,7 @@ lelab
 ### Frontend Development
 
 ```bash
-# Automatically clones, installs deps, and starts dev server
+# Installs deps in frontend/ and starts the Vite dev server
 lelab-frontend
 ```
 
@@ -177,10 +180,10 @@ lelab-fullstack
 
 **Development Notes:**
 
-- The frontend repository is automatically managed (cloned/updated)
+- Frontend source lives in `frontend/` and is deployed to the [HF Space](https://huggingface.co/spaces/lerobot/LeLab) via GitHub Actions
 - Both commands auto-open your browser to the appropriate URL
 - Backend runs on `http://localhost:8000`
-- Frontend runs on `http://localhost:8080` with API proxying
+- Frontend runs on `http://localhost:8080`
 
 ## 🤝 Contributing
 
@@ -192,7 +195,7 @@ lelab-fullstack
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
 ## 🙏 Acknowledgments
 

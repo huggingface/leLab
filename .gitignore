@@ -54,7 +54,7 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-package-lock.json
+/package-lock.json
 
 # Temporary files
 *.tmp
@@ -64,3 +64,11 @@ package-lock.json
 *.db
 *.sqlite
 *.sqlite3
+
+# Local dev / tool state
+.claude/
+.playwright-mcp/
+outputs/
+
+# Self-signed dev certs (regenerate per HTTPS_SETUP.md)
+certs/

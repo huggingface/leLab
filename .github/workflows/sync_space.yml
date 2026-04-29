@@ -1,0 +1,25 @@
+name: Sync frontend to Hugging Face Space
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/sync_space.yml'
+  workflow_dispatch:
+
+jobs:
+  sync-to-hub:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Push frontend/ to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          cd frontend
+          git init -b main
+          git config user.email "ci@huggingface.co"
+          git config user.name "GitHub CI"
+          git add -A
+          git commit -m "Sync from leLab @ ${GITHUB_SHA}"
+          git push -f https://Nico-robot:$HF_TOKEN@huggingface.co/spaces/lerobot/LeLab main
