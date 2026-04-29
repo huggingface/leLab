@@ -15,18 +15,15 @@ dependencies = [
     "websockets>=15.0.1",
     "uvicorn>=0.24.0",
     "psutil>=5.9.0",
-    "pycloudflared>=0.3.0",
     "lerobot[core_scripts,feetech] @ git+https://github.com/huggingface/lerobot.git",
 ]
 
 [project.scripts]
 lelab = "scripts.backend:main"
-"lelab-fullstack" = "scripts.fullstack:main"
-"lelab-frontend" = "scripts.frontend:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["app*", "scripts*"]
+include = ["app*", "scripts*", "frontend"]
 
 [tool.setuptools.package-data]
-app = ["static/**/*"]
+frontend = ["dist/**/*"]

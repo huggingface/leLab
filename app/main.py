@@ -1,6 +1,5 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import logging
@@ -76,11 +75,7 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
-# Create static directory if it doesn't exist
-os.makedirs("app/static", exist_ok=True)
-
-# Mount the static directory
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
+FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 
 # Get the path to the lerobot root directory (3 levels up from this script)
 LEROBOT_PATH = str(Path(__file__).parent.parent.parent.parent)
@@ -204,11 +199,6 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
-
-
-@app.get("/")
-def read_root():
-    return FileResponse("app/static/index.html")
 
 
 @app.get("/get-configs")
@@ -658,3 +648,13 @@ async def shutdown_event():
     if manager:
         manager.stop_broadcast_thread()
     logger.info("✅ Cleanup completed")
+
+
+# Serve the built frontend at /. Must be mounted last so API routes win.
+if FRONTEND_DIST.exists():
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
+else:
+    logger.warning(
+        f"frontend/dist not found at {FRONTEND_DIST}; "
+        "run `npm run build` in frontend/ or use `lelab --dev`."
+    )

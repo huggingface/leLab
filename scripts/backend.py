@@ -1,49 +1,57 @@
 """
-Backend script for LeLab.
+LeLab launcher.
 
-Starts the FastAPI server on :8000, opens a Cloudflare quick-tunnel,
-and launches the HF Space frontend in a browser pointed at the tunnel
-URL so a user can go from `lelab` to a working app with no setup.
+Default mode: starts the FastAPI backend on :8000, which serves the
+pre-built frontend at /. Opens the user's browser to the local app.
+
+--dev mode: spawns the Vite dev server (frontend/, port 8080) for HMR
+and starts uvicorn with --reload. Opens the browser to :8080.
 """
 
+import argparse
 import logging
+import os
 import signal
+import socket
+import subprocess
+import sys
 import threading
 import time
 import webbrowser
-from urllib.parse import quote
+from pathlib import Path
 
 import uvicorn
-from pycloudflared import try_cloudflare
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-SPACE_URL = "https://lerobot-lelab.hf.space"
+PROJECT_ROOT = Path(__file__).parent.parent
+FRONTEND_PATH = PROJECT_ROOT / "frontend"
+FRONTEND_DIST = FRONTEND_PATH / "dist"
 BACKEND_PORT = 8000
+FRONTEND_DEV_PORT = 8080
 
 
-def _open_space_with_tunnel():
-    """Start a Cloudflare quick-tunnel and open the Space pointed at it."""
-    logger.info("☁️  Starting Cloudflare tunnel...")
-    try:
-        urls = try_cloudflare(port=BACKEND_PORT, verbose=False)
-    except Exception as e:
-        logger.error(f"❌ Cloudflare tunnel failed: {e}")
-        logger.error("   Run `lelab-fullstack` for a fully-local fallback.")
-        return None
-
-    tunnel_url = urls.tunnel.rstrip("/")
-    logger.info(f"🌍 Backend exposed at: {tunnel_url}")
-
-    space_url = f"{SPACE_URL}/?api={quote(tunnel_url, safe=':/')}"
-    logger.info(f"🌐 Opening browser: {space_url}")
-    webbrowser.open(space_url)
-    return urls
+def _wait_for_port(port: int, timeout: int = 30) -> bool:
+    for _ in range(timeout):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        result = sock.connect_ex(("localhost", port))
+        sock.close()
+        if result == 0:
+            return True
+        time.sleep(1)
+    return False
 
 
-def main():
-    logger.info("🚀 Starting LeLab FastAPI backend server...")
+def _run_prod():
+    """Serve built frontend from backend on a single port."""
+    if not FRONTEND_DIST.exists():
+        logger.error(f"❌ Built frontend not found at {FRONTEND_DIST}")
+        logger.error("   Run `npm run build` in frontend/ first, or use `lelab --dev`.")
+        sys.exit(1)
+
+    logger.info("🚀 Starting LeLab on http://localhost:%d ...", BACKEND_PORT)
 
     config = uvicorn.Config(
         "app.main:app",
@@ -60,21 +68,118 @@ def main():
     while not server.started:
         time.sleep(0.1)
 
-    urls = _open_space_with_tunnel()
+    logger.info("🌐 Opening browser...")
+    webbrowser.open(f"http://localhost:{BACKEND_PORT}/")
 
     def shutdown(signum, frame):
         logger.info("🛑 Shutting down...")
-        if urls and urls.process:
-            try:
-                urls.process.terminate()
-            except Exception:
-                pass
         server.should_exit = True
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
     server_thread.join()
+
+
+def _run_dev():
+    """Vite dev server (HMR) + uvicorn --reload."""
+    if not FRONTEND_PATH.exists():
+        logger.error(f"❌ Frontend not found at {FRONTEND_PATH}")
+        sys.exit(1)
+
+    logger.info("📦 Installing frontend deps...")
+    subprocess.run(["npm", "install"], check=True, cwd=FRONTEND_PATH)
+
+    logger.info("🎨 Starting Vite dev server (port %d)...", FRONTEND_DEV_PORT)
+    frontend_process = subprocess.Popen(
+        ["npm", "run", "dev"],
+        cwd=FRONTEND_PATH,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    if not _wait_for_port(FRONTEND_DEV_PORT):
+        logger.error("❌ Frontend never came up")
+        frontend_process.terminate()
+        sys.exit(1)
+
+    logger.info("🚀 Starting backend (port %d) with --reload...", BACKEND_PORT)
+    backend_process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "app.main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(BACKEND_PORT),
+            "--reload",
+        ],
+        cwd=PROJECT_ROOT,
+        env=os.environ.copy(),
+        start_new_session=True,
+    )
+
+    if not _wait_for_port(BACKEND_PORT, timeout=15):
+        logger.error("❌ Backend never came up")
+        for p in (backend_process, frontend_process):
+            try:
+                os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+            except Exception:
+                p.terminate()
+        sys.exit(1)
+
+    logger.info("🌐 Opening browser...")
+    webbrowser.open(f"http://localhost:{FRONTEND_DEV_PORT}/")
+
+    logger.info("✅ Dev mode running — Ctrl+C to stop")
+    logger.info("   Frontend: http://localhost:%d", FRONTEND_DEV_PORT)
+    logger.info("   Backend:  http://localhost:%d", BACKEND_PORT)
+
+    def shutdown(signum, frame):
+        logger.info("🛑 Shutting down...")
+        for name, p in [("backend", backend_process), ("frontend", frontend_process)]:
+            try:
+                os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+                except Exception:
+                    p.kill()
+            except Exception:
+                pass
+            logger.info(f"  ✅ {name} stopped")
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGTERM, shutdown)
+
+    while True:
+        time.sleep(2)
+        if backend_process.poll() is not None:
+            logger.error("❌ Backend died")
+            shutdown(None, None)
+        if frontend_process.poll() is not None:
+            logger.error("❌ Frontend died")
+            shutdown(None, None)
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="lelab", description="Run LeLab")
+    parser.add_argument(
+        "--dev",
+        action="store_true",
+        help="Dev mode: Vite HMR + uvicorn --reload (requires Node.js)",
+    )
+    args = parser.parse_args()
+
+    if args.dev:
+        _run_dev()
+    else:
+        _run_prod()
 
 
 if __name__ == "__main__":

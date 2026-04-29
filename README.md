@@ -83,35 +83,18 @@ LeLab bridges the gap between LeRobot's powerful robotics capabilities and user-
 
 ### Running the Application
 
-After installation, you can use the `lelab` command-line tools:
+After installation, run:
 
 ```bash
-# Start only the backend server (default)
-lelab
-
-# Start both backend and frontend servers
-lelab-fullstack
-
-# Start only the frontend development server
-lelab-frontend
+lelab          # default: serves built frontend + backend on :8000
+lelab --dev    # contributor mode: Vite HMR (:8080) + uvicorn --reload (:8000)
 ```
 
-**Command Options:**
+**Default mode** runs the backend on `http://localhost:8000` and serves the pre-built React frontend at `/`. One process, one port. No Node.js required at runtime — the built bundle ships with the package.
 
-- `lelab` - Starts the FastAPI backend on `http://localhost:8000`, opens a [Cloudflare quick-tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/) so the [hosted LeLab Space](https://huggingface.co/spaces/lerobot/LeLab) can reach it, and opens your browser to the Space already wired up to your local backend
-- `lelab-fullstack` - Local-only mode: starts both the FastAPI backend (port 8000) and Vite frontend (port 8080), no tunnel
-- `lelab-frontend` - Starts only the local Vite dev server (no backend, no tunnel)
+**`--dev` mode** spawns the Vite dev server in `frontend/` for hot module reload and runs uvicorn with `--reload`. Requires Node.js. Use this when working on frontend or backend code.
 
-> ⚠️  **Privacy note**: `lelab` routes API and WebSocket traffic between the hosted Space and your local backend through Cloudflare's network via a `*.trycloudflare.com` URL. Camera frames, joint positions, and any data the frontend exchanges with your backend transit Cloudflare. If you'd rather keep everything on your machine, use `lelab-fullstack` instead.
-
-**Frontend:**
-
-The frontend lives in [`frontend/`](frontend/) inside this repo. Running `lelab-frontend` or `lelab-fullstack` will:
-
-1. Run `npm install` in `frontend/`
-2. Start the Vite dev server and auto-open your browser
-
-The same `frontend/` directory is auto-deployed to the [LeLab Hugging Face Space](https://huggingface.co/spaces/lerobot/LeLab) by [`.github/workflows/sync_space.yml`](.github/workflows/sync_space.yml) on every push to `main` that touches `frontend/**`.
+The `frontend/` directory is also the source of truth for the [LeLab Hugging Face Space](https://huggingface.co/spaces/lerobot/LeLab), auto-deployed by [`.github/workflows/sync_space.yml`](.github/workflows/sync_space.yml) on every push to `main` that touches `frontend/**`.
 
 ### Key Endpoints
 
@@ -128,64 +111,38 @@ The same `frontend/` directory is auto-deployed to the [LeLab Hugging Face Space
 ```
 leLab/
 ├── app/                      # FastAPI backend
-│   ├── main.py              # Main FastAPI application
+│   ├── main.py              # Main FastAPI application; mounts frontend/dist at /
 │   ├── recording.py         # Dataset recording logic
 │   ├── teleoperating.py     # Robot teleoperation logic
 │   ├── calibrating.py       # Robot calibration logic
 │   ├── training.py          # ML training logic
-│   ├── config.py            # Configuration management
-│   └── static/              # Static web files
-├── scripts/                  # Command-line scripts
-│   ├── backend.py           # Backend-only startup
-│   ├── frontend.py          # Frontend-only startup
-│   └── fullstack.py         # Full-stack startup
-├── frontend/                 # React + Vite frontend (deployed to HF Space)
-│   ├── src/
-│   │   ├── components/      # React components
-│   │   ├── pages/           # Page components
-│   │   ├── hooks/           # Custom React hooks
-│   │   └── contexts/        # React contexts
+│   └── config.py            # Configuration management
+├── scripts/
+│   └── backend.py           # `lelab` entry point (default + --dev)
+├── frontend/                 # React + Vite frontend (also deployed to HF Space)
+│   ├── src/                 # React components, pages, hooks, contexts
 │   ├── public/              # Static assets
+│   ├── dist/                # Built bundle, ships with the Python package
 │   ├── Dockerfile           # Used by HF Space build
-│   └── package.json         # Frontend dependencies
+│   └── package.json
 ├── .github/workflows/        # CI (auto-deploys frontend/ to HF Space)
-├── pyproject.toml           # Python project configuration
-├── LICENSE                  # Apache 2.0
-└── README.md                # This file
+├── pyproject.toml
+├── LICENSE                   # Apache 2.0
+└── README.md
 ```
 
 ## 🔧 Development
 
-### Backend Development
-
 ```bash
-# Install in editable mode
-pip install -e .
-
-# Run backend only with auto-reload
-lelab
+pip install -e .            # editable install
+cd frontend && npm install  # one-time, only if you'll touch the frontend
+lelab --dev                 # full HMR for backend + frontend
 ```
 
-### Frontend Development
+After making frontend changes, before committing run `cd frontend && npm run build` so `frontend/dist/` (which ships in the wheel) stays in sync.
 
-```bash
-# Installs deps in frontend/ and starts the Vite dev server
-lelab-frontend
-```
-
-### Full-Stack Development
-
-```bash
-# Start both backend and frontend with auto-reload
-lelab-fullstack
-```
-
-**Development Notes:**
-
-- Frontend source lives in `frontend/` and is deployed to the [HF Space](https://huggingface.co/spaces/lerobot/LeLab) via GitHub Actions
-- Both commands auto-open your browser to the appropriate URL
-- Backend runs on `http://localhost:8000`
-- Frontend runs on `http://localhost:8080`
+- Backend: `http://localhost:8000`
+- Frontend (HMR): `http://localhost:8080`
 
 ## 🤝 Contributing
 

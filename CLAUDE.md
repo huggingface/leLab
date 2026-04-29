@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 LeLab is a FastAPI + React web interface wrapping the [LeRobot](https://github.com/huggingface/lerobot) framework for the SO-101 leader/follower arm. It exposes teleoperation, dataset recording, calibration, replay, and training as HTTP/WebSocket endpoints, replacing LeRobot's CLI + keyboard-driven flows.
 
-The frontend (React + Vite) lives in [`frontend/`](frontend/) inside this repo and is also the source of truth for the [LeLab Hugging Face Space](https://huggingface.co/spaces/lerobot/LeLab) — [`.github/workflows/sync_space.yml`](.github/workflows/sync_space.yml) force-pushes the contents of `frontend/` to the Space's git remote on every push to `main` that touches `frontend/**`. `app/static/` is intentionally empty (where a built frontend would be served from at `/`).
+The frontend (React + Vite) lives in [`frontend/`](frontend/). The built bundle in [`frontend/dist/`](frontend/dist/) is committed and shipped inside the Python wheel as package data (`frontend.__init__.py` makes setuptools treat it as a package); [`app/main.py`](app/main.py) mounts it as `StaticFiles` at `/` so a single `lelab` process serves both API and UI on `:8000`. The `frontend/` directory is also force-pushed to the [LeLab HF Space](https://huggingface.co/spaces/lerobot/LeLab) by [`.github/workflows/sync_space.yml`](.github/workflows/sync_space.yml) — that's a separate runtime; the Space builds the [Dockerfile](frontend/Dockerfile) (which runs `npm run build` again, so committed `dist/` doesn't matter to it).
 
 ## Common commands
 
@@ -16,12 +16,13 @@ pip install -e .
 ```
 This pulls `lerobot` directly from GitHub (`git+https://github.com/huggingface/lerobot.git`) — installs are slow.
 
-Run servers (entry points defined in [pyproject.toml](pyproject.toml#L18-L21)):
+Run servers (entry point defined in [pyproject.toml](pyproject.toml)):
 ```bash
-lelab            # Backend only — uvicorn on :8000 with --reload
-lelab-fullstack  # Starts frontend (:8080) first, waits for ready, then backend (:8000), opens browser
-lelab-frontend   # Frontend only (npm install in frontend/, npm run dev)
+lelab          # uvicorn on :8000, serves built frontend at /, opens browser
+lelab --dev    # spawns Vite dev (:8080) + uvicorn --reload (:8000), opens browser to :8080
 ```
+
+After touching anything in `frontend/src/`, run `cd frontend && npm run build` to refresh the committed `frontend/dist/` (which ships in the wheel). `lelab --dev` doesn't need this — it serves directly from Vite.
 
 There is **no test suite, no linter config, and no build step** in this repo. Validate changes by running `lelab` and exercising endpoints (curl or via the frontend).
 

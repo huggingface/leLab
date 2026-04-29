@@ -1,9 +1,9 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
-build/
-dist/
-wheels/
+/build/
+/dist/
+/wheels/
 *.egg-info
 
 # Virtual environments
@@ -42,12 +42,6 @@ logs/
 .pytest_cache/
 .tox/
 htmlcov/
-
-# Frontend build outputs (if built to root)
-frontend/dist/
-frontend/build/
-frontend/.next/
-frontend/out/
 
 # Node.js (in case frontend files leak to root)
 node_modules/
