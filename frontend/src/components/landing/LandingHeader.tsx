@@ -10,7 +10,7 @@ const LandingHeader: React.FC = () => {
           className="mx-auto h-20 w-20"
         />
         <h1 className="text-5xl font-bold tracking-tight">LeLab</h1>
-        <p className="text-xl text-gray-400">LeRobot but on HFSpace.</p>
+        <p className="text-xl text-gray-400">LeRobot but on your browser.</p>
       </div>
     </div>
   );

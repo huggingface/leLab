@@ -15,21 +15,12 @@ const RobotModelSelector: React.FC<RobotModelSelectorProps> = ({
       </h2>
       <RadioGroup value={robotModel} onValueChange={onValueChange} className="flex items-center gap-3">
         <div>
-          <RadioGroupItem value="SO100" id="so100" className="sr-only" />
-          <Label htmlFor="so100" className="flex items-center gap-2 px-3 py-2 rounded-full bg-gray-800 border border-gray-700 cursor-pointer transition-all hover:bg-gray-750 min-w-[80px] justify-center">
-            <span className="w-4 h-4 rounded-full border-2 border-gray-500 flex items-center justify-center">
-              {robotModel === "SO100" && <span className="w-2 h-2 rounded-full bg-orange-500" />}
-            </span>
-            <span className="text-sm font-medium">SO100</span>
-          </Label>
-        </div>
-        <div>
           <RadioGroupItem value="SO101" id="so101" className="sr-only" />
           <Label htmlFor="so101" className="flex items-center gap-2 px-3 py-2 rounded-full bg-gray-800 border border-gray-700 cursor-pointer transition-all hover:bg-gray-750 min-w-[80px] justify-center">
             <span className="w-4 h-4 rounded-full border-2 border-gray-500 flex items-center justify-center">
               {robotModel === "SO101" && <span className="w-2 h-2 rounded-full bg-orange-500" />}
             </span>
-            <span className="text-sm font-medium">SO101</span>
+            <span className="text-sm font-medium">SO-100/101</span>
           </Label>
         </div>
         <div>
