@@ -23,6 +23,7 @@ import NotFound from "@/pages/NotFound";
 import "./App.css";
 import { TooltipProvider } from "@radix-ui/react-tooltip";
 import { ApiProvider } from "./contexts/ApiContext";
+import { HfAuthProvider } from "./contexts/HfAuthContext";
 
 const queryClient = new QueryClient();
 
@@ -32,25 +33,27 @@ function App() {
       <TooltipProvider>
         <ThemeProvider>
           <ApiProvider>
-            <UrdfProvider>
-              <DragAndDropProvider>
-                <BrowserRouter>
-                  <Routes>
-                    <Route path="/" element={<Landing />} />
-                    <Route path="/teleoperation" element={<Teleoperation />} />
-                    <Route path="/recording" element={<Recording />} />
-                    <Route path="/upload" element={<Upload />} />
-                    <Route path="/training" element={<Training />} />
-                    <Route path="/calibration" element={<Calibration />} />
-                    <Route path="/edit-dataset" element={<EditDataset />} />
-                    <Route path="/replay-dataset" element={<ReplayDataset />} />
+            <HfAuthProvider>
+              <UrdfProvider>
+                <DragAndDropProvider>
+                  <BrowserRouter>
+                    <Routes>
+                      <Route path="/" element={<Landing />} />
+                      <Route path="/teleoperation" element={<Teleoperation />} />
+                      <Route path="/recording" element={<Recording />} />
+                      <Route path="/upload" element={<Upload />} />
+                      <Route path="/training" element={<Training />} />
+                      <Route path="/calibration" element={<Calibration />} />
+                      <Route path="/edit-dataset" element={<EditDataset />} />
+                      <Route path="/replay-dataset" element={<ReplayDataset />} />
 
-                    <Route path="*" element={<NotFound />} />
-                  </Routes>
-                  <Toaster />
-                </BrowserRouter>
-              </DragAndDropProvider>
-            </UrdfProvider>
+                      <Route path="*" element={<NotFound />} />
+                    </Routes>
+                    <Toaster />
+                  </BrowserRouter>
+                </DragAndDropProvider>
+              </UrdfProvider>
+            </HfAuthProvider>
           </ApiProvider>
         </ThemeProvider>
       </TooltipProvider>

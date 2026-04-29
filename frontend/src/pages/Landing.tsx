@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowRight } from "lucide-react";
 import LandingHeader from "@/components/landing/LandingHeader";
+import HfAuthBanner from "@/components/landing/HfAuthBanner";
 import RobotModelSelector from "@/components/landing/RobotModelSelector";
 import ActionList from "@/components/landing/ActionList";
 import PermissionModal from "@/components/landing/PermissionModal";
@@ -13,6 +14,7 @@ import { Action } from "@/components/landing/types";
 import UsageInstructionsModal from "@/components/landing/UsageInstructionsModal";
 import DirectFollowerModal from "@/components/landing/DirectFollowerModal";
 import { useApi } from "@/contexts/ApiContext";
+import { useHfAuth } from "@/contexts/HfAuthContext";
 import { CameraConfig } from "@/components/recording/CameraConfiguration";
 import { isHostedSpace } from "@/lib/isHostedSpace";
 
@@ -34,6 +36,7 @@ const Landing = () => {
   const [followerConfigs, setFollowerConfigs] = useState<string[]>([]);
   const [isLoadingConfigs, setIsLoadingConfigs] = useState(false);
   const { baseUrl, fetchWithHeaders } = useApi();
+  const { auth } = useHfAuth();
 
   // Recording state
   const [showRecordingModal, setShowRecordingModal] = useState(false);
@@ -45,7 +48,7 @@ const Landing = () => {
   );
   const [recordLeaderConfig, setRecordLeaderConfig] = useState("");
   const [recordFollowerConfig, setRecordFollowerConfig] = useState("");
-  const [datasetRepoId, setDatasetRepoId] = useState("");
+  const [datasetName, setDatasetName] = useState("");
   const [singleTask, setSingleTask] = useState("");
   const [numEpisodes, setNumEpisodes] = useState(5);
   const [cameras, setCameras] = useState<CameraConfig[]>([]);
@@ -211,17 +214,22 @@ const Landing = () => {
     if (
       !recordLeaderConfig ||
       !recordFollowerConfig ||
-      !datasetRepoId ||
+      !datasetName ||
       !singleTask
     ) {
       toast({
         title: "Missing Configuration",
         description:
-          "Please fill in all required fields: calibration configs, dataset ID, and task name.",
+          "Please fill in all required fields: calibration configs, dataset name, and task description.",
         variant: "destructive",
       });
       return;
     }
+
+    const datasetRepoId =
+      auth.status === "authenticated"
+        ? `${auth.username}/${datasetName}`
+        : datasetName;
 
     // 🔓 CRITICAL: Release all camera streams before backend accesses them
     if (cameras.length > 0 && releaseStreamsRef.current) {
@@ -406,6 +414,7 @@ const Landing = () => {
   return (
     <div className="min-h-screen bg-black text-white flex flex-col items-center p-4 pt-12 sm:pt-20">
       <div className="w-full max-w-7xl mx-auto px-4 mb-12">
+        <HfAuthBanner />
         <LandingHeader />
       </div>
 
@@ -459,8 +468,8 @@ const Landing = () => {
         setFollowerConfig={setRecordFollowerConfig}
         leaderConfigs={leaderConfigs}
         followerConfigs={followerConfigs}
-        datasetRepoId={datasetRepoId}
-        setDatasetRepoId={setDatasetRepoId}
+        datasetName={datasetName}
+        setDatasetName={setDatasetName}
         singleTask={singleTask}
         setSingleTask={setSingleTask}
         numEpisodes={numEpisodes}

@@ -24,6 +24,7 @@ import CameraConfiguration, {
   CameraConfig,
 } from "@/components/recording/CameraConfiguration";
 import { useApi } from "@/contexts/ApiContext";
+import { useHfAuth } from "@/contexts/HfAuthContext";
 import { useAutoSave } from "@/hooks/useAutoSave";
 interface RecordingModalProps {
   open: boolean;
@@ -38,8 +39,8 @@ interface RecordingModalProps {
   setFollowerConfig: (value: string) => void;
   leaderConfigs: string[];
   followerConfigs: string[];
-  datasetRepoId: string;
-  setDatasetRepoId: (value: string) => void;
+  datasetName: string;
+  setDatasetName: (value: string) => void;
   singleTask: string;
   setSingleTask: (value: string) => void;
   numEpisodes: number;
@@ -63,8 +64,8 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
   setFollowerConfig,
   leaderConfigs,
   followerConfigs,
-  datasetRepoId,
-  setDatasetRepoId,
+  datasetName,
+  setDatasetName,
   singleTask,
   setSingleTask,
   numEpisodes,
@@ -76,6 +77,7 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
   releaseStreamsRef,
 }) => {
   const { baseUrl, fetchWithHeaders } = useApi();
+  const { auth } = useHfAuth();
   const { debouncedSavePort, debouncedSaveConfig } = useAutoSave();
   const [showPortDetection, setShowPortDetection] = useState(false);
   const [detectionRobotType, setDetectionRobotType] = useState<
@@ -334,31 +336,44 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
                 <div className="grid grid-cols-1 gap-4">
                   <div className="space-y-2">
                     <Label
-                      htmlFor="datasetRepoId"
+                      htmlFor="datasetName"
                       className="text-sm font-medium text-gray-300"
                     >
-                      Dataset Repository ID *
+                      Dataset Name *
                     </Label>
                     <Input
-                      id="datasetRepoId"
-                      value={datasetRepoId}
-                      onChange={(e) => setDatasetRepoId(e.target.value)}
-                      placeholder="username/dataset_name"
+                      id="datasetName"
+                      value={datasetName}
+                      onChange={(e) => setDatasetName(e.target.value)}
+                      placeholder="my_dataset"
                       className="bg-gray-800 border-gray-700 text-white"
                     />
+                    {datasetName &&
+                      (auth.status === "authenticated" ? (
+                        <p className="text-xs text-gray-500">
+                          Will be saved as{" "}
+                          <span className="text-gray-300 font-mono">
+                            {auth.username}/{datasetName}
+                          </span>
+                        </p>
+                      ) : auth.status === "unauthenticated" ? (
+                        <p className="text-xs text-amber-400/80">
+                          Log in to Hugging Face to set the repository owner.
+                        </p>
+                      ) : null)}
                   </div>
                   <div className="space-y-2">
                     <Label
                       htmlFor="singleTask"
                       className="text-sm font-medium text-gray-300"
                     >
-                      Task Name *
+                      Task Description *
                     </Label>
                     <Input
                       id="singleTask"
                       value={singleTask}
                       onChange={(e) => setSingleTask(e.target.value)}
-                      placeholder="e.g., pick_and_place"
+                      placeholder="e.g., pick up the red block and place it on the blue square"
                       className="bg-gray-800 border-gray-700 text-white"
                     />
                   </div>

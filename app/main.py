@@ -55,6 +55,8 @@ from .replaying import (
     handle_replay_logs,
 )
 
+from .hf_auth import handle_hf_auth_status
+
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -244,6 +246,12 @@ def get_joint_positions():
 def health_check():
     """Simple health check endpoint to verify server is running"""
     return {"status": "ok", "message": "FastAPI server is running"}
+
+
+@app.get("/hf-auth-status")
+def hf_auth_status():
+    """Check whether the local HF CLI is authenticated and return user info."""
+    return handle_hf_auth_status()
 
 
 @app.get("/ws-test")
