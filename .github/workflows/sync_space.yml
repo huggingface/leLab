@@ -4,6 +4,7 @@ on:
     branches: [main]
     paths:
       - 'frontend/**'
+      - '!frontend/dist/**'
       - '.github/workflows/sync_space.yml'
   workflow_dispatch:
 
@@ -14,11 +15,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           lfs: true
-      - name: Push frontend/ to Hugging Face Space
+      - name: Push frontend/ (without dist/) to Hugging Face Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           cd frontend
+          # The Space builds its own bundle via Docker; dist/ would be
+          # rejected by HF's pre-receive hook for containing raw binaries.
+          rm -rf dist
           git init -b main
           git config user.email "ci@huggingface.co"
           git config user.name "GitHub CI"
