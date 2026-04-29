@@ -12,7 +12,6 @@ import RecordingModal from "@/components/landing/RecordingModal";
 
 import { Action } from "@/components/landing/types";
 import UsageInstructionsModal from "@/components/landing/UsageInstructionsModal";
-import DirectFollowerModal from "@/components/landing/DirectFollowerModal";
 import { useApi } from "@/contexts/ApiContext";
 import { useHfAuth } from "@/contexts/HfAuthContext";
 import { CameraConfig } from "@/components/recording/CameraConfiguration";
@@ -55,13 +54,6 @@ const Landing = () => {
 
   // Camera stream release ref
   const releaseStreamsRef = useRef<(() => void) | null>(null);
-
-  // Direct follower control state
-  const [showDirectFollowerModal, setShowDirectFollowerModal] = useState(false);
-  const [directFollowerPort, setDirectFollowerPort] = useState(
-    "/dev/tty.usbmodem5A460816621"
-  );
-  const [directFollowerConfig, setDirectFollowerConfig] = useState("");
 
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -152,13 +144,6 @@ const Landing = () => {
   const handleReplayDatasetClick = () => {
     if (robotModel) {
       navigate("/replay-dataset");
-    }
-  };
-
-  const handleDirectFollowerClick = () => {
-    if (robotModel) {
-      setShowDirectFollowerModal(true);
-      loadConfigs();
     }
   };
 
@@ -286,55 +271,6 @@ const Landing = () => {
     navigate("/recording", { state: { recordingConfig } });
   };
 
-  const handleStartDirectFollower = async () => {
-    if (!directFollowerConfig) {
-      toast({
-        title: "Missing Configuration",
-        description: "Please select a calibration config for the follower.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    try {
-      const response = await fetch("http://localhost:8000/direct-follower", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          follower_port: directFollowerPort,
-          follower_config: directFollowerConfig,
-        }),
-      });
-
-      const data = await response.json();
-
-      if (response.ok) {
-        toast({
-          title: "Direct Follower Control Started",
-          description:
-            data.message || "Successfully started direct follower control.",
-        });
-        setShowDirectFollowerModal(false);
-        navigate("/direct-follower");
-      } else {
-        toast({
-          title: "Error Starting Direct Follower Control",
-          description:
-            data.message || "Failed to start direct follower control.",
-          variant: "destructive",
-        });
-      }
-    } catch (error) {
-      toast({
-        title: "Connection Error",
-        description: "Could not connect to the backend server.",
-        variant: "destructive",
-      });
-    }
-  };
-
   const handlePermissions = async (allow: boolean) => {
     setShowPermissionModal(false);
     if (allow) {
@@ -400,13 +336,6 @@ const Landing = () => {
       description: "Train a model on your datasets.",
       handler: handleTrainingClick,
       color: "bg-green-500 hover:bg-green-600",
-      isWorkInProgress: true,
-    },
-    {
-      title: "Direct Follower Control",
-      description: "Control robot arm with mouse movements.",
-      handler: handleDirectFollowerClick,
-      color: "bg-blue-500 hover:bg-blue-600",
       isWorkInProgress: true,
     },
   ];
@@ -479,18 +408,6 @@ const Landing = () => {
         isLoadingConfigs={isLoadingConfigs}
         onStart={handleStartRecording}
         releaseStreamsRef={releaseStreamsRef}
-      />
-
-      <DirectFollowerModal
-        open={showDirectFollowerModal}
-        onOpenChange={setShowDirectFollowerModal}
-        followerPort={directFollowerPort}
-        setFollowerPort={setDirectFollowerPort}
-        followerConfig={directFollowerConfig}
-        setFollowerConfig={setDirectFollowerConfig}
-        followerConfigs={followerConfigs}
-        isLoadingConfigs={isLoadingConfigs}
-        onStart={handleStartDirectFollower}
       />
     </div>
   );

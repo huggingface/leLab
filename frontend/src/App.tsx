@@ -11,7 +11,6 @@ import { DragAndDropProvider } from "@/contexts/DragAndDropContext";
 import { Toaster } from "@/components/ui/toaster";
 import Landing from "@/pages/Landing";
 import Teleoperation from "@/pages/Teleoperation";
-import DirectFollower from "@/pages/DirectFollower";
 import Calibration from "@/pages/Calibration";
 import Recording from "@/pages/Recording";
 import Training from "@/pages/Training";
