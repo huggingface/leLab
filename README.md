@@ -98,9 +98,11 @@ lelab-frontend
 
 **Command Options:**
 
-- `lelab` - Starts only the FastAPI backend server on `http://localhost:8000`
-- `lelab-fullstack` - Starts both FastAPI backend (port 8000) and Vite frontend (port 8080) with auto-browser opening
-- `lelab-frontend` - Starts only the frontend development server with auto-browser opening
+- `lelab` - Starts the FastAPI backend on `http://localhost:8000`, opens a [Cloudflare quick-tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/) so the [hosted LeLab Space](https://huggingface.co/spaces/lerobot/LeLab) can reach it, and opens your browser to the Space already wired up to your local backend
+- `lelab-fullstack` - Local-only mode: starts both the FastAPI backend (port 8000) and Vite frontend (port 8080), no tunnel
+- `lelab-frontend` - Starts only the local Vite dev server (no backend, no tunnel)
+
+> ⚠️  **Privacy note**: `lelab` routes API and WebSocket traffic between the hosted Space and your local backend through Cloudflare's network via a `*.trycloudflare.com` URL. Camera frames, joint positions, and any data the frontend exchanges with your backend transit Cloudflare. If you'd rather keep everything on your machine, use `lelab-fullstack` instead.
 
 **Frontend:**
 

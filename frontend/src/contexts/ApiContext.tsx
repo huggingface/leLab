@@ -1,4 +1,4 @@
-import React, { createContext, useContext, ReactNode } from "react";
+import React, { createContext, useContext, ReactNode, useState } from "react";
 
 interface ApiContextType {
   baseUrl: string;
@@ -8,41 +8,50 @@ interface ApiContextType {
 
 const ApiContext = createContext<ApiContextType | undefined>(undefined);
 
+const STORAGE_KEY = "lelab.apiBaseUrl";
 const DEFAULT_LOCALHOST = "http://localhost:8000";
-const DEFAULT_WS_LOCALHOST = "ws://localhost:8000";
 
-interface ApiProviderProps {
-  children: ReactNode;
-}
+const httpToWs = (url: string): string => url.replace(/^http(s?):/, "ws$1:");
 
-export const ApiProvider: React.FC<ApiProviderProps> = ({ children }) => {
-  const baseUrl = DEFAULT_LOCALHOST;
-  const wsBaseUrl = DEFAULT_WS_LOCALHOST;
+const resolveInitialBaseUrl = (): string => {
+  if (typeof window === "undefined") return DEFAULT_LOCALHOST;
 
-  // Enhanced fetch function that automatically includes necessary headers
+  const fromQuery = new URLSearchParams(window.location.search).get("api");
+  if (fromQuery) {
+    try {
+      new URL(fromQuery);
+      const clean = fromQuery.replace(/\/$/, "");
+      window.localStorage.setItem(STORAGE_KEY, clean);
+      return clean;
+    } catch {
+      console.warn("Invalid `api` query param, ignoring:", fromQuery);
+    }
+  }
+
+  return window.localStorage.getItem(STORAGE_KEY) || DEFAULT_LOCALHOST;
+};
+
+export const ApiProvider: React.FC<{ children: ReactNode }> = ({
+  children,
+}) => {
+  const [baseUrl] = useState<string>(resolveInitialBaseUrl);
+  const wsBaseUrl = httpToWs(baseUrl);
+
   const fetchWithHeaders = async (
     url: string,
     options: RequestInit = {}
   ): Promise<Response> => {
-    const enhancedOptions: RequestInit = {
+    return fetch(url, {
       ...options,
       headers: {
         "Content-Type": "application/json",
         ...options.headers,
       },
-    };
-
-    return fetch(url, enhancedOptions);
+    });
   };
 
   return (
-    <ApiContext.Provider
-      value={{
-        baseUrl,
-        wsBaseUrl,
-        fetchWithHeaders,
-      }}
-    >
+    <ApiContext.Provider value={{ baseUrl, wsBaseUrl, fetchWithHeaders }}>
       {children}
     </ApiContext.Provider>
   );
