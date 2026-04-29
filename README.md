@@ -139,7 +139,7 @@ cd frontend && npm install  # one-time, only if you'll touch the frontend
 lelab --dev                 # full HMR for backend + frontend
 ```
 
-After making frontend changes, before committing run `cd frontend && npm run build` so `frontend/dist/` (which ships in the wheel) stays in sync.
+When you push frontend source changes to `main`, [`.github/workflows/build_frontend.yml`](.github/workflows/build_frontend.yml) automatically rebuilds `frontend/dist/` and commits it back, so the bundle that ships in the wheel stays in sync. No need to run `npm run build` manually before committing.
 
 - Backend: `http://localhost:8000`
 - Frontend (HMR): `http://localhost:8080`

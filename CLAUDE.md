@@ -22,7 +22,7 @@ lelab          # uvicorn on :8000, serves built frontend at /, opens browser
 lelab --dev    # spawns Vite dev (:8080) + uvicorn --reload (:8000), opens browser to :8080
 ```
 
-After touching anything in `frontend/src/`, run `cd frontend && npm run build` to refresh the committed `frontend/dist/` (which ships in the wheel). `lelab --dev` doesn't need this — it serves directly from Vite.
+When `frontend/**` (excluding `frontend/dist/**`) changes on `main`, [`.github/workflows/build_frontend.yml`](.github/workflows/build_frontend.yml) auto-rebuilds `frontend/dist/` and commits it back. You can still build locally before committing if you want to test the production bundle, but it's no longer required. `lelab --dev` serves directly from Vite, no rebuild needed.
 
 There is **no test suite, no linter config, and no build step** in this repo. Validate changes by running `lelab` and exercising endpoints (curl or via the frontend).
 
