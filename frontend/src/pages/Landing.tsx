@@ -14,12 +14,15 @@ import UsageInstructionsModal from "@/components/landing/UsageInstructionsModal"
 import DirectFollowerModal from "@/components/landing/DirectFollowerModal";
 import { useApi } from "@/contexts/ApiContext";
 import { CameraConfig } from "@/components/recording/CameraConfiguration";
+import { isHostedSpace } from "@/lib/isHostedSpace";
+
+const ON_SPACE = isHostedSpace();
 
 const Landing = () => {
   const [robotModel, setRobotModel] = useState("SO101");
   const [showPermissionModal, setShowPermissionModal] = useState(false);
   const [showTeleoperationModal, setShowTeleoperationModal] = useState(false);
-  const [showUsageModal, setShowUsageModal] = useState(false);
+  const [showUsageModal, setShowUsageModal] = useState(ON_SPACE);
 
   const [leaderPort, setLeaderPort] = useState("/dev/tty.usbmodem5A460816421");
   const [followerPort, setFollowerPort] = useState(
@@ -403,7 +406,7 @@ const Landing = () => {
   return (
     <div className="min-h-screen bg-black text-white flex flex-col items-center p-4 pt-12 sm:pt-20">
       <div className="w-full max-w-7xl mx-auto px-4 mb-12">
-        <LandingHeader onShowInstructions={() => setShowUsageModal(true)} />
+        <LandingHeader />
       </div>
 
       <div className="p-8 bg-gray-900 rounded-lg shadow-xl w-full max-w-4xl space-y-6 border border-gray-700">
@@ -423,6 +426,7 @@ const Landing = () => {
       <UsageInstructionsModal
         open={showUsageModal}
         onOpenChange={setShowUsageModal}
+        dismissible={!ON_SPACE}
       />
 
       <TeleoperationModal
