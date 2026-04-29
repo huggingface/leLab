@@ -44,6 +44,20 @@ def _wait_for_port(port: int, timeout: int = 30) -> bool:
     return False
 
 
+def _open_browser_when_ready():
+    """Background-thread helper: poll the port, open the browser when up."""
+    for _ in range(60):
+        try:
+            with socket.create_connection(("127.0.0.1", BACKEND_PORT), timeout=0.5):
+                pass
+        except OSError:
+            time.sleep(0.5)
+            continue
+        logger.info("🌐 Opening browser...")
+        webbrowser.open(f"http://localhost:{BACKEND_PORT}/")
+        return
+
+
 def _run_prod():
     """Serve built frontend from backend on a single port."""
     if not FRONTEND_DIST.exists():
@@ -53,32 +67,18 @@ def _run_prod():
 
     logger.info("🚀 Starting LeLab on http://localhost:%d ...", BACKEND_PORT)
 
-    config = uvicorn.Config(
+    threading.Thread(target=_open_browser_when_ready, daemon=True).start()
+
+    # Run uvicorn in the main thread so its native SIGINT handler works,
+    # and bound graceful shutdown so a stuck WebSocket can't hang Ctrl+C.
+    uvicorn.run(
         "app.main:app",
         host="127.0.0.1",
         port=BACKEND_PORT,
         log_level="info",
         reload=False,
+        timeout_graceful_shutdown=2,
     )
-    server = uvicorn.Server(config)
-
-    server_thread = threading.Thread(target=server.run, daemon=True)
-    server_thread.start()
-
-    while not server.started:
-        time.sleep(0.1)
-
-    logger.info("🌐 Opening browser...")
-    webbrowser.open(f"http://localhost:{BACKEND_PORT}/")
-
-    def shutdown(signum, frame):
-        logger.info("🛑 Shutting down...")
-        server.should_exit = True
-
-    signal.signal(signal.SIGINT, shutdown)
-    signal.signal(signal.SIGTERM, shutdown)
-
-    server_thread.join()
 
 
 def _run_dev():
