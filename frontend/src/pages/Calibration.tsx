@@ -32,10 +32,11 @@ import Logo from "@/components/Logo";
 import PortDetectionButton from "@/components/ui/PortDetectionButton";
 import PortDetectionModal from "@/components/ui/PortDetectionModal";
 import { useApi } from "@/contexts/ApiContext";
+import { isMotorRangeComplete } from "@/lib/calibrationTargets";
 
 interface CalibrationStatus {
   calibration_active: boolean;
-  status: string; // "idle", "connecting", "homing", "recording", "completed", "error", "stopping"
+  status: string; // "idle", "connecting", "recording", "completed", "error", "stopping"
   device_type: string | null;
   error: string | null;
   message: string;
@@ -97,7 +98,7 @@ const Calibration = () => {
       error: null,
       message: "",
       step: 0,
-      total_steps: 2,
+      total_steps: 1,
       current_positions: null,
       recorded_ranges: null,
     }
@@ -415,12 +416,6 @@ const Calibration = () => {
           icon: <Loader2 className="w-4 h-4 animate-spin" />,
           text: "Connecting",
         };
-      case "homing":
-        return {
-          color: "bg-blue-500",
-          icon: <Activity className="w-4 h-4" />,
-          text: "Setting Home Position",
-        };
       case "recording":
         return {
           color: "bg-purple-500",
@@ -680,13 +675,26 @@ const Calibration = () => {
                               totalRange > 0
                                 ? (currentOffset / totalRange) * 100
                                 : 50;
+                            const rangeComplete = isMotorRangeComplete(
+                              calibrationStatus.device_type,
+                              motor,
+                              totalRange
+                            );
 
                             return (
                               <div key={motor} className="space-y-2">
                                 <div className="flex items-center justify-between">
-                                  <span className="text-white font-semibold text-sm">
-                                    {motor}
-                                  </span>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-white font-semibold text-sm">
+                                      {motor}
+                                    </span>
+                                    {rangeComplete && (
+                                      <CheckCircle
+                                        className="w-4 h-4 text-green-400"
+                                        aria-label="Range complete"
+                                      />
+                                    )}
+                                  </div>
                                   <span className="text-slate-300 text-xs font-mono">
                                     {range.current}
                                   </span>
@@ -701,7 +709,11 @@ const Calibration = () => {
                                     >
                                       {/* Current position indicator */}
                                       <div
-                                        className="absolute top-0 w-1 h-3 bg-yellow-400 rounded-full transition-all duration-100"
+                                        className={`absolute top-0 w-1 h-3 rounded-full transition-all duration-100 ${
+                                          rangeComplete
+                                            ? "bg-green-400"
+                                            : "bg-yellow-400"
+                                        }`}
                                         style={{
                                           left: `${Math.max(
                                             0,
@@ -735,28 +747,6 @@ const Calibration = () => {
                     Connecting to the device. Please ensure it's connected.
                   </AlertDescription>
                 </Alert>
-              )}
-
-              {calibrationStatus.status === "homing" && (
-                <div className="space-y-3">
-                  <Alert className="bg-blue-900/50 border-blue-700 text-blue-200">
-                    <Activity className="h-4 w-4" />
-                    <AlertDescription>
-                      Move the device to the middle position of its range, then
-                      click "Ready".
-                    </AlertDescription>
-                  </Alert>
-                  <div className="flex justify-center">
-                    <Button
-                      onClick={handleCompleteStep}
-                      disabled={!calibrationStatus.calibration_active}
-                      className="bg-green-600 hover:bg-green-700 px-8 py-3 rounded-full"
-                    >
-                      <CheckCircle className="w-4 h-4 mr-2" />
-                      Ready
-                    </Button>
-                  </div>
-                </div>
               )}
 
               {calibrationStatus.status === "recording" && (

@@ -33,12 +33,12 @@ logger = logging.getLogger(__name__)
 class CalibrationStatus:
     """Status information for calibration process"""
     calibration_active: bool = False
-    status: str = "idle"  # "idle", "connecting", "homing", "recording", "completed", "error", "stopping"
+    status: str = "idle"  # "idle", "connecting", "recording", "completed", "error", "stopping"
     device_type: Optional[str] = None
     error: Optional[str] = None
     message: str = ""
     step: int = 0  # Current calibration step
-    total_steps: int = 2  # Total number of calibration steps
+    total_steps: int = 1  # Total number of calibration steps
     current_positions: Dict[str, float] = None
     recorded_ranges: Dict[str, Dict[str, float]] = None  # {motor: {min: val, max: val, current: val}}
 
@@ -178,17 +178,12 @@ class CalibrationManager:
             if not self.status.calibration_active:
                 return {"success": False, "message": "No calibration active"}
 
-            if self.status.status == "homing":
-                # Complete homing step
-                self._step_complete.set()
-                return {"success": True, "message": "Homing position set"}
-            
-            elif self.status.status == "recording":
+            if self.status.status == "recording":
                 # Complete recording step
                 self._recording_active = False
                 self._step_complete.set()
                 return {"success": True, "message": "Range recording completed"}
-            
+
             else:
                 return {"success": False, "message": f"Cannot complete step in status: {self.status.status}"}
 
@@ -307,45 +302,26 @@ class CalibrationManager:
                 self._cleanup_and_finish("Calibration stopped", status="idle")
 
     def _step_homing(self):
-        """Step 1: Set homing position"""
-        logger.info("Starting homing step")
-        
-        # Disable torque to allow manual movement
+        """Auto-capture homing offsets from the device's current position."""
+        logger.info("Setting homing offsets from current position")
+
+        # Disable torque to allow manual movement during recording
         self.device.bus.disable_torque()
         for motor in self.device.bus.motors:
             self.device.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
 
-        self._update_status(
-            status="homing",
-            step=1,
-            message="Move the device to the middle of its range of motion, then click 'Complete Step'"
-        )
-
-        # Wait for user to complete step
-        while not self._step_complete.is_set() and not self.stop_calibration:
-            time.sleep(0.1)
-
-        if self.stop_calibration:
-            logger.info("Homing step cancelled due to stop request")
-            return
-
-        # Set homing offsets
-        logger.info("Setting homing offsets...")
         self.device.bus.reset_calibration()
         actual_positions = self.device.bus.sync_read("Present_Position", normalize=False)
         logger.info(f"Current positions for homing: {actual_positions}")
-        
+
         self._homing_offsets = self.device.bus._get_half_turn_homings(actual_positions)
         logger.info(f"Calculated homing offsets: {self._homing_offsets}")
-        
+
         for motor, offset in self._homing_offsets.items():
             self.device.bus.write("Homing_Offset", motor, offset)
 
-        self._step_complete.clear()
-        logger.info("Homing step completed")
-
     def _step_range_recording(self):
-        """Step 2: Record range of motion"""
+        """Record range of motion as the user moves all joints."""
         logger.info("Starting range recording step")
         
         # Initialize range tracking with retry and validation
@@ -381,7 +357,7 @@ class CalibrationManager:
         
         self._update_status(
             status="recording",
-            step=2,
+            step=1,
             message="Move ALL joints through their FULL ranges of motion - from minimum to maximum positions. Ensure each joint moves significantly from its starting position.",
             recorded_ranges={motor: {"min": pos, "max": pos, "current": pos} 
                            for motor, pos in self._start_positions.items()}
