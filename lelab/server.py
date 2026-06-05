@@ -31,6 +31,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.datastructures import Headers
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import Response
+from starlette.types import Scope
 
 from . import datasets as dataset_browser
 
@@ -1112,9 +1116,55 @@ async def shutdown_event():
     logger.info("✅ Cleanup completed")
 
 
+def _accepts_html(accept: str) -> bool:
+    """Whether an Accept header explicitly wants text/html (quality > 0).
+
+    Browser navigations list `text/html` with a positive quality value, so
+    they get the SPA shell. A `text/html;q=0` entry is an explicit refusal and
+    must not count — a plain substring check would wrongly treat it as a yes.
+    `*/*` (curl, XHR, API clients) is deliberately not treated as wanting HTML.
+    """
+    for part in accept.split(","):
+        media_type, _, params = part.strip().partition(";")
+        if media_type.strip().lower() != "text/html":
+            continue
+        quality = 1.0
+        for param in params.split(";"):
+            key, _, value = param.partition("=")
+            if key.strip().lower() == "q":
+                try:
+                    quality = float(value)
+                except ValueError:
+                    quality = 0.0
+        return quality > 0
+    return False
+
+
+class SPAStaticFiles(StaticFiles):
+    """StaticFiles that serves index.html for unknown client-side routes.
+
+    The frontend is a single-page app: routes like /recording and /calibration
+    exist only in the browser's router, not as files on disk. A hard reload or
+    deep link to one of those URLs asks the server for a file that isn't there;
+    plain StaticFiles answers 404 ({"detail":"Not Found"}), so the page breaks.
+
+    Here we fall back to index.html on 404 so the SPA boots and its router
+    renders the route. Only requests that accept HTML (i.e. browser navigations)
+    get the fallback — API typos, XHR, and curl still receive a JSON 404.
+    """
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == 404 and _accepts_html(Headers(scope=scope).get("accept", "")):
+                return await super().get_response("index.html", scope)
+            raise
+
+
 # Serve the built frontend at /. Must be mounted last so API routes win.
 if FRONTEND_DIST.exists():
-    app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
+    app.mount("/", SPAStaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
 else:
     logger.warning(
         f"frontend/dist not found at {FRONTEND_DIST}; run `npm run build` in frontend/ or use `lelab --dev`."
