@@ -195,7 +195,7 @@ const Recording = () => {
             saved_episodes: status.saved_episodes || 0,
             session_elapsed_seconds: status.session_elapsed_seconds || 0,
           };
-          navigate("/upload", { state: { datasetInfo } });
+          navigate("/edit-dataset", { state: { datasetInfo, justRecorded: true } });
         }
       } catch (error) {
         console.error("Error polling recording status:", error);
@@ -255,7 +255,7 @@ const Recording = () => {
     const realPhase = backendStatus.current_phase as Phase;
     const next: Phase | null =
       realPhase === "recording" ? "resetting" :
-      realPhase === "resetting" ? "recording" : null;
+        realPhase === "resetting" ? "recording" : null;
 
     if (!next) return;
 
@@ -428,8 +428,8 @@ const Recording = () => {
     currentPhase === "recording"
       ? recordingConfig.episode_time_s
       : currentPhase === "resetting"
-      ? recordingConfig.reset_time_s
-      : backendStatus.phase_time_limit_s || 0;
+        ? recordingConfig.reset_time_s
+        : backendStatus.phase_time_limit_s || 0;
 
   const sessionElapsedTime = backendStatus.session_elapsed_seconds || 0;
 
@@ -444,15 +444,15 @@ const Recording = () => {
     currentPhase === "recording"
       ? { dot: "bg-red-500", pill: "bg-red-500/15 text-red-300", timer: "text-green-400", bar: "bg-green-500", button: "bg-green-500 hover:bg-green-600" }
       : currentPhase === "resetting"
-      ? { dot: "bg-orange-500", pill: "bg-orange-500/15 text-orange-300", timer: "text-orange-400", bar: "bg-orange-500", button: "bg-orange-500 hover:bg-orange-600" }
-      : { dot: "bg-gray-500", pill: "bg-gray-500/15 text-gray-300", timer: "text-gray-400", bar: "bg-gray-500", button: "bg-gray-500" };
+        ? { dot: "bg-orange-500", pill: "bg-orange-500/15 text-orange-300", timer: "text-orange-400", bar: "bg-orange-500", button: "bg-orange-500 hover:bg-orange-600" }
+        : { dot: "bg-gray-500", pill: "bg-gray-500/15 text-gray-300", timer: "text-gray-400", bar: "bg-gray-500", button: "bg-gray-500" };
 
   const primaryLabel =
     currentPhase === "recording"
       ? "End Episode"
       : currentPhase === "resetting"
-      ? "Start Next Episode"
-      : "Advance";
+        ? "Start Next Episode"
+        : "Advance";
 
   const PrimaryIcon = currentPhase === "recording" ? SkipForward : Play;
 
@@ -581,7 +581,7 @@ const Recording = () => {
           <AlertDialogHeader>
             <AlertDialogTitle>Stop recording?</AlertDialogTitle>
             <AlertDialogDescription className="text-gray-400">
-              Saved episodes are kept. The session will end and you'll be taken to the upload page.
+              Saved episodes are kept. The session will end and you'll be taken to the dataset page
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

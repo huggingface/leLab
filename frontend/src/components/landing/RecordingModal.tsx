@@ -1,9 +1,7 @@
 import React from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { NumberInput } from "@/components/ui/number-input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -11,16 +9,10 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { AlertTriangle, CheckCircle, ChevronDown } from "lucide-react";
-import CameraConfiguration, {
-  CameraConfig,
-} from "@/components/recording/CameraConfiguration";
+import { AlertTriangle, CheckCircle } from "lucide-react";
+import { CameraConfig } from "@/components/recording/CameraConfiguration";
+import RecordingSettingsFields from "@/components/recording/RecordingSettingsFields";
 import { useHfAuth } from "@/contexts/HfAuthContext";
 import { RobotRecord } from "@/hooks/useRobots";
 
@@ -73,7 +65,7 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-gray-900 border-gray-800 text-white sm:max-w-[600px] p-8 max-h-[90vh] overflow-y-auto">
+      <DialogContent className="bg-slate-900 border-slate-800 text-white sm:max-w-[600px] p-8 max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <div className="flex justify-center items-center mb-4">
             <div className="w-8 h-8 bg-red-500 rounded-full flex items-center justify-center">
@@ -85,13 +77,13 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-6 py-4">
-          <DialogDescription className="text-gray-400 text-base leading-relaxed text-center">
+          <DialogDescription className="text-slate-400 text-base leading-relaxed text-center">
             Pick a configured robot and dataset parameters for recording.
           </DialogDescription>
 
           <div className="grid grid-cols-1 gap-6">
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold text-white border-b border-gray-700 pb-2">
+              <h3 className="text-lg font-semibold text-white border-b border-slate-700 pb-2">
                 Robot Configuration
               </h3>
               {!robot ? (
@@ -121,158 +113,63 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
             </div>
 
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold text-white border-b border-gray-700 pb-2">
+              <h3 className="text-lg font-semibold text-white border-b border-slate-700 pb-2">
                 Dataset Configuration
               </h3>
-              <div className="grid grid-cols-1 gap-4">
-                <div className="space-y-2">
-                  <Label
-                    htmlFor="datasetName"
-                    className="text-sm font-medium text-gray-300"
-                  >
-                    Dataset Name *
-                  </Label>
-                  <Input
-                    id="datasetName"
-                    value={datasetName}
-                    onChange={(e) =>
-                      setDatasetName(
-                        e.target.value.replace(/[^A-Za-z0-9._-]/g, "_")
-                      )
-                    }
-                    placeholder="my_dataset"
-                    className="bg-gray-800 border-gray-700 text-white"
-                  />
-                  <p className="text-xs text-gray-500">
-                    Letters, numbers, <code>.</code> <code>_</code>{" "}
-                    <code>-</code> only — other characters become{" "}
-                    <code>_</code>.
-                  </p>
-                  {datasetName &&
-                    (auth.status === "authenticated" ? (
-                      <p className="text-xs text-gray-500">
-                        Will be saved as{" "}
-                        <span className="text-gray-300 font-mono">
-                          {auth.username}/{datasetName}
-                        </span>
-                      </p>
-                    ) : auth.status === "unauthenticated" ? (
-                      <p className="text-xs text-amber-400/80">
-                        Log in to Hugging Face to set the repository owner.
-                      </p>
-                    ) : null)}
-                </div>
-                <div className="space-y-2">
-                  <Label
-                    htmlFor="singleTask"
-                    className="text-sm font-medium text-gray-300"
-                  >
-                    Task Description *
-                  </Label>
-                  <Input
-                    id="singleTask"
-                    value={singleTask}
-                    onChange={(e) => setSingleTask(e.target.value)}
-                    placeholder="e.g., pick up the red block and place it on the blue square"
-                    className="bg-gray-800 border-gray-700 text-white"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label
-                    htmlFor="numEpisodes"
-                    className="text-sm font-medium text-gray-300"
-                  >
-                    Number of Episodes
-                  </Label>
-                  <NumberInput
-                    id="numEpisodes"
-                    min="1"
-                    max="100"
-                    value={numEpisodes}
-                    onChange={(v) => {
-                      if (v !== undefined) setNumEpisodes(v);
-                    }}
-                    className="bg-gray-800 border-gray-700 text-white"
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label
-                      htmlFor="episodeTimeS"
-                      className="text-sm font-medium text-gray-300"
-                    >
-                      Episode duration (seconds)
-                    </Label>
-                    <NumberInput
-                      id="episodeTimeS"
-                      min="1"
-                      value={episodeTimeS}
-                      onChange={(v) => {
-                        if (v !== undefined) setEpisodeTimeS(v);
-                      }}
-                      className="bg-gray-800 border-gray-700 text-white"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label
-                      htmlFor="resetTimeS"
-                      className="text-sm font-medium text-gray-300"
-                    >
-                      Reset duration (seconds)
-                    </Label>
-                    <NumberInput
-                      id="resetTimeS"
-                      min="1"
-                      value={resetTimeS}
-                      onChange={(v) => {
-                        if (v !== undefined) setResetTimeS(v);
-                      }}
-                      className="bg-gray-800 border-gray-700 text-white"
-                    />
-                  </div>
-                </div>
+              <div className="space-y-2">
+                <Label
+                  htmlFor="datasetName"
+                  className="text-sm font-medium text-slate-300"
+                >
+                  Dataset Name *
+                </Label>
+                <Input
+                  id="datasetName"
+                  value={datasetName}
+                  onChange={(e) =>
+                    setDatasetName(
+                      e.target.value.replace(/[^A-Za-z0-9._-]/g, "_")
+                    )
+                  }
+                  placeholder="my_dataset"
+                  className="bg-slate-900 border-slate-600 text-white rounded-lg"
+                />
+                <p className="text-xs text-slate-500">
+                  Letters, numbers, <code>.</code> <code>_</code>{" "}
+                  <code>-</code> only — other characters become{" "}
+                  <code>_</code>.
+                </p>
+                {datasetName &&
+                  (auth.status === "authenticated" ? (
+                    <p className="text-xs text-slate-500">
+                      Will be saved as{" "}
+                      <span className="text-slate-300 font-mono">
+                        {auth.username}/{datasetName}
+                      </span>
+                    </p>
+                  ) : auth.status === "unauthenticated" ? (
+                    <p className="text-xs text-amber-400/80">
+                      Log in to Hugging Face to set the repository owner.
+                    </p>
+                  ) : null)}
               </div>
             </div>
 
-            <div className="space-y-4">
-              <CameraConfiguration
-                cameras={cameras}
-                onCamerasChange={setCameras}
-                releaseStreamsRef={releaseStreamsRef}
-              />
-            </div>
-
-            <Collapsible className="space-y-4 group">
-              <CollapsibleTrigger className="flex items-center justify-between w-full text-lg font-semibold text-white border-b border-gray-700 pb-2">
-                <span>Advanced Parameters</span>
-                <ChevronDown className="w-4 h-4 transition-transform group-data-[state=open]:rotate-180" />
-              </CollapsibleTrigger>
-              <CollapsibleContent className="space-y-3">
-                <div className="flex items-start gap-3">
-                  <Checkbox
-                    id="streamingEncoding"
-                    checked={streamingEncoding}
-                    onCheckedChange={(value) =>
-                      setStreamingEncoding(value === true)
-                    }
-                    className="mt-0.5 border-gray-500 data-[state=checked]:bg-red-500 data-[state=checked]:border-red-500"
-                  />
-                  <div className="space-y-1">
-                    <Label
-                      htmlFor="streamingEncoding"
-                      className="text-sm font-medium text-gray-200 cursor-pointer"
-                    >
-                      Streaming video encoding
-                    </Label>
-                    <p className="text-xs text-gray-500">
-                      Encodes frames in real time during capture so each
-                      episode saves almost instantly. Uncheck to fall back to
-                      the slower PNG-then-encode flow.
-                    </p>
-                  </div>
-                </div>
-              </CollapsibleContent>
-            </Collapsible>
+            <RecordingSettingsFields
+              singleTask={singleTask}
+              setSingleTask={setSingleTask}
+              numEpisodes={numEpisodes}
+              setNumEpisodes={setNumEpisodes}
+              episodeTimeS={episodeTimeS}
+              setEpisodeTimeS={setEpisodeTimeS}
+              resetTimeS={resetTimeS}
+              setResetTimeS={setResetTimeS}
+              streamingEncoding={streamingEncoding}
+              setStreamingEncoding={setStreamingEncoding}
+              cameras={cameras}
+              setCameras={setCameras}
+              releaseStreamsRef={releaseStreamsRef}
+            />
           </div>
 
           <div className="flex flex-col sm:flex-row gap-4 justify-center pt-4">
@@ -286,7 +183,7 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
             <Button
               onClick={() => onOpenChange(false)}
               variant="outline"
-              className="w-full sm:w-auto border-gray-500 hover:border-gray-200 px-10 py-6 text-lg text-zinc-500 bg-zinc-900 hover:bg-zinc-800"
+              className="w-full sm:w-auto border-slate-600 hover:border-slate-400 px-10 py-6 text-lg text-slate-400 bg-slate-800 hover:bg-slate-700"
             >
               Cancel
             </Button>
