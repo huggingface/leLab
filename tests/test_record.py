@@ -68,3 +68,54 @@ def test_create_record_config_pins_dshow_on_windows(monkeypatch: pytest.MonkeyPa
 
     config = record.create_record_config(request)
     assert config.robot.cameras["wrist"].backend == Cv2Backends.DSHOW
+
+
+def test_build_camera_configs_uses_default_backend_when_unset() -> None:
+    from lelab.record import _build_camera_configs
+    from lerobot.cameras.configs import Cv2Backends
+
+    cameras = {"cam": {"type": "opencv", "camera_index": 0, "width": 640, "height": 480, "fps": 30}}
+    configs = _build_camera_configs(cameras, Cv2Backends.AVFOUNDATION)
+
+    assert configs["cam"].backend == Cv2Backends.AVFOUNDATION
+    assert configs["cam"].fourcc is None
+    assert configs["cam"].index_or_path == 0
+
+
+def test_build_camera_configs_passes_fourcc_through() -> None:
+    from lelab.record import _build_camera_configs
+    from lerobot.cameras.configs import Cv2Backends
+
+    cameras = {"cam": {"type": "opencv", "camera_index": 0, "fourcc": "MJPG"}}
+    configs = _build_camera_configs(cameras, Cv2Backends.ANY)
+
+    assert configs["cam"].fourcc == "MJPG"
+
+
+def test_build_camera_configs_explicit_backend_overrides_default() -> None:
+    from lelab.record import _build_camera_configs
+    from lerobot.cameras.configs import Cv2Backends
+
+    cameras = {"cam": {"type": "opencv", "camera_index": 0, "backend": "V4L2"}}
+    configs = _build_camera_configs(cameras, Cv2Backends.AVFOUNDATION)
+
+    assert configs["cam"].backend == Cv2Backends.V4L2
+
+
+def test_build_camera_configs_invalid_backend_raises() -> None:
+    from lelab.record import _build_camera_configs
+    from lerobot.cameras.configs import Cv2Backends
+
+    cameras = {"cam": {"type": "opencv", "camera_index": 0, "backend": "NOPE"}}
+    with pytest.raises(KeyError):
+        _build_camera_configs(cameras, Cv2Backends.ANY)
+
+
+def test_build_camera_configs_skips_non_opencv_type() -> None:
+    from lelab.record import _build_camera_configs
+    from lerobot.cameras.configs import Cv2Backends
+
+    cameras = {"cam": {"type": "realsense", "camera_index": 0}}
+    configs = _build_camera_configs(cameras, Cv2Backends.ANY)
+
+    assert configs == {}

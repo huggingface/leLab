@@ -84,52 +84,75 @@ class DatasetInfoRequest(BaseModel):
     dataset_repo_id: str
 
 
-def create_record_config(request: RecordingRequest) -> RecordConfig:
-    """Create a RecordConfig from the recording request"""
+def _platform_backend():
+    """Pin the OpenCV backend per-platform so the index→camera mapping matches
+    what the /available-cameras thumbnails were captured with. cv2.CAP_ANY can
+    pick different backends across calls on macOS, silently reordering cameras
+    between the modal preview and the recording."""
     import platform
 
     from lerobot.cameras.configs import Cv2Backends
-    from lerobot.cameras.opencv import OpenCVCameraConfig
 
-    # Pin the backend so the index→camera mapping matches what the
-    # /available-cameras thumbnails were captured with. cv2.CAP_ANY can
-    # pick different backends across calls on macOS, which silently
-    # reorders the cameras between the modal's preview and the recording.
-    if platform.system() == "Darwin":
-        opencv_backend = Cv2Backends.AVFOUNDATION
-    elif platform.system() == "Linux":
-        opencv_backend = Cv2Backends.V4L2
-    elif platform.system() == "Windows":
+    system = platform.system()
+    if system == "Darwin":
+        return Cv2Backends.AVFOUNDATION
+    if system == "Linux":
+        return Cv2Backends.V4L2
+    if system == "Windows":
         # DirectShow, matching the order /available-cameras enumerates (via
         # pygrabber) so a camera_index always opens the previewed device.
-        opencv_backend = Cv2Backends.DSHOW
-    else:
-        opencv_backend = Cv2Backends.ANY
+        return Cv2Backends.DSHOW
+    return Cv2Backends.ANY
 
+
+def _build_camera_configs(cameras: dict, default_backend) -> dict:
+    """Convert the frontend camera dict into OpenCVCameraConfig objects.
+
+    `backend` (a Cv2Backends name) and `fourcc` (a 4-char code) are optional per
+    camera; when omitted they fall back to `default_backend` and auto-detect.
+    """
+    from lerobot.cameras.configs import Cv2Backends
+    from lerobot.cameras.opencv import OpenCVCameraConfig
+
+    camera_configs: dict = {}
+    for camera_name, camera_data in cameras.items():
+        if camera_data.get("type") != "opencv":
+            logger.warning(
+                f"⚠️ CAMERA CONFIG: Unsupported camera type '{camera_data.get('type')}' for {camera_name}"
+            )
+            continue
+
+        backend_name = camera_data.get("backend")
+        backend = Cv2Backends[backend_name] if backend_name else default_backend
+        fourcc = camera_data.get("fourcc") or None
+
+        camera_configs[camera_name] = OpenCVCameraConfig(
+            index_or_path=camera_data.get("camera_index", 0),
+            backend=backend,
+            fps=camera_data.get("fps"),
+            width=camera_data.get("width"),
+            height=camera_data.get("height"),
+            fourcc=fourcc,
+        )
+        logger.info(
+            f"✅ CAMERA CONFIG: {camera_name} -> OpenCVCameraConfig("
+            f"index={camera_data.get('camera_index')}, backend={backend.name}, "
+            f"{camera_data.get('width')}x{camera_data.get('height')}@{camera_data.get('fps')}fps, "
+            f"fourcc={fourcc})"
+        )
+    return camera_configs
+
+
+def create_record_config(request: RecordingRequest) -> RecordConfig:
+    """Create a RecordConfig from the recording request"""
     # Setup calibration files
     leader_config_name, follower_config_name = setup_calibration_files(
         request.leader_config, request.follower_config
     )
 
-    # 🔧 CAMERA CONFIG CONVERSION: Convert frontend camera dict to proper CameraConfig objects
-    camera_configs = {}
-    for camera_name, camera_data in request.cameras.items():
-        if camera_data.get("type") == "opencv":
-            # Convert frontend format to OpenCVCameraConfig
-            camera_configs[camera_name] = OpenCVCameraConfig(
-                index_or_path=camera_data.get("camera_index", 0),
-                backend=opencv_backend,
-                fps=camera_data.get("fps"),
-                width=camera_data.get("width"),
-                height=camera_data.get("height"),
-            )
-            logger.info(
-                f"✅ CAMERA CONFIG: Converted {camera_name} -> OpenCVCameraConfig(index={camera_data.get('camera_index')}, backend={opencv_backend.name}, {camera_data.get('width')}x{camera_data.get('height')}@{camera_data.get('fps')}fps)"
-            )
-        else:
-            logger.warning(
-                f"⚠️ CAMERA CONFIG: Unsupported camera type '{camera_data.get('type')}' for {camera_name}"
-            )
+    # Convert the frontend camera dict into OpenCVCameraConfig objects. Backend
+    # defaults to the platform pin unless the request overrides it per camera.
+    camera_configs = _build_camera_configs(request.cameras, _platform_backend())
 
     # Create robot config
     robot_config = SO101FollowerConfig(
