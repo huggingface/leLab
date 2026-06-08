@@ -122,8 +122,28 @@ def get_joint_positions_from_robot(robot) -> dict[str, float]:
         return dict.fromkeys(motor_to_urdf_mapping.values(), 0.0)
 
 
+def _safe_disconnect(device) -> None:
+    """Disconnect a robot/teleop device, swallowing (but logging) any error.
+
+    Used on the connection-failure cleanup path so one device's failure can't
+    leave the other holding its serial port open.
+    """
+    if device is None:
+        return
+    try:
+        device.disconnect()
+    except Exception as e:
+        logger.warning(f"Error disconnecting device during cleanup: {e}")
+
+
 def handle_start_teleoperation(request: TeleoperateRequest, websocket_manager=None) -> dict[str, Any]:
-    """Handle start teleoperation request"""
+    """Handle start teleoperation request.
+
+    Connects to both arms *synchronously* so that a connection failure (arm
+    unplugged, port busy, power off) is reported back to the caller, rather than
+    dying silently in the worker thread while the API has already claimed
+    success. Only the teleoperation loop runs in the background thread.
+    """
     global teleoperation_active, teleoperation_thread, current_robot, current_teleop
 
     from . import record as _record, rollout as _rollout
@@ -137,6 +157,8 @@ def handle_start_teleoperation(request: TeleoperateRequest, websocket_manager=No
             return {"success": False, "message": "Inference is currently active. Stop it first."}
         teleoperation_active = True
 
+    robot = None
+    teleop_device = None
     try:
         logger.info(
             f"Starting teleoperation with leader port: {request.leader_port}, follower port: {request.follower_port}"
@@ -158,72 +180,85 @@ def handle_start_teleoperation(request: TeleoperateRequest, websocket_manager=No
             id=leader_config_name,
         )
 
-        # Start teleoperation in a separate thread
+        # Connect synchronously. If either device fails to connect, clean up the
+        # other (so its serial port is released) and report the error — do NOT
+        # leave the caller thinking teleoperation started.
+        logger.info("Initializing robot and teleop device...")
+        robot = SO101Follower(robot_config)
+        teleop_device = SO101Leader(teleop_config)
+
+        # Connect each arm separately so the error names which one failed and
+        # tells the user what to do, instead of a generic "failed to start".
+        logger.info("Connecting to follower arm...")
+        try:
+            robot.bus.connect()
+        except Exception as e:
+            raise RuntimeError(
+                f"Could not connect to the follower arm on {request.follower_port}. "
+                "Make sure it's plugged in and powered on, then try again."
+            ) from e
+
+        logger.info("Connecting to leader arm...")
+        try:
+            teleop_device.bus.connect()
+        except Exception as e:
+            raise RuntimeError(
+                f"Could not connect to the leader arm on {request.leader_port}. "
+                "Make sure it's plugged in and powered on, then try again."
+            ) from e
+
+        # Write calibration to motors' memory
+        logger.info("Writing calibration to motors...")
+        robot.bus.write_calibration(robot.calibration)
+        teleop_device.bus.write_calibration(teleop_device.calibration)
+
+        # Connect cameras and configure motors
+        logger.info("Connecting cameras and configuring motors...")
+        for cam in robot.cameras.values():
+            cam.connect()
+        robot.configure()
+        teleop_device.configure()
+        logger.info("Successfully connected to both devices")
+
+        current_robot = robot
+        current_teleop = teleop_device
+
+        # Stream the arms in the background; the worker owns disconnect so stop()
+        # does not race the serial bus from the request thread.
         def teleoperation_worker():
             global teleoperation_active, current_robot, current_teleop
 
+            logger.info("Starting teleoperation loop...")
             try:
-                logger.info("Initializing robot and teleop device...")
-                robot = SO101Follower(robot_config)
-                teleop_device = SO101Leader(teleop_config)
+                last_broadcast_time = 0
+                broadcast_interval = 0.05  # 20 FPS
 
-                current_robot = robot
-                current_teleop = teleop_device
+                while teleoperation_active:
+                    action = teleop_device.get_action()
+                    robot.send_action(action)
 
-                logger.info("Connecting to devices...")
-                robot.bus.connect()
-                teleop_device.bus.connect()
+                    current_time = time.time()
+                    if current_time - last_broadcast_time >= broadcast_interval:
+                        try:
+                            joint_positions = get_joint_positions_from_robot(robot)
+                            joint_data = {
+                                "type": "joint_update",
+                                "joints": joint_positions,
+                                "timestamp": current_time,
+                            }
+                            if websocket_manager and websocket_manager.active_connections:
+                                websocket_manager.broadcast_joint_data_sync(joint_data)
+                            last_broadcast_time = current_time
+                        except Exception as e:
+                            logger.error(f"Error broadcasting joint data: {e}")
 
-                # Write calibration to motors' memory
-                logger.info("Writing calibration to motors...")
-                robot.bus.write_calibration(robot.calibration)
-                teleop_device.bus.write_calibration(teleop_device.calibration)
-
-                # Connect cameras and configure motors
-                logger.info("Connecting cameras and configuring motors...")
-                for cam in robot.cameras.values():
-                    cam.connect()
-                robot.configure()
-                teleop_device.configure()
-                logger.info("Successfully connected to both devices")
-
-                logger.info("Starting teleoperation loop...")
-
-                try:
-                    last_broadcast_time = 0
-                    broadcast_interval = 0.05  # 20 FPS
-
-                    while teleoperation_active:
-                        action = teleop_device.get_action()
-                        robot.send_action(action)
-
-                        current_time = time.time()
-                        if current_time - last_broadcast_time >= broadcast_interval:
-                            try:
-                                joint_positions = get_joint_positions_from_robot(robot)
-                                joint_data = {
-                                    "type": "joint_update",
-                                    "joints": joint_positions,
-                                    "timestamp": current_time,
-                                }
-                                if websocket_manager and websocket_manager.active_connections:
-                                    websocket_manager.broadcast_joint_data_sync(joint_data)
-                                last_broadcast_time = current_time
-                            except Exception as e:
-                                logger.error(f"Error broadcasting joint data: {e}")
-
-                        time.sleep(0.001)
-                finally:
-                    robot.disconnect()
-                    teleop_device.disconnect()
-                    logger.info("Teleoperation stopped")
-
-                return {"success": True, "message": "Teleoperation completed successfully"}
-
+                    time.sleep(0.001)
             except Exception as e:
-                logger.error(f"Error during teleoperation: {e}")
-                return {"success": False, "error": str(e)}
+                logger.error(f"Error during teleoperation loop: {e}")
             finally:
+                _safe_disconnect(robot)
+                _safe_disconnect(teleop_device)
+                logger.info("Teleoperation stopped")
                 teleoperation_active = False
                 current_robot = None
                 current_teleop = None
@@ -241,9 +276,17 @@ def handle_start_teleoperation(request: TeleoperateRequest, websocket_manager=No
         }
 
     except Exception as e:
+        # Connection (or setup) failed before the loop started: release any
+        # device that did open, reset state, and surface the error.
+        _safe_disconnect(robot)
+        _safe_disconnect(teleop_device)
         teleoperation_active = False
+        current_robot = None
+        current_teleop = None
         logger.error(f"Failed to start teleoperation: {e}")
-        return {"success": False, "message": f"Failed to start teleoperation: {str(e)}"}
+        # str(e) is already a user-facing message for the connection failures
+        # raised above; the toast title supplies the "error starting" context.
+        return {"success": False, "message": str(e)}
 
 
 def handle_stop_teleoperation() -> dict[str, Any]:
