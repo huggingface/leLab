@@ -10,10 +10,32 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { NumberInput } from "@/components/ui/number-input";
-import { Camera, Plus, X, VideoOff, RefreshCw } from "lucide-react";
+import { Camera, Plus, X, VideoOff, RefreshCw, ChevronRight } from "lucide-react";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
 import { useAvailableCameras } from "@/hooks/useAvailableCameras";
 import { useCameraStream } from "@/hooks/useCameraStream";
+
+// Sentinels distinguish "leave unset" (auto-detect / platform default) from an
+// explicit choice. Radix Select disallows an empty-string value, so we map these
+// to `undefined` on the CameraConfig.
+const FOURCC_AUTO = "__auto__";
+const BACKEND_DEFAULT = "__default__";
+const FOURCC_OPTIONS = ["MJPG", "YUYV", "I420", "NV12", "H264", "MP4V"];
+// Mirrors lerobot's Cv2Backends enum names.
+const BACKEND_OPTIONS = [
+  "ANY",
+  "V4L2",
+  "DSHOW",
+  "PVAPI",
+  "ANDROID",
+  "AVFOUNDATION",
+  "MSMF",
+];
 
 export interface CameraConfig {
   id: string;
@@ -351,48 +373,119 @@ const CameraPreview: React.FC<CameraPreviewProps> = ({
           </Button>
         </div>
 
-        <div className="grid grid-cols-1 gap-2 text-xs text-gray-400">
-          <div className="flex items-center gap-2">
-            <span className="w-16">Resolution:</span>
-            <div className="flex items-center gap-1">
-              <NumberInput
-                value={camera.width}
-                onChange={(v) => {
-                  if (v !== undefined) onUpdate({ width: v });
-                }}
-                className="bg-gray-800 border-gray-700 text-white text-xs h-6 px-2 w-16"
-                min="320"
-                max="1920"
-              />
-              <span className="flex items-center">×</span>
-              <NumberInput
-                value={camera.height}
-                onChange={(v) => {
-                  if (v !== undefined) onUpdate({ height: v });
-                }}
-                className="bg-gray-800 border-gray-700 text-white text-xs h-6 px-2 w-16"
-                min="240"
-                max="1080"
-              />
+        <Collapsible>
+          <CollapsibleTrigger className="group flex items-center gap-1.5 text-xs font-medium text-gray-300 hover:text-white transition-colors">
+            <ChevronRight className="w-3.5 h-3.5 transition-transform group-data-[state=open]:rotate-90" />
+            Configuration
+          </CollapsibleTrigger>
+          <CollapsibleContent className="pt-2 space-y-2">
+            <div className="grid grid-cols-1 gap-2 text-xs text-gray-400">
+              <div className="flex items-center gap-2">
+                <span className="w-16">Resolution:</span>
+                <div className="flex items-center gap-1">
+                  <NumberInput
+                    value={camera.width}
+                    onChange={(v) => {
+                      if (v !== undefined) onUpdate({ width: v });
+                    }}
+                    className="bg-gray-800 border-gray-700 text-white text-xs h-6 px-2 w-16"
+                    min="320"
+                    max="1920"
+                  />
+                  <span className="flex items-center">×</span>
+                  <NumberInput
+                    value={camera.height}
+                    onChange={(v) => {
+                      if (v !== undefined) onUpdate({ height: v });
+                    }}
+                    className="bg-gray-800 border-gray-700 text-white text-xs h-6 px-2 w-16"
+                    min="240"
+                    max="1080"
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-16">FPS:</span>
+                <NumberInput
+                  value={camera.fps ?? 30}
+                  onChange={(v) => {
+                    if (v !== undefined) onUpdate({ fps: v });
+                  }}
+                  className="bg-gray-800 border-gray-700 text-white text-xs h-6 px-2 w-16"
+                  min="10"
+                  max="60"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-16">FOURCC:</span>
+                <Select
+                  value={camera.fourcc ?? FOURCC_AUTO}
+                  onValueChange={(v) =>
+                    onUpdate({ fourcc: v === FOURCC_AUTO ? undefined : v })
+                  }
+                >
+                  <SelectTrigger className="bg-gray-800 border-gray-700 text-white text-xs h-6 px-2 w-28">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-gray-800 border-gray-700">
+                    <SelectItem
+                      value={FOURCC_AUTO}
+                      className="text-white hover:bg-gray-700 text-xs"
+                    >
+                      Auto
+                    </SelectItem>
+                    {FOURCC_OPTIONS.map((code) => (
+                      <SelectItem
+                        key={code}
+                        value={code}
+                        className="text-white hover:bg-gray-700 text-xs"
+                      >
+                        {code}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-16">Backend:</span>
+                <Select
+                  value={camera.backend ?? BACKEND_DEFAULT}
+                  onValueChange={(v) =>
+                    onUpdate({ backend: v === BACKEND_DEFAULT ? undefined : v })
+                  }
+                >
+                  <SelectTrigger className="bg-gray-800 border-gray-700 text-white text-xs h-6 px-2 w-28">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-gray-800 border-gray-700">
+                    <SelectItem
+                      value={BACKEND_DEFAULT}
+                      className="text-white hover:bg-gray-700 text-xs"
+                    >
+                      Default
+                    </SelectItem>
+                    {BACKEND_OPTIONS.map((name) => (
+                      <SelectItem
+                        key={name}
+                        value={name}
+                        className="text-white hover:bg-gray-700 text-xs"
+                      >
+                        {name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <p className="text-[10px] text-gray-500 leading-tight">
+                Overriding the backend can reorder camera indices on macOS.
+              </p>
             </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-16">FPS:</span>
-            <NumberInput
-              value={camera.fps ?? 30}
-              onChange={(v) => {
-                if (v !== undefined) onUpdate({ fps: v });
-              }}
-              className="bg-gray-800 border-gray-700 text-white text-xs h-6 px-2 w-16"
-              min="10"
-              max="60"
-            />
-          </div>
-        </div>
-
-        <div className="text-xs text-gray-500">
-          Type: {camera.type} | Device: {camera.device_id?.substring(0, 10)}...
-        </div>
+            <div className="text-xs text-gray-500">
+              Type: {camera.type} | Device:{" "}
+              {camera.device_id?.substring(0, 10)}...
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
       </div>
     </div>
   );
