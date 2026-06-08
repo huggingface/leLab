@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { NumberInput } from "@/components/ui/number-input";
-import { Camera, Plus, X, VideoOff } from "lucide-react";
+import { Camera, Plus, X, VideoOff, RefreshCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAvailableCameras } from "@/hooks/useAvailableCameras";
 import { useCameraStream } from "@/hooks/useCameraStream";
@@ -42,6 +42,7 @@ const CameraConfiguration: React.FC<CameraConfigurationProps> = ({
   const {
     cameras: availableCameras,
     isLoading: isLoadingCameras,
+    refresh: refreshCameras,
   } = useAvailableCameras();
   const [selectedCameraIndex, setSelectedCameraIndex] = useState<string>("");
   const [cameraName, setCameraName] = useState("");
@@ -176,9 +177,25 @@ const CameraConfiguration: React.FC<CameraConfigurationProps> = ({
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="space-y-2">
-            <Label className="text-sm font-medium text-gray-300">
-              Available Cameras
-            </Label>
+            <div className="flex items-center justify-between">
+              <Label className="text-sm font-medium text-gray-300">
+                Available Cameras
+              </Label>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => refreshCameras()}
+                disabled={isLoadingCameras}
+                className="h-6 w-6 text-gray-400 hover:text-white"
+                title="Rescan for cameras (e.g. after plugging in a new USB camera)"
+                aria-label="Rescan for cameras"
+              >
+                <RefreshCw
+                  className={`w-3.5 h-3.5 ${isLoadingCameras ? "animate-spin" : ""}`}
+                />
+              </Button>
+            </div>
             <Select
               value={selectedCameraIndex}
               onValueChange={setSelectedCameraIndex}

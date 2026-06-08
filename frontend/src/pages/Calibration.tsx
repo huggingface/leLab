@@ -14,6 +14,7 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
 import {
   ArrowLeft,
   Settings,
@@ -25,6 +26,8 @@ import {
   Play,
   Square,
   Circle,
+  Camera,
+  ShieldQuestion,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import Logo from "@/components/Logo";
@@ -85,6 +88,10 @@ const Calibration = () => {
   const [port, setPort] = useState<string>("");
   const [robot, setRobot] = useState<RobotRecord | null>(null);
   const [cameras, setCameras] = useState<CameraConfig[]>([]);
+  // Off by default so merely opening the calibration page never grabs a camera.
+  // The user explicitly starts a scan, which is when cameras are turned on,
+  // enumerated, and the browser permission prompt is requested.
+  const [camerasActive, setCamerasActive] = useState(false);
   const cameraSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchRobot = useCallback(async (): Promise<RobotRecord | null> => {
@@ -869,17 +876,58 @@ const Calibration = () => {
 
         {robotName && (
           <Card className="bg-slate-800/60 border-slate-700 backdrop-blur-sm mt-6">
-            <CardHeader>
+            <CardHeader className="flex-row items-center justify-between space-y-0">
               <CardTitle className="flex items-center gap-2 text-slate-200">
                 <Settings className="w-5 h-5 text-blue-400" />
                 Attached cameras
               </CardTitle>
+              <div className="flex items-center gap-2">
+                <Label
+                  htmlFor="cameras-toggle"
+                  className="text-sm text-slate-400 cursor-pointer"
+                >
+                  {camerasActive ? "On" : "Off"}
+                </Label>
+                <Switch
+                  id="cameras-toggle"
+                  checked={camerasActive}
+                  onCheckedChange={setCamerasActive}
+                  className="data-[state=checked]:bg-green-500"
+                  aria-label="Turn cameras on or off"
+                />
+              </div>
             </CardHeader>
             <CardContent>
-              <CameraConfiguration
-                cameras={cameras}
-                onCamerasChange={handleCamerasChange}
-              />
+              {camerasActive ? (
+                <CameraConfiguration
+                  cameras={cameras}
+                  onCamerasChange={handleCamerasChange}
+                />
+              ) : (
+                <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-6 text-center space-y-3">
+                  <Camera className="w-10 h-10 mx-auto text-slate-500" />
+                  <div className="space-y-1">
+                    <p className="text-slate-200 font-medium">Cameras are off</p>
+                    <p className="text-sm text-slate-400 max-w-md mx-auto">
+                      Turn cameras on to scan for connected devices and preview
+                      them. The browser may briefly open a camera to read device
+                      labels, and configured cameras stay active while previews
+                      are visible; your browser will ask for camera permission.
+                      Nothing is recorded.
+                    </p>
+                    {cameras.length > 0 && (
+                      <p className="text-xs text-slate-500 pt-1">
+                        {cameras.length} camera
+                        {cameras.length === 1 ? "" : "s"} saved to this robot.
+                      </p>
+                    )}
+                  </div>
+                  <p className="flex items-center justify-center gap-1.5 text-xs text-slate-500">
+                    <ShieldQuestion className="w-3.5 h-3.5" />
+                    You'll be asked to grant camera access.
+                  </p>
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
