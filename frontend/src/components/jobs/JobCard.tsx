@@ -173,7 +173,9 @@ const JobCard: React.FC<Props> = ({ job, onStop, onDelete, onPlay }) => {
           <div className="text-white font-semibold truncate" title={job.name}>
             {job.name}
           </div>
-          <div className="text-xs text-slate-400">{subtitle}</div>
+          <div className="text-xs text-slate-400 truncate" title={subtitle}>
+            {subtitle}
+          </div>
         </div>
         {showProgressBar ? (
           <div className="relative h-5 w-full overflow-hidden rounded-md bg-slate-900 border border-slate-700">
