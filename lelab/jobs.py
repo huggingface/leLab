@@ -1004,8 +1004,7 @@ class JobRegistry:
     def _checkpoints_for(self, record: JobRecord) -> builtins.list[JobCheckpoint]:
         if record.runner == "imported":
             if record.hf_repo_id:
-                from .utils.hf_auth import shared_hf_api
-                return _list_imported_hub(shared_hf_api(), record.hf_repo_id)
+                return self._list_cloud_cached(record.hf_repo_id, _list_imported_hub)
             return _list_imported_local(record.output_dir)
         if record.runner == "local":
             return _list_local_checkpoints(record.output_dir)
@@ -1023,16 +1022,18 @@ class JobRegistry:
             raise JobNotFoundError(job_id)
         return self._checkpoints_for(record)
 
-    def _list_cloud_cached(self, repo_id: str | None) -> builtins.list[JobCheckpoint]:
+    def _list_cloud_cached(self, repo_id: str | None, fetch=_list_hub_checkpoints) -> builtins.list[JobCheckpoint]:
+        """30s-TTL cache over a hub checkpoint listing. `fetch(api, repo_id)`
+        defaults to the training-job tree scan; imported hub models pass
+        `_list_imported_hub` so they share the same cache + rate-limit budget."""
         if not repo_id:
             return []
-        from .utils.hf_auth import shared_hf_api  # lazy: keeps unit-test imports cheap
-
         now = time.time()
         cached = self._cloud_ckpt_cache.get(repo_id)
         if cached is not None and cached[0] > now:
             return cached[1]
-        result = _list_hub_checkpoints(shared_hf_api(), repo_id)
+        from .utils.hf_auth import shared_hf_api  # lazy: keeps unit-test imports cheap
+        result = fetch(shared_hf_api(), repo_id)
         self._cloud_ckpt_cache[repo_id] = (now + _CLOUD_CKPT_TTL_SECONDS, result)
         return result
 
