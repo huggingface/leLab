@@ -216,14 +216,21 @@ def test_import_model_route_returns_record(client, monkeypatch) -> None:
     from lelab import server
 
     fake = {
-        "id": "act_imported_x", "name": "Imported · model", "state": "done",
+        "id": "act_imported_x",
+        "name": "Imported · model",
+        "state": "done",
         "config": {"dataset_repo_id": "(imported)", "policy_type": "act"},
-        "output_dir": "/tmp/model", "started_at": 1.0, "ended_at": 1.0,
-        "runner": "imported", "hf_repo_id": None,
+        "output_dir": "/tmp/model",
+        "started_at": 1.0,
+        "ended_at": 1.0,
+        "runner": "imported",
+        "hf_repo_id": None,
     }
     from lelab.jobs import JobRecord
+
     monkeypatch.setattr(
-        server.job_registry, "register_imported",
+        server.job_registry,
+        "register_imported",
         lambda source, name=None: JobRecord(**fake),
     )
     resp = client.post("/jobs/import", json={"source": "/tmp/model"})

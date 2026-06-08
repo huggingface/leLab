@@ -864,6 +864,7 @@ class JobRegistry:
             label = local_path.name or resolved
         else:
             from .utils.hf_auth import shared_hf_api
+
             ckpts = _list_imported_hub(shared_hf_api(), src)
             output_dir, hf_repo_id = "", src
             label = src
@@ -879,10 +880,8 @@ class JobRegistry:
         # Best-effort policy type for the display name; inference reads the
         # real config from the checkpoint, so a wrong guess here is harmless.
         policy_type = "model"
-        try:
+        with contextlib.suppress(Exception):
             policy_type = str(_read_checkpoint_config(ckpts[-1]).get("type") or "model")
-        except Exception:
-            pass
 
         job_id = _generate_job_id(policy_type, "imported")
         record = JobRecord(
@@ -1022,7 +1021,9 @@ class JobRegistry:
             raise JobNotFoundError(job_id)
         return self._checkpoints_for(record)
 
-    def _list_cloud_cached(self, repo_id: str | None, fetch=_list_hub_checkpoints) -> builtins.list[JobCheckpoint]:
+    def _list_cloud_cached(
+        self, repo_id: str | None, fetch=_list_hub_checkpoints
+    ) -> builtins.list[JobCheckpoint]:
         """30s-TTL cache over a hub checkpoint listing. `fetch(api, repo_id)`
         defaults to the training-job tree scan; imported hub models pass
         `_list_imported_hub` so they share the same cache + rate-limit budget."""
@@ -1033,6 +1034,7 @@ class JobRegistry:
         if cached is not None and cached[0] > now:
             return cached[1]
         from .utils.hf_auth import shared_hf_api  # lazy: keeps unit-test imports cheap
+
         result = fetch(shared_hf_api(), repo_id)
         self._cloud_ckpt_cache[repo_id] = (now + _CLOUD_CKPT_TTL_SECONDS, result)
         return result

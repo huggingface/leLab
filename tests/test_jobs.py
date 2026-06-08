@@ -16,6 +16,8 @@ LocalJobRunner.start() (see plan, "Discovered issue")."""
 
 from __future__ import annotations
 
+import json as _json
+
 import pytest
 
 
@@ -107,9 +109,6 @@ def test_hub_checkpoints_from_files_parses_tree() -> None:
     assert [c.step for c in out] == [10, 20]
     assert out[1].source == "hub"
     assert out[1].ref == "user/repo@checkpoints/000020"
-
-
-import json as _json
 
 
 def _make_pretrained(dir_path) -> None:
