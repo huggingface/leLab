@@ -474,11 +474,6 @@ def delete_dataset(request: DatasetInfoRequest):
 # ============================================================================
 
 
-class ImportModelRequest(BaseModel):
-    source: str
-    name: str | None = None
-
-
 @app.post("/jobs/training", status_code=201)
 async def create_training_job(req: Request):
     raw = await req.json()
@@ -491,6 +486,11 @@ async def create_training_job(req: Request):
         # e.g. "flavor is required when runner is hf_cloud"
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return record
+
+
+class ImportModelRequest(BaseModel):
+    source: str
+    name: str | None = None
 
 
 @app.post("/jobs/import", status_code=201)
