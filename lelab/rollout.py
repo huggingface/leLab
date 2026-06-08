@@ -116,7 +116,10 @@ def _resolve_policy_path(policy_ref: str) -> str:
     Hub refs look like 'user/repo@checkpoints/<step_dir>' where
     <step_dir> is lerobot's zero-padded directory name (e.g. 000050) — we
     forward it verbatim into snapshot_download's allow_patterns and the
-    resolved local path."""
+    resolved local path.
+    A 'user/repo@root' ref means the whole repo IS the pretrained_model
+    (no checkpoints sub-tree); the full repo is downloaded via
+    snapshot_download and its root is returned directly."""
     if Path(policy_ref).is_dir():
         return policy_ref
     from huggingface_hub import snapshot_download

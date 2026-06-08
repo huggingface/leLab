@@ -207,3 +207,21 @@ def test_read_checkpoint_config_hub_root(monkeypatch, tmp_path) -> None:
     assert _read_checkpoint_config(ckpt) == {"type": "smolvla"}
     assert seen["repo_id"] == "user/repo"
     assert seen["filename"] == "config.json"
+
+
+def test_read_checkpoint_config_hub_tree(monkeypatch, tmp_path) -> None:
+    from lelab.jobs import JobCheckpoint, _read_checkpoint_config
+
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(_json.dumps({"type": "act"}))
+    seen = {}
+
+    def fake_download(**kwargs):
+        seen.update(kwargs)
+        return str(cfg_file)
+
+    monkeypatch.setattr("huggingface_hub.hf_hub_download", fake_download)
+    ckpt = JobCheckpoint(step=50, source="hub", ref="user/repo@checkpoints/000050")
+    assert _read_checkpoint_config(ckpt) == {"type": "act"}
+    assert seen["repo_id"] == "user/repo"
+    assert seen["filename"] == "checkpoints/000050/pretrained_model/config.json"
