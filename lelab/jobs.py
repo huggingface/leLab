@@ -498,19 +498,10 @@ _CLOUD_CKPT_TTL_SECONDS = 30.0
 _CKPT_PATH_RE = re.compile(r"^checkpoints/(\d+)/pretrained_model/config\.json$")
 
 
-def _list_hub_checkpoints(api, repo_id: str) -> list[JobCheckpoint]:
-    """List checkpoints by introspecting the model repo file tree.
-
-    The ref preserves the original directory name (zero-padded by
-    lerobot — e.g. 000050) so downstream consumers can rebuild the Hub
-    path verbatim. JobCheckpoint.step is the int form for sorting and
-    UI display."""
-    try:
-        files = api.list_repo_files(repo_id, repo_type="model")
-    except Exception:
-        # Repo may not exist yet (training just started, sidecar hasn't
-        # uploaded anything). Treat as no checkpoints.
-        return []
+def _hub_checkpoints_from_files(files, repo_id: str) -> list[JobCheckpoint]:
+    """Parse a repo file listing into checkpoints. The ref preserves the
+    original zero-padded directory name (e.g. 000050); JobCheckpoint.step is
+    the int form for sorting and UI display."""
     seen: dict[int, JobCheckpoint] = {}
     for path in files:
         m = _CKPT_PATH_RE.match(path)
@@ -526,6 +517,17 @@ def _list_hub_checkpoints(api, repo_id: str) -> list[JobCheckpoint]:
     out = list(seen.values())
     out.sort(key=lambda c: c.step)
     return out
+
+
+def _list_hub_checkpoints(api, repo_id: str) -> list[JobCheckpoint]:
+    """List checkpoints by introspecting the model repo file tree."""
+    try:
+        files = api.list_repo_files(repo_id, repo_type="model")
+    except Exception:
+        # Repo may not exist yet (training just started, sidecar hasn't
+        # uploaded anything). Treat as no checkpoints.
+        return []
+    return _hub_checkpoints_from_files(files, repo_id)
 
 
 _LANGUAGE_CONDITIONED_POLICY_TYPES = {"smolvla", "pi0", "pi0_fast", "pi05"}

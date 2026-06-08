@@ -92,3 +92,18 @@ def test_pid_alive_returns_false_for_unlikely_pid() -> None:
     # DISCOVERED: os.kill(-1, 0) on macOS sends to process group and succeeds
     # (returns True), so we use a large PID that certainly does not exist.
     assert _pid_alive(999999999) is False
+
+
+def test_hub_checkpoints_from_files_parses_tree() -> None:
+    from lelab.jobs import _hub_checkpoints_from_files
+
+    files = [
+        "README.md",
+        "checkpoints/000010/pretrained_model/config.json",
+        "checkpoints/000020/pretrained_model/config.json",
+        "checkpoints/000020/pretrained_model/model.safetensors",
+    ]
+    out = _hub_checkpoints_from_files(files, "user/repo")
+    assert [c.step for c in out] == [10, 20]
+    assert out[1].source == "hub"
+    assert out[1].ref == "user/repo@checkpoints/000020"
