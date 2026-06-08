@@ -566,31 +566,34 @@ _LANGUAGE_CONDITIONED_POLICY_TYPES = {"smolvla", "pi0", "pi0_fast", "pi05"}
 
 
 _HUB_CKPT_REF_RE = re.compile(r"^(?P<repo>[^@]+)@checkpoints/(?P<step_dir>\d+)$")
+_HUB_ROOT_REF_RE = re.compile(r"^(?P<repo>[^@]+)@root$")
 
 
-def _read_checkpoint_config(record: JobRecord, ckpt: JobCheckpoint) -> dict[str, object]:
+def _read_checkpoint_config(ckpt: JobCheckpoint) -> dict[str, object]:
     """Load the pretrained_model/config.json for one checkpoint.
 
-    Local refs carry the absolute directory path; cloud refs carry the
-    Hub-side `<repo>@checkpoints/<step_dir>` where `<step_dir>` keeps
-    lerobot's zero-padded form (e.g. 000050) so we can reconstruct the
-    exact path-in-repo without a second list_repo_files call."""
-    if record.runner == "local":
-        config_path = Path(ckpt.ref) / "config.json"
-        with open(config_path) as f:
+    Keyed on the checkpoint's own source/ref shape so it works for training
+    jobs and imports alike:
+      * local  → ckpt.ref is the absolute pretrained_model dir.
+      * hub    → 'repo@checkpoints/<step_dir>' (a tree) or 'repo@root' (a flat
+                 model repo); both resolve via hf_hub_download.
+    """
+    if ckpt.source == "local":
+        with open(Path(ckpt.ref) / "config.json") as f:
             return json.load(f)
-    m = _HUB_CKPT_REF_RE.match(ckpt.ref)
-    if not m:
-        raise ValueError(f"Bad cloud ref: {ckpt.ref!r}")
-    repo_id = m.group("repo")
-    step_dir = m.group("step_dir")
     from huggingface_hub import hf_hub_download
 
-    local_path = hf_hub_download(
-        repo_id=repo_id,
-        filename=f"checkpoints/{step_dir}/pretrained_model/config.json",
-        repo_type="model",
-    )
+    m = _HUB_CKPT_REF_RE.match(ckpt.ref)
+    if m:
+        repo_id = m.group("repo")
+        filename = f"checkpoints/{m.group('step_dir')}/pretrained_model/config.json"
+    else:
+        m = _HUB_ROOT_REF_RE.match(ckpt.ref)
+        if not m:
+            raise ValueError(f"Bad hub ref: {ckpt.ref!r}")
+        repo_id = m.group("repo")
+        filename = "config.json"
+    local_path = hf_hub_download(repo_id=repo_id, filename=filename, repo_type="model")
     with open(local_path) as f:
         return json.load(f)
 
@@ -986,7 +989,7 @@ class JobRegistry:
         match = next((c for c in ckpts if c.step == step), None)
         if match is None:
             raise FileNotFoundError(f"No checkpoint at step {step} for job {record.id}")
-        cfg = _read_checkpoint_config(record, match)
+        cfg = _read_checkpoint_config(match)
         policy_type = cfg.get("type")
         image_features: dict[str, dict[str, int]] = {}
         for full_name, feat in (cfg.get("input_features") or {}).items():

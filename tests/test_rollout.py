@@ -142,6 +142,26 @@ def test_resolve_policy_path_resolves_hub_ref(monkeypatch: pytest.MonkeyPatch, t
     assert result == str(fake_root / "checkpoints" / "000050" / "pretrained_model")
 
 
+def test_resolve_policy_path_resolves_hub_root_ref(monkeypatch, tmp_path) -> None:
+    """A flat-model ref ('user/repo@root') downloads the whole repo and
+    returns its root."""
+    from lelab.rollout import _resolve_policy_path
+
+    fake_root = tmp_path / "snapshot"
+    fake_root.mkdir()
+    seen = {}
+
+    def fake_snapshot_download(**kwargs):
+        seen.update(kwargs)
+        return str(fake_root)
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
+    result = _resolve_policy_path("user/repo@root")
+    assert seen["repo_id"] == "user/repo"
+    assert "allow_patterns" not in seen
+    assert result == str(fake_root)
+
+
 def test_format_cameras_arg_empty_yields_empty_braces() -> None:
     from lelab.rollout import _format_cameras_arg
 

@@ -181,3 +181,29 @@ def test_list_imported_hub_empty_when_no_model() -> None:
             return ["README.md"]
 
     assert _list_imported_hub(FakeApi(), "user/repo") == []
+
+
+def test_read_checkpoint_config_local_reads_config_json(tmp_path) -> None:
+    from lelab.jobs import JobCheckpoint, _read_checkpoint_config
+
+    (tmp_path / "config.json").write_text(_json.dumps({"type": "act"}))
+    ckpt = JobCheckpoint(step=0, source="local", ref=str(tmp_path))
+    assert _read_checkpoint_config(ckpt) == {"type": "act"}
+
+
+def test_read_checkpoint_config_hub_root(monkeypatch, tmp_path) -> None:
+    from lelab.jobs import JobCheckpoint, _read_checkpoint_config
+
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(_json.dumps({"type": "smolvla"}))
+    seen = {}
+
+    def fake_download(**kwargs):
+        seen.update(kwargs)
+        return str(cfg_file)
+
+    monkeypatch.setattr("huggingface_hub.hf_hub_download", fake_download)
+    ckpt = JobCheckpoint(step=0, source="hub", ref="user/repo@root")
+    assert _read_checkpoint_config(ckpt) == {"type": "smolvla"}
+    assert seen["repo_id"] == "user/repo"
+    assert seen["filename"] == "config.json"

@@ -59,6 +59,7 @@ _inference_meta: dict[str, Any] = {}
 # sections in start/stop/status.
 _state_lock = threading.Lock()
 _HUB_REF_RE = re.compile(r"^(?P<repo>[^@]+)@checkpoints/(?P<step_dir>\d+)$")
+_HUB_ROOT_REF_RE = re.compile(r"^(?P<repo>[^@]+)@root$")
 # lerobot prints this once per run, the moment its main control loop is
 # about to take over from the setup phase. We watch stdout for it so the
 # UI can present a "rollout time" separate from the multi-second policy
@@ -118,18 +119,21 @@ def _resolve_policy_path(policy_ref: str) -> str:
     resolved local path."""
     if Path(policy_ref).is_dir():
         return policy_ref
-    m = _HUB_REF_RE.match(policy_ref)
-    if not m:
-        raise ValueError(f"Unrecognised policy ref: {policy_ref!r}")
     from huggingface_hub import snapshot_download
 
-    repo_id, step_dir = m.group("repo"), m.group("step_dir")
-    local_root = snapshot_download(
-        repo_id=repo_id,
-        repo_type="model",
-        allow_patterns=[f"checkpoints/{step_dir}/pretrained_model/*"],
-    )
-    return str(Path(local_root) / "checkpoints" / step_dir / "pretrained_model")
+    m = _HUB_REF_RE.match(policy_ref)
+    if m:
+        repo_id, step_dir = m.group("repo"), m.group("step_dir")
+        local_root = snapshot_download(
+            repo_id=repo_id,
+            repo_type="model",
+            allow_patterns=[f"checkpoints/{step_dir}/pretrained_model/*"],
+        )
+        return str(Path(local_root) / "checkpoints" / step_dir / "pretrained_model")
+    m = _HUB_ROOT_REF_RE.match(policy_ref)
+    if m:
+        return snapshot_download(repo_id=m.group("repo"), repo_type="model")
+    raise ValueError(f"Unrecognised policy ref: {policy_ref!r}")
 
 
 def _format_cameras_arg(cameras: dict[str, dict[str, Any]]) -> str:
