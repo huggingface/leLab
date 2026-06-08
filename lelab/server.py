@@ -918,15 +918,77 @@ def _avfoundation_cameras_in_cv2_order() -> list[dict[str, Any]]:
         return []
 
 
+def _generic_cv2_cameras(backend) -> list[dict[str, Any]]:
+    """Last-resort enumeration: probe cv2 indices with placeholder names."""
+    import cv2
+
+    cameras: list[dict[str, Any]] = []
+    for i in range(10):
+        cap = cv2.VideoCapture(i, backend)
+        opened = cap.isOpened()
+        cap.release()
+        if opened:
+            cameras.append({"index": i, "name": f"Camera {i}", "available": True})
+    return cameras
+
+
+def _windows_cameras() -> list[dict[str, Any]]:
+    """Enumerate Windows cameras with their real DirectShow names.
+
+    pygrabber lists DirectShow video devices in the same order cv2's DSHOW
+    backend indexes them (which recording is pinned to), so the returned index
+    matches what ``cv2.VideoCapture(i, CAP_DSHOW)`` opens. The real names let the
+    frontend match each index to the browser's ``MediaDeviceInfo.label`` for the
+    live preview. Falls back to generic names if pygrabber is unavailable.
+    """
+    try:
+        from pygrabber.dshow_graph import FilterGraph
+
+        names = FilterGraph().get_input_devices()
+    except Exception as e:  # ImportError, or a COM/DirectShow failure
+        logger.warning("pygrabber unavailable; using generic camera names: %s", e)
+        import cv2
+
+        return _generic_cv2_cameras(cv2.CAP_DSHOW)
+    return [{"index": i, "name": name, "available": True} for i, name in enumerate(names)]
+
+
+def _v4l2_camera_name(index: int) -> str | None:
+    """Real camera name for /dev/video{index} from sysfs (Linux, no deps)."""
+    try:
+        with open(f"/sys/class/video4linux/video{index}/name", encoding="utf-8") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def _linux_cameras() -> list[dict[str, Any]]:
+    """Enumerate Linux cameras, naming each from sysfs (no extra deps)."""
+    import cv2
+
+    cameras: list[dict[str, Any]] = []
+    for i in range(10):
+        cap = cv2.VideoCapture(i, cv2.CAP_V4L2)
+        opened = cap.isOpened()
+        cap.release()
+        if not opened:
+            continue
+        cameras.append({"index": i, "name": _v4l2_camera_name(i) or f"Camera {i}", "available": True})
+    return cameras
+
+
 @app.get("/available-cameras")
 def get_available_cameras():
     """List cameras with the same index ordering cv2 will use to record.
 
-    On macOS we mirror OpenCV's AVFoundation enumeration via PyObjC so each
-    index comes with the AVFoundation ``localizedName``. The browser's
-    ``MediaDeviceInfo.label`` is that same ``localizedName``, so the
-    frontend can match by name to find the matching browser deviceId for the
-    live preview while we record by cv2 index.
+    Each platform enumerates in the order its cv2 backend indexes devices, and
+    pairs each index with the device's real name so the frontend can match it to
+    the browser's ``MediaDeviceInfo.label`` for the live preview:
+      - macOS: AVFoundation ``localizedName`` (via a PyObjC subprocess);
+      - Windows: DirectShow FriendlyName (via pygrabber; recording pinned DSHOW);
+      - Linux: the v4l2 device name from sysfs.
+    Without real names the frontend can't match a camera and shows "No browser
+    match" with an empty device_id (issues #12, #16).
     """
     try:
         import platform
@@ -938,27 +1000,14 @@ def get_available_cameras():
             for cam in cameras:
                 cam["available"] = True
             return {"status": "success", "cameras": cameras}
+        if system == "Windows":
+            return {"status": "success", "cameras": _windows_cameras()}
+        if system == "Linux":
+            return {"status": "success", "cameras": _linux_cameras()}
 
-        # Linux / others: fall back to the cv2 probe (no friendly names).
         import cv2
 
-        backend = cv2.CAP_V4L2 if system == "Linux" else cv2.CAP_ANY
-
-        cameras = []
-        for i in range(10):
-            cap = cv2.VideoCapture(i, backend)
-            if not cap.isOpened():
-                cap.release()
-                continue
-            cameras.append(
-                {
-                    "index": i,
-                    "name": f"Camera {i}",
-                    "available": True,
-                }
-            )
-            cap.release()
-        return {"status": "success", "cameras": cameras}
+        return {"status": "success", "cameras": _generic_cv2_cameras(cv2.CAP_ANY)}
     except ImportError:
         logger.warning("OpenCV not available for camera detection")
         return {"status": "success", "cameras": []}

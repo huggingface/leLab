@@ -44,3 +44,27 @@ def test_handle_stop_recording_when_idle_returns_dict(tmp_lerobot_home) -> None:
 
     result = handle_stop_recording()
     assert isinstance(result, dict)
+
+
+def test_create_record_config_pins_dshow_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On Windows, recording must use the DSHOW backend so a camera_index opens
+    the same device /available-cameras enumerated (via pygrabber, DSHOW order).
+    """
+    import lelab.record as record
+    from lerobot.cameras.configs import Cv2Backends
+
+    monkeypatch.setattr("platform.system", lambda: "Windows")
+    monkeypatch.setattr(record, "setup_calibration_files", lambda leader, follower: ("leader", "follower"))
+
+    request = record.RecordingRequest(
+        leader_port="COM_LEADER",
+        follower_port="COM_FOLLOWER",
+        leader_config="leader",
+        follower_config="follower",
+        dataset_repo_id="user/dataset",
+        single_task="pick up the cube",
+        cameras={"wrist": {"type": "opencv", "camera_index": 0, "width": 640, "height": 480, "fps": 30}},
+    )
+
+    config = record.create_record_config(request)
+    assert config.robot.cameras["wrist"].backend == Cv2Backends.DSHOW

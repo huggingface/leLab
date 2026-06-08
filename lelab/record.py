@@ -99,6 +99,10 @@ def create_record_config(request: RecordingRequest) -> RecordConfig:
         opencv_backend = Cv2Backends.AVFOUNDATION
     elif platform.system() == "Linux":
         opencv_backend = Cv2Backends.V4L2
+    elif platform.system() == "Windows":
+        # DirectShow, matching the order /available-cameras enumerates (via
+        # pygrabber) so a camera_index always opens the previewed device.
+        opencv_backend = Cv2Backends.DSHOW
     else:
         opencv_backend = Cv2Backends.ANY
 
