@@ -107,3 +107,77 @@ def test_hub_checkpoints_from_files_parses_tree() -> None:
     assert [c.step for c in out] == [10, 20]
     assert out[1].source == "hub"
     assert out[1].ref == "user/repo@checkpoints/000020"
+
+
+import json as _json
+
+
+def _make_pretrained(dir_path) -> None:
+    dir_path.mkdir(parents=True, exist_ok=True)
+    (dir_path / "config.json").write_text(_json.dumps({"type": "act"}))
+
+
+def test_list_imported_local_single_model(tmp_path) -> None:
+    from lelab.jobs import _list_imported_local
+
+    _make_pretrained(tmp_path)  # config.json at the root
+    out = _list_imported_local(str(tmp_path))
+    assert len(out) == 1
+    assert out[0].step == 0
+    assert out[0].source == "local"
+    assert out[0].ref == str(tmp_path.resolve())
+
+
+def test_list_imported_local_checkpoints_tree(tmp_path) -> None:
+    from lelab.jobs import _list_imported_local
+
+    _make_pretrained(tmp_path / "checkpoints" / "000010" / "pretrained_model")
+    out = _list_imported_local(str(tmp_path))
+    assert [c.step for c in out] == [10]
+    assert out[0].source == "local"
+    assert out[0].ref.endswith("/checkpoints/000010/pretrained_model")
+
+
+def test_list_imported_local_empty_when_no_model(tmp_path) -> None:
+    from lelab.jobs import _list_imported_local
+
+    assert _list_imported_local(str(tmp_path)) == []
+
+
+def test_list_imported_hub_single_model() -> None:
+    from lelab.jobs import _list_imported_hub
+
+    class FakeApi:
+        def list_repo_files(self, repo_id, repo_type):
+            return ["config.json", "model.safetensors", "README.md"]
+
+    out = _list_imported_hub(FakeApi(), "user/repo")
+    assert len(out) == 1
+    assert out[0].step == 0
+    assert out[0].source == "hub"
+    assert out[0].ref == "user/repo@root"
+
+
+def test_list_imported_hub_prefers_checkpoints_tree() -> None:
+    from lelab.jobs import _list_imported_hub
+
+    class FakeApi:
+        def list_repo_files(self, repo_id, repo_type):
+            return [
+                "config.json",  # also present, but the tree wins
+                "checkpoints/000050/pretrained_model/config.json",
+            ]
+
+    out = _list_imported_hub(FakeApi(), "user/repo")
+    assert [c.step for c in out] == [50]
+    assert out[0].ref == "user/repo@checkpoints/000050"
+
+
+def test_list_imported_hub_empty_when_no_model() -> None:
+    from lelab.jobs import _list_imported_hub
+
+    class FakeApi:
+        def list_repo_files(self, repo_id, repo_type):
+            return ["README.md"]
+
+    assert _list_imported_hub(FakeApi(), "user/repo") == []

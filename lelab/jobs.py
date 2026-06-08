@@ -519,6 +519,38 @@ def _hub_checkpoints_from_files(files, repo_id: str) -> list[JobCheckpoint]:
     return out
 
 
+def _list_imported_local(path: str) -> list[JobCheckpoint]:
+    """Auto-detect the layout of an imported local directory.
+
+    A checkpoints/<step>/pretrained_model tree → reuse _list_local_checkpoints.
+    Otherwise, if the dir itself is a pretrained_model (config.json present) →
+    a single step-0 checkpoint. Neither → empty (source moved/unusable)."""
+    tree = _list_local_checkpoints(path)
+    if tree:
+        return tree
+    if (Path(path) / "config.json").is_file():
+        return [JobCheckpoint(step=0, source="local", ref=str(Path(path).resolve()))]
+    return []
+
+
+def _list_imported_hub(api, repo_id: str) -> list[JobCheckpoint]:
+    """Auto-detect the layout of an imported Hub model repo.
+
+    A checkpoints/<step>/pretrained_model tree → reuse the tree parse.
+    Otherwise, a root config.json → a single step-0 checkpoint with a
+    'repo@root' ref (the whole repo is the pretrained_model)."""
+    try:
+        files = api.list_repo_files(repo_id, repo_type="model")
+    except Exception:
+        return []
+    tree = _hub_checkpoints_from_files(files, repo_id)
+    if tree:
+        return tree
+    if "config.json" in files:
+        return [JobCheckpoint(step=0, source="hub", ref=f"{repo_id}@root")]
+    return []
+
+
 def _list_hub_checkpoints(api, repo_id: str) -> list[JobCheckpoint]:
     """List checkpoints by introspecting the model repo file tree."""
     try:
