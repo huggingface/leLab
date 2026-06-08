@@ -178,6 +178,8 @@ const Landing = () => {
           width: cam.width,
           height: cam.height,
           fps: cam.fps,
+          ...(cam.fourcc ? { fourcc: cam.fourcc } : {}),
+          ...(cam.backend ? { backend: cam.backend } : {}),
         };
         return acc;
       },
@@ -189,6 +191,8 @@ const Landing = () => {
           width: number;
           height: number;
           fps?: number;
+          fourcc?: string;
+          backend?: string;
         }
       >,
     );

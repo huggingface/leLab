@@ -24,6 +24,8 @@ export interface CameraConfig {
   width: number;
   height: number;
   fps?: number;
+  fourcc?: string; // 4-char OpenCV pixel format (e.g. "MJPG"); undefined = auto-detect
+  backend?: string; // Cv2Backends name (e.g. "AVFOUNDATION"); undefined = platform default
 }
 
 interface CameraConfigurationProps {
