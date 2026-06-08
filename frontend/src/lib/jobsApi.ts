@@ -64,7 +64,7 @@ export interface JobRecord {
   exit_code: number | null;
   error_message: string | null;
   metrics: TrainingMetrics;
-  runner: "local" | "hf_cloud";
+  runner: "local" | "hf_cloud" | "imported";
   hf_job_id: string | null;
   hf_flavor: string | null;
   hf_repo_id: string | null;
@@ -174,6 +174,19 @@ export async function startTrainingJob(
     }
     throw e;
   }
+}
+
+export async function importModel(
+  baseUrl: string,
+  fetcher: Fetcher,
+  source: string,
+  name?: string,
+): Promise<JobRecord> {
+  return apiRequest<JobRecord>(baseUrl, fetcher, "/jobs/import", {
+    method: "POST",
+    body: name ? { source, name } : { source },
+    action: "Import model",
+  });
 }
 
 export async function stopJob(
