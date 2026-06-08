@@ -23,6 +23,10 @@ export const CheckpointDropdown: React.FC<Props> = ({
   disabled,
   placeholder = "Select checkpoint",
 }) => {
+  // step 0 is the sentinel for an imported single-model checkpoint (lerobot
+  // never saves at step 0), so it has no meaningful step number — show
+  // "latest" instead. Real training checkpoints keep their step label.
+  const labelFor = (step: number) => (step === 0 ? "latest" : `step ${step}`);
   const value = selectedStep != null ? String(selectedStep) : undefined;
   return (
     <Select
@@ -43,7 +47,7 @@ export const CheckpointDropdown: React.FC<Props> = ({
             value={String(c.step)}
             onClick={(e) => e.stopPropagation()}
           >
-            step {c.step}
+            {labelFor(c.step)}
           </SelectItem>
         ))}
       </SelectContent>
