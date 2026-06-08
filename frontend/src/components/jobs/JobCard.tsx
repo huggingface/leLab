@@ -173,8 +173,16 @@ const JobCard: React.FC<Props> = ({ job, onStop, onDelete, onPlay }) => {
           <div className="text-white font-semibold truncate" title={job.name}>
             {job.name}
           </div>
-          <div className="text-xs text-slate-400 truncate" title={subtitle}>
-            {subtitle}
+          {/* Imported subtitles are file paths — truncate the *start* (rtl
+              flips the ellipsis to the left) so the more useful tail stays
+              visible. The leading LRM keeps the path's first "/" from being
+              bidi-reordered to the wrong end. */}
+          <div
+            className="text-xs text-slate-400 truncate"
+            title={subtitle}
+            style={isImported ? { direction: "rtl", textAlign: "left" } : undefined}
+          >
+            {isImported ? "\u200e" + subtitle : subtitle}
           </div>
         </div>
         {showProgressBar ? (
