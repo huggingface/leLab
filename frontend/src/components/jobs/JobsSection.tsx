@@ -18,13 +18,14 @@ import JobCard from "./JobCard";
 import HubJobCard from "./HubJobCard";
 import HubModelCard from "./HubModelCard";
 import InferenceModal from "@/components/landing/InferenceModal";
+import ImportModelModal from "./ImportModelModal";
 import { useRobots } from "@/hooks/useRobots";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { ChevronRight, RefreshCw, Search } from "lucide-react";
+import { ChevronRight, Download, RefreshCw, Search } from "lucide-react";
 
 const LIMIT = 10;
 
@@ -51,6 +52,7 @@ const JobsSection: React.FC = () => {
 
   const { selectedRecord } = useRobots();
   const [inferenceModalOpen, setInferenceModalOpen] = useState(false);
+  const [importModalOpen, setImportModalOpen] = useState(false);
   const [inferenceJob, setInferenceJob] = useState<JobRecord | null>(null);
   const [inferenceStep, setInferenceStep] = useState<number | null>(null);
 
@@ -177,6 +179,10 @@ const JobsSection: React.FC = () => {
     () => filteredJobs.filter((j) => j.runner === "hf_cloud"),
     [filteredJobs],
   );
+  const importedJobs = useMemo(
+    () => filteredJobs.filter((j) => j.runner === "imported"),
+    [filteredJobs],
+  );
   // Hub jobs already mirrored by a local JobRecord get their richer card via
   // trackedCloudJobs; everything else from the hub gets a plain HubJobCard.
   const trackedHfJobIds = useMemo(
@@ -254,6 +260,15 @@ const JobsSection: React.FC = () => {
             />
           </div>
           <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setImportModalOpen(true)}
+            className="h-8 border-slate-700 bg-slate-800/50 text-slate-200 hover:text-white"
+          >
+            <Download className="w-3.5 h-3.5 mr-1.5" />
+            Import model
+          </Button>
+          <Button
             variant="ghost"
             size="icon"
             onClick={refresh}
@@ -291,6 +306,28 @@ const JobsSection: React.FC = () => {
           </div>
         )}
       </div>
+
+      {importedJobs.length > 0 ? (
+        <>
+          <div className="border-t border-slate-700" />
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
+              Imported models
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {importedJobs.map((job) => (
+                <JobCard
+                  key={job.id}
+                  job={job}
+                  onStop={handleStop}
+                  onDelete={handleDelete}
+                  onPlay={handlePlay}
+                />
+              ))}
+            </div>
+          </div>
+        </>
+      ) : null}
 
       <div className="border-t border-slate-700" />
 
@@ -372,6 +409,12 @@ const JobsSection: React.FC = () => {
           initialStep={inferenceStep}
         />
       ) : null}
+
+      <ImportModelModal
+        open={importModalOpen}
+        onOpenChange={setImportModalOpen}
+        onImported={refresh}
+      />
     </section>
   );
 };
