@@ -17,7 +17,7 @@ import re
 import shutil
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -522,33 +522,45 @@ def handle_delete_dataset(request: DatasetInfoRequest) -> dict[str, Any]:
     return {"success": True, "message": f"Deleted {repo_id}"}
 
 
+_SYNC_PREFIXES = ("data/", "videos/", "meta/")
+
+
+def _local_manifest(root: Path) -> dict[str, int]:
+    manifest: dict[str, int] = {}
+    for prefix in _SYNC_PREFIXES:
+        base = root / prefix.rstrip("/")
+        if not base.is_dir():
+            continue
+        for path in base.rglob("*"):
+            if path.is_file():
+                manifest[path.relative_to(root).as_posix()] = path.stat().st_size
+    return manifest
+
+
 def handle_dataset_sync_status(request: DatasetInfoRequest) -> dict[str, Any]:
-    """Compare local dataset mtime with Hub lastModified to detect unsynced changes."""
+    """Detect unsynced local changes by diffing the local file manifest against the Hub's."""
     repo_id = request.dataset_repo_id
     local_root = Path(HF_LEROBOT_HOME).resolve() / repo_id
 
     if not local_root.exists():
-        return {"on_hub": False, "needs_sync": False, "local_mtime": None, "hub_mtime": None}
+        return {"on_hub": False, "needs_sync": False, "local_files": 0, "hub_files": 0}
 
-    local_mtime = datetime.fromtimestamp(local_root.stat().st_mtime, tz=UTC)
+    local = _local_manifest(local_root)
 
     api = shared_hf_api()
     try:
-        hub_info = api.dataset_info(repo_id)
-        hub_mtime = hub_info.lastModified
-        return {
-            "on_hub": True,
-            "needs_sync": hub_mtime is None or local_mtime > hub_mtime,
-            "local_mtime": local_mtime.isoformat(),
-            "hub_mtime": hub_mtime.isoformat() if hub_mtime else None,
-        }
+        info = api.dataset_info(repo_id, files_metadata=True)
     except RepositoryNotFoundError:
-        return {
-            "on_hub": False,
-            "needs_sync": True,
-            "local_mtime": local_mtime.isoformat(),
-            "hub_mtime": None,
-        }
+        return {"on_hub": False, "needs_sync": True, "local_files": len(local), "hub_files": 0}
+
+    hub = {s.rfilename: s.size for s in info.siblings if s.rfilename.startswith(_SYNC_PREFIXES)}
+
+    return {
+        "on_hub": True,
+        "needs_sync": local != hub,
+        "local_files": len(local),
+        "hub_files": len(hub),
+    }
 
 
 def handle_upload_dataset(request: UploadRequest) -> dict[str, Any]:

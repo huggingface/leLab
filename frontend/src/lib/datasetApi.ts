@@ -10,8 +10,8 @@ export interface DatasetInfo {
 export interface SyncStatus {
   on_hub: boolean;
   needs_sync: boolean;
-  local_mtime: string | null;
-  hub_mtime: string | null;
+  local_files: number;
+  hub_files: number;
 }
 
 export async function getDatasetInfo(

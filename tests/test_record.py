@@ -119,3 +119,82 @@ def test_build_camera_configs_skips_non_opencv_type() -> None:
     configs = _build_camera_configs(cameras, Cv2Backends.ANY)
 
     assert configs == {}
+
+
+# --- handle_dataset_sync_status: manifest (path+size) diff ------------------
+
+REPO_ID = "user/ds"
+
+
+def _make_local(cache_root, files: dict[str, int]):
+    """Write a fake local dataset tree under <cache_root>/REPO_ID."""
+    from pathlib import Path
+
+    local_root = Path(cache_root) / REPO_ID
+    for rel, size in files.items():
+        p = local_root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x" * size)
+    return local_root
+
+
+def _fake_api(*, siblings: list[tuple[str, int]] | None = None, missing: bool = False):
+    from types import SimpleNamespace
+
+    from huggingface_hub.errors import RepositoryNotFoundError
+
+    def dataset_info(repo_id, files_metadata=False):
+        if missing:
+            raise RepositoryNotFoundError("not found", response=SimpleNamespace(headers={}, request=None))
+        return SimpleNamespace(
+            siblings=[SimpleNamespace(rfilename=name, size=size) for name, size in siblings]
+        )
+
+    return SimpleNamespace(dataset_info=dataset_info)
+
+
+def _sync_status(monkeypatch, cache_root, api):
+    import lelab.record as rec
+    from lelab.record import DatasetInfoRequest, handle_dataset_sync_status
+
+    monkeypatch.setattr(rec, "HF_LEROBOT_HOME", str(cache_root))
+    monkeypatch.setattr(rec, "shared_hf_api", lambda: api)
+    return handle_dataset_sync_status(DatasetInfoRequest(dataset_repo_id=REPO_ID))
+
+
+def test_sync_status_not_local_returns_no_sync(tmp_path, monkeypatch) -> None:
+    # No local dir at all → nothing to push, never touches the Hub.
+    result = _sync_status(monkeypatch, tmp_path, _fake_api(siblings=[]))
+    assert result == {"on_hub": False, "needs_sync": False, "local_files": 0, "hub_files": 0}
+
+
+def test_sync_status_appended_episode_needs_sync(tmp_path, monkeypatch) -> None:
+    hub = {"meta/info.json": 10, "data/chunk-000/episode_000.parquet": 100}
+    local = {**hub, "data/chunk-000/episode_001.parquet": 120}
+    _make_local(tmp_path, local)
+    result = _sync_status(monkeypatch, tmp_path, _fake_api(siblings=list(hub.items())))
+    assert result["needs_sync"] is True
+
+
+def test_sync_status_deleted_episode_needs_sync(tmp_path, monkeypatch) -> None:
+    # Hub has an episode the local copy no longer holds — the deep-write blind
+    # spot of the directory-mtime approach.
+    local = {"meta/info.json": 10, "data/chunk-000/episode_000.parquet": 100}
+    hub = {**local, "data/chunk-000/episode_001.parquet": 120}
+    _make_local(tmp_path, local)
+    result = _sync_status(monkeypatch, tmp_path, _fake_api(siblings=list(hub.items())))
+    assert result["needs_sync"] is True
+
+
+def test_sync_status_edited_episode_needs_sync(tmp_path, monkeypatch) -> None:
+    # Same path, different size → in-place edit is caught.
+    _make_local(tmp_path, {"data/chunk-000/episode_000.parquet": 100})
+    siblings = [("data/chunk-000/episode_000.parquet", 140)]
+    result = _sync_status(monkeypatch, tmp_path, _fake_api(siblings=siblings))
+    assert result["needs_sync"] is True
+
+
+def test_sync_status_not_on_hub_needs_sync(tmp_path, monkeypatch) -> None:
+    _make_local(tmp_path, {"meta/info.json": 10})
+    result = _sync_status(monkeypatch, tmp_path, _fake_api(missing=True))
+    assert result == {"on_hub": False, "needs_sync": True, "local_files": 1, "hub_files": 0}
