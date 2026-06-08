@@ -1,4 +1,6 @@
-FROM node:18-alpine
+# Vite 8 requires Node ^20.19.0 or >=22.12.0; on Node 18 `npm run build` fails,
+# which is what breaks the Hugging Face Space build.
+FROM node:22-alpine
 
 # Use the existing node user (usually UID 1000)
 # Set up environment variables for the node user
