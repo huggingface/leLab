@@ -69,6 +69,18 @@ def test_unknown_route_returns_404(client: TestClient) -> None:
     assert response.status_code == 404
 
 
+@pytest.mark.parametrize("unsafe_name", ["evil..name", "..config", "back\\door"])
+def test_delete_calibration_config_rejects_unsafe_name(client: TestClient, unsafe_name: str) -> None:
+    """A config name with path-traversal characters is rejected before any
+    filesystem access — distinct from the "not found" path, so the guard is
+    proven to fire. The validator also blocks "/" and "\\"."""
+    response = client.delete(f"/calibration-configs/teleop/{unsafe_name}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert "Invalid configuration name" in body["message"]
+
+
 def _spa_mounted(client: TestClient) -> bool:
     return any(getattr(route, "name", None) == "frontend" for route in client.app.routes)
 

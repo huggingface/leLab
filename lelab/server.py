@@ -807,6 +807,13 @@ def delete_calibration_config(device_type: str, config_name: str):
         else:
             return {"success": False, "message": "Invalid device type"}
 
+        # config_name is interpolated into a filename, so reject path-traversal
+        # characters (/, \, ..) before touching the filesystem. Defense-in-depth:
+        # FastAPI path params already block a literal "/", but not "\" or "..".
+        # Reuses the same guard already applied to robot-record deletes.
+        if not is_valid_robot_name(config_name):
+            return {"success": False, "message": "Invalid configuration name"}
+
         # Construct the file path
         filename = f"{config_name}.json"
         file_path = os.path.join(config_path, filename)
