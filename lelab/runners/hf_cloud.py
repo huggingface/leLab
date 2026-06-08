@@ -47,7 +47,7 @@ LEROBOT_IMAGE = "huggingface/lerobot-gpu:latest"
 # pod, so we ignore it and pin a writable container-local path instead. The
 # wrapper reads --output_dir from the trainer argv and uploads checkpoints from
 # here to the Hub, so the lelab UI never reads this path directly.
-_CONTAINER_OUTPUT_DIR = "/tmp/lelab/train"
+_CONTAINER_OUTPUT_DIR = "/tmp/lelab/train"  # nosec B108 — fixed path inside the remote HF Jobs container, not host-local
 
 # Inlined sidecar uploader for HF Jobs. Spawns the lerobot trainer as a
 # subprocess and concurrently uploads new <output_dir>/checkpoints/<step>/
