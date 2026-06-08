@@ -474,6 +474,11 @@ def delete_dataset(request: DatasetInfoRequest):
 # ============================================================================
 
 
+class ImportModelRequest(BaseModel):
+    source: str
+    name: str | None = None
+
+
 @app.post("/jobs/training", status_code=201)
 async def create_training_job(req: Request):
     raw = await req.json()
@@ -486,6 +491,15 @@ async def create_training_job(req: Request):
         # e.g. "flavor is required when runner is hf_cloud"
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return record
+
+
+@app.post("/jobs/import", status_code=201)
+def import_model(body: ImportModelRequest):
+    """Register an external model (local dir or HF repo) as a pseudo-job."""
+    try:
+        return job_registry.register_imported(body.source, body.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/jobs")

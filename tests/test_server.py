@@ -210,3 +210,34 @@ def test_v4l2_camera_name_returns_none_when_missing() -> None:
 
     # No such sysfs node (also the case on non-Linux): graceful None, not error.
     assert server._v4l2_camera_name(999999) is None
+
+
+def test_import_model_route_returns_record(client, monkeypatch) -> None:
+    from lelab import server
+
+    fake = {
+        "id": "act_imported_x", "name": "Imported · model", "state": "done",
+        "config": {"dataset_repo_id": "(imported)", "policy_type": "act"},
+        "output_dir": "/tmp/model", "started_at": 1.0, "ended_at": 1.0,
+        "runner": "imported", "hf_repo_id": None,
+    }
+    from lelab.jobs import JobRecord
+    monkeypatch.setattr(
+        server.job_registry, "register_imported",
+        lambda source, name=None: JobRecord(**fake),
+    )
+    resp = client.post("/jobs/import", json={"source": "/tmp/model"})
+    assert resp.status_code == 201
+    assert resp.json()["runner"] == "imported"
+
+
+def test_import_model_route_maps_value_error_to_400(client, monkeypatch) -> None:
+    from lelab import server
+
+    def boom(source, name=None):
+        raise ValueError("No usable model at '/tmp/x'")
+
+    monkeypatch.setattr(server.job_registry, "register_imported", boom)
+    resp = client.post("/jobs/import", json={"source": "/tmp/x"})
+    assert resp.status_code == 400
+    assert "No usable model" in resp.json()["detail"]
