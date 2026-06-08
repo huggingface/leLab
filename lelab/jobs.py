@@ -79,7 +79,7 @@ class JobRecord(BaseModel):
     exit_code: int | None = None
     error_message: str | None = None
     metrics: TrainingMetrics = TrainingMetrics()
-    runner: Literal["local", "hf_cloud"] = "local"
+    runner: Literal["local", "hf_cloud", "imported"] = "local"
     # PID of the detached subprocess (local runner only); survives uvicorn
     # --reload so a fresh registry can re-attach by tailing the log file.
     process_pid: int | None = None
@@ -844,6 +844,64 @@ class JobRegistry:
         self._notify_change()
         return record
 
+    def register_imported(self, source: str, name: str | None = None) -> JobRecord:
+        """Register an externally-trained model as a pointer-only pseudo-job.
+
+        `source` is either an existing local directory (its path is stored in
+        output_dir) or, failing that, a Hugging Face repo id (stored in
+        hf_repo_id). The source must expose at least one checkpoint under the
+        auto-detect rules, else ValueError. Nothing is copied; delete only
+        removes the pointer."""
+        src = source.strip()
+        if not src:
+            raise ValueError("source is required")
+
+        local_path = Path(src).expanduser()
+        if local_path.is_dir():
+            resolved = str(local_path.resolve())
+            ckpts = _list_imported_local(resolved)
+            output_dir, hf_repo_id = resolved, None
+            label = local_path.name or resolved
+        else:
+            from .utils.hf_auth import shared_hf_api
+            ckpts = _list_imported_hub(shared_hf_api(), src)
+            output_dir, hf_repo_id = "", src
+            label = src
+
+        if not ckpts:
+            raise ValueError(
+                f"No usable model at {src!r}. For a local path, expected a "
+                "pretrained_model (config.json) or a checkpoints/<step>/"
+                "pretrained_model tree. For a Hugging Face repo, the repo may "
+                "not exist, be private without auth, or lack a model config."
+            )
+
+        # Best-effort policy type for the display name; inference reads the
+        # real config from the checkpoint, so a wrong guess here is harmless.
+        policy_type = "model"
+        try:
+            policy_type = str(_read_checkpoint_config(ckpts[-1]).get("type") or "model")
+        except Exception:
+            pass
+
+        job_id = _generate_job_id(policy_type, "imported")
+        record = JobRecord(
+            id=job_id,
+            name=name or f"Imported · {label}",
+            state="done",
+            config=TrainingRequest(dataset_repo_id="(imported)", policy_type=policy_type),
+            output_dir=output_dir,
+            started_at=time.time(),
+            ended_at=time.time(),
+            runner="imported",
+            hf_repo_id=hf_repo_id,
+        )
+        with self._lock:
+            self._records[job_id] = record
+            self._persist(record, force=True)
+        self._notify_change()
+        return record
+
     def stop(self, job_id: str) -> JobRecord:
         with self._lock:
             record = self._records.get(job_id)
@@ -943,21 +1001,27 @@ class JobRegistry:
         points.sort(key=lambda p: p.step)
         return points
 
+    def _checkpoints_for(self, record: JobRecord) -> builtins.list[JobCheckpoint]:
+        if record.runner == "imported":
+            if record.hf_repo_id:
+                from .utils.hf_auth import shared_hf_api
+                return _list_imported_hub(shared_hf_api(), record.hf_repo_id)
+            return _list_imported_local(record.output_dir)
+        if record.runner == "local":
+            return _list_local_checkpoints(record.output_dir)
+        return self._list_cloud_cached(record.hf_repo_id)
+
     def list_checkpoints(self, job_id: str) -> builtins.list[JobCheckpoint]:
         """Return checkpoints saved for this job, ascending by step.
 
-        Local jobs: scan <output_dir>/checkpoints/<step>/pretrained_model/
-        for valid checkpoint dirs. The 'last' symlink is ignored — we sort
-        by step and the latest is just max(step).
-        Cloud jobs: introspect the Hub model repo file tree (30s TTL cache).
-        """
+        Local jobs scan <output_dir>/checkpoints/. Cloud jobs introspect the
+        Hub repo (30s TTL cache). Imported jobs auto-detect single-model vs
+        checkpoints-tree from their local path or Hub repo id."""
         with self._lock:
             record = self._records.get(job_id)
         if record is None:
             raise JobNotFoundError(job_id)
-        if record.runner == "local":
-            return _list_local_checkpoints(record.output_dir)
-        return self._list_cloud_cached(record.hf_repo_id)
+        return self._checkpoints_for(record)
 
     def _list_cloud_cached(self, repo_id: str | None) -> builtins.list[JobCheckpoint]:
         if not repo_id:
@@ -973,9 +1037,7 @@ class JobRegistry:
         return result
 
     def _count_checkpoints(self, record: JobRecord) -> int:
-        if record.runner == "local":
-            return len(_list_local_checkpoints(record.output_dir))
-        return len(self._list_cloud_cached(record.hf_repo_id))
+        return len(self._checkpoints_for(record))
 
     def get_policy_config_summary(self, job_id: str, step: int) -> dict[str, object]:
         """Read the checkpoint's pretrained_model/config.json and return only

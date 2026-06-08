@@ -225,3 +225,50 @@ def test_read_checkpoint_config_hub_tree(monkeypatch, tmp_path) -> None:
     assert _read_checkpoint_config(ckpt) == {"type": "act"}
     assert seen["repo_id"] == "user/repo"
     assert seen["filename"] == "checkpoints/000050/pretrained_model/config.json"
+
+
+def test_register_imported_local_dir(tmp_path) -> None:
+    from lelab.jobs import JobRegistry
+
+    model = tmp_path / "model"
+    _make_pretrained(model)  # config.json at root
+    reg = JobRegistry(tmp_path / "root")
+    rec = reg.register_imported(str(model))
+
+    assert rec.runner == "imported"
+    assert rec.state == "done"
+    assert rec.output_dir == str(model.resolve())
+    assert rec.hf_repo_id is None
+    cks = reg.list_checkpoints(rec.id)
+    assert [c.step for c in cks] == [0]
+    # Persisted as a pointer job.json, reloadable.
+    reg2 = JobRegistry(tmp_path / "root")
+    assert reg2.get(rec.id).runner == "imported"
+
+
+def test_register_imported_rejects_unusable_source(tmp_path) -> None:
+    from lelab.jobs import JobRegistry
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    reg = JobRegistry(tmp_path / "root")
+    with pytest.raises(ValueError, match="No usable model"):
+        reg.register_imported(str(empty))
+
+
+def test_register_imported_hub_repo(monkeypatch, tmp_path) -> None:
+    from lelab.jobs import JobRegistry
+
+    class FakeApi:
+        def list_repo_files(self, repo_id, repo_type):
+            return ["config.json", "model.safetensors"]
+
+    monkeypatch.setattr("lelab.utils.hf_auth.shared_hf_api", lambda: FakeApi())
+    reg = JobRegistry(tmp_path / "root")
+    rec = reg.register_imported("user/some-model")
+
+    assert rec.runner == "imported"
+    assert rec.hf_repo_id == "user/some-model"
+    assert rec.output_dir == ""
+    cks = reg.list_checkpoints(rec.id)
+    assert [c.ref for c in cks] == ["user/some-model@root"]
