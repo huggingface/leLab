@@ -51,13 +51,18 @@ const JobCard: React.FC<Props> = ({ job, onStop, onDelete, onPlay }) => {
   const present = statePresentation[job.state];
   const Icon = present.Icon;
   const isRunning = job.state === "running";
+  const isImported = job.runner === "imported";
+  const importedSource = job.hf_repo_id || job.output_dir;
+  const stateLabel = isImported ? "Imported" : present.label;
   const isStarting = isRunning && job.metrics.total_steps === 0;
   const progressPct =
     job.metrics.total_steps > 0
       ? Math.min(100, (job.metrics.current_step / job.metrics.total_steps) * 100)
       : 0;
 
-  const subtitle = isStarting
+  const subtitle = isImported
+    ? importedSource
+    : isStarting
     ? "starting…"
     : isRunning
     ? `started ${relativeTime(job.started_at)}`
@@ -103,8 +108,11 @@ const JobCard: React.FC<Props> = ({ job, onStop, onDelete, onPlay }) => {
     e.stopPropagation();
     if (isRunning) {
       if (window.confirm("Stop this run?")) onStop(job.id);
-    } else {
-      if (window.confirm("Delete this run? This wipes the output directory.")) onDelete(job.id);
+    } else if (isImported) {
+      if (window.confirm("Remove this imported model? The source files are left untouched."))
+        onDelete(job.id);
+    } else if (window.confirm("Delete this run? This wipes the output directory.")) {
+      onDelete(job.id);
     }
   };
 
@@ -119,14 +127,18 @@ const JobCard: React.FC<Props> = ({ job, onStop, onDelete, onPlay }) => {
 
   return (
     <Card
-      onClick={() => navigate(`/training/${job.id}`)}
-      className="bg-slate-800/50 border-slate-700 rounded-xl cursor-pointer hover:border-slate-500 transition-colors"
+      onClick={() => {
+        if (!isImported) navigate(`/training/${job.id}`);
+      }}
+      className={`bg-slate-800/50 border-slate-700 rounded-xl transition-colors ${
+        isImported ? "" : "cursor-pointer hover:border-slate-500"
+      }`}
     >
       <CardContent className="p-4 space-y-3">
         <div className="flex items-start justify-between gap-2">
           <div className={`flex items-center gap-1.5 text-xs font-semibold ${present.color}`}>
             <Icon className={`w-3.5 h-3.5 ${isRunning ? "animate-spin" : ""}`} />
-            {present.label}
+            {stateLabel}
           </div>
           {job.runner === "hf_cloud" && job.hf_job_url ? (
             <Button
