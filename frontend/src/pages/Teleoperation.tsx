@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useCallback, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import VisualizerPanel from "@/components/control/VisualizerPanel";
 import { useToast } from "@/hooks/use-toast";
@@ -9,47 +9,61 @@ const TeleoperationPage = () => {
   const { toast } = useToast();
   const { baseUrl, fetchWithHeaders } = useApi();
 
-  const handleGoBack = async () => {
+  // Stop teleoperation exactly once, however the user leaves, so the back
+  // button, an in-app link, and the unmount safety net can't double-stop or
+  // double-toast.
+  const stoppedRef = useRef(false);
+  const stopTeleoperation = useCallback(async () => {
+    if (stoppedRef.current) return;
+    stoppedRef.current = true;
     try {
-      // Stop the teleoperation process before navigating back
-      console.log("🛑 Stopping teleoperation...");
-      const response = await fetchWithHeaders(`${baseUrl}/stop-teleoperation`, {
+      const res = await fetchWithHeaders(`${baseUrl}/stop-teleoperation`, {
         method: "POST",
       });
-
-      if (response.ok) {
-        const result = await response.json();
-        console.log("✅ Teleoperation stopped:", result.message);
+      const data = await res.json();
+      if (data?.success) {
         toast({
-          title: "Teleoperation Stopped",
-          description:
-            result.message ||
-            "Robot teleoperation has been stopped successfully.",
-        });
-      } else {
-        const errorText = await response.text();
-        console.warn(
-          "⚠️ Failed to stop teleoperation:",
-          response.status,
-          errorText
-        );
-        toast({
-          title: "Warning",
-          description: `Failed to stop teleoperation properly. Status: ${response.status}`,
-          variant: "destructive",
+          title: "Teleoperation stopped",
+          description: "The arm was disconnected cleanly.",
         });
       }
-    } catch (error) {
-      console.error("❌ Error stopping teleoperation:", error);
-      toast({
-        title: "Error",
-        description: "Failed to communicate with the robot server.",
-        variant: "destructive",
-      });
-    } finally {
-      // Navigate back regardless of the result
-      navigate("/");
+    } catch {
+      /* best-effort */
     }
+  }, [baseUrl, fetchWithHeaders, toast]);
+
+  // Cover every exit path so a session can't keep running and block the next
+  // start with "already active":
+  //   - the back button awaits stopTeleoperation() then navigates (below);
+  //   - any other in-app navigation unmounts this component → stop via cleanup;
+  //   - a browser-level leave (URL change, reload, tab close) never runs React
+  //     cleanup, so `pagehide` fires a keepalive stop that survives the unload
+  //     and stashes a flag the next page reads to confirm the clean disconnect.
+  //     It uses a bare fetch (no JSON Content-Type) so the request stays a CORS
+  //     "simple request" and isn't dropped to a preflight mid-unload.
+  useEffect(() => {
+    const handlePageHide = () => {
+      try {
+        sessionStorage.setItem("lelab:teleop-stopped", "1");
+      } catch {
+        /* sessionStorage may be unavailable; the stop below still runs */
+      }
+      fetch(`${baseUrl}/stop-teleoperation`, {
+        method: "POST",
+        keepalive: true,
+      }).catch(() => {});
+    };
+    window.addEventListener("pagehide", handlePageHide);
+
+    return () => {
+      window.removeEventListener("pagehide", handlePageHide);
+      stopTeleoperation();
+    };
+  }, [baseUrl, stopTeleoperation]);
+
+  const handleGoBack = async () => {
+    await stopTeleoperation();
+    navigate("/");
   };
 
   return (

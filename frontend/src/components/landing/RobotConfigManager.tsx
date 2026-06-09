@@ -45,7 +45,10 @@ const RobotConfigManager: React.FC<RobotConfigManagerProps> = ({
         }),
       });
       const data = await res.json();
-      if (res.ok) {
+      // The backend returns HTTP 200 with `{ success: false }` for logical
+      // failures (arm not connected, already active), so gate on `data.success`
+      // — not just `res.ok` — or we'd navigate to an empty teleop screen.
+      if (res.ok && data.success) {
         toast({
           title: "Teleoperation Started",
           description: data.message || `Started teleoperation for ${robot.name}.`,
