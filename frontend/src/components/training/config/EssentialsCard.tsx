@@ -94,7 +94,7 @@ const EssentialsCard: React.FC<EssentialsCardProps> = ({ config, updateConfig, d
                 <SelectItem value="smolvla">SmolVLA</SelectItem>
                 <SelectItem value="tdmpc">TD-MPC</SelectItem>
                 <SelectItem value="vqbet">VQ-BeT</SelectItem>
-                <SelectItem value="pi0fast">PI0 Fast</SelectItem>
+                <SelectItem value="pi0_fast">PI0 Fast</SelectItem>
                 <SelectItem value="sac">SAC</SelectItem>
                 <SelectItem value="reward_classifier">Reward Classifier</SelectItem>
               </SelectContent>
