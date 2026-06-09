@@ -1,0 +1,35 @@
+name: Lockfile registry guard
+
+# Fails fast if frontend/package-lock.json resolves packages from the internal
+# HF npm mirror (npm.registries.huggingface.tech). That mirror cannot serve the
+# full dependency set from the Space/CI Docker builders, so a lockfile pinned to
+# it hangs `npm ci` for ~8 min and then crashes ("Exit handler never called!").
+# Running `npm install` locally with a global ~/.npmrc pointing at the mirror is
+# what bakes those URLs in, so guard against it on every PR.
+
+on:
+  pull_request:
+    paths:
+      - 'frontend/package-lock.json'
+      - '.github/workflows/lockfile_registry_guard.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/package-lock.json'
+      - '.github/workflows/lockfile_registry_guard.yml'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          persist-credentials: false
+      - name: Reject internal npm mirror URLs
+        run: |
+          if grep -q 'npm.registries.huggingface.tech' frontend/package-lock.json; then
+            echo "::error file=frontend/package-lock.json::Lockfile resolves from the internal HF npm mirror, which the Space/CI Docker build cannot fetch. Repoint it to the public registry and re-commit:"
+            echo "  sed -i 's#https://npm.registries.huggingface.tech/#https://registry.npmjs.org/#g' frontend/package-lock.json"
+            exit 1
+          fi
+          echo "OK: package-lock.json resolves from the public npm registry."
