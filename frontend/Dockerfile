@@ -1,5 +1,4 @@
-# Vite 8 requires Node ^20.19.0 or >=22.12.0; on Node 18 `npm run build` fails,
-# which is what breaks the Hugging Face Space build.
+# Vite 8 requires Node ^20.19.0 or >=22.12.0.
 FROM node:22-alpine
 
 # Use the existing node user (usually UID 1000)
@@ -21,8 +20,10 @@ USER node
 # Copy package files (owned by node)
 COPY --chown=node:node package*.json ./
 
-# Install dependencies
-RUN npm install
+# Install dependencies straight from the committed lockfile. `npm ci` honours
+# the `resolved` URLs in package-lock.json and ignores the builder's configured
+# registry, so the install can't be derailed by a slow/incomplete npm mirror.
+RUN npm ci
 
 # Copy the entire viewer directory (owned by node)
 COPY --chown=node:node . .
