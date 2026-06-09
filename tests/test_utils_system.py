@@ -11,10 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Tests for lelab.utils.system — pip-extra install helpers."""
+"""Tests for lelab.utils.system — pip-extra install helpers + CUDA detection."""
 
 from __future__ import annotations
 
+import logging
 import sys
 
 
@@ -51,3 +52,78 @@ def test_install_manager_initial_state_is_idle() -> None:
     assert status["state"] == "idle"
     assert status["error"] is None
     assert isinstance(status["logs"], list)
+
+
+# --- CUDA / GPU mismatch detection (issue #30) --------------------------------
+
+
+def test_detect_cuda_status_flags_mismatch_when_gpu_but_cpu_torch(monkeypatch) -> None:
+    """GPU present + no CUDA in PyTorch should report a mismatch."""
+    from lelab.utils import system
+
+    monkeypatch.setattr(system, "_nvidia_gpu_present", lambda: True)
+    monkeypatch.setattr(system, "_torch_cuda", lambda: (False, "2.10.0+cpu"))
+
+    status = system.detect_cuda_status()
+    assert status["gpu_present"] is True
+    assert status["cuda_available"] is False
+    assert status["mismatch"] is True
+    assert status["torch_version"] == "2.10.0+cpu"
+    assert status["docs_url"].startswith("https://pytorch.org")
+
+
+def test_detect_cuda_status_no_mismatch_when_cuda_available(monkeypatch) -> None:
+    from lelab.utils import system
+
+    monkeypatch.setattr(system, "_nvidia_gpu_present", lambda: True)
+    monkeypatch.setattr(system, "_torch_cuda", lambda: (True, "2.10.0+cu124"))
+
+    assert system.detect_cuda_status()["mismatch"] is False
+
+
+def test_detect_cuda_status_no_mismatch_without_gpu(monkeypatch) -> None:
+    """No GPU (e.g. a Mac/CPU box) must not nag — CPU torch is expected there."""
+    from lelab.utils import system
+
+    monkeypatch.setattr(system, "_nvidia_gpu_present", lambda: False)
+    monkeypatch.setattr(system, "_torch_cuda", lambda: (False, "2.10.0+cpu"))
+
+    assert system.detect_cuda_status()["mismatch"] is False
+
+
+def test_nvidia_gpu_present_false_when_smi_absent(monkeypatch) -> None:
+    import shutil
+
+    from lelab.utils import system
+
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    assert system._nvidia_gpu_present() is False
+
+
+def test_warn_if_cuda_mismatch_logs_on_mismatch(monkeypatch, caplog) -> None:
+    from lelab.utils import system
+
+    monkeypatch.setattr(system, "_nvidia_gpu_present", lambda: True)
+    monkeypatch.setattr(system, "_torch_cuda", lambda: (False, "2.10.0+cpu"))
+
+    with caplog.at_level(logging.WARNING, logger="lelab.utils.system"):
+        system.warn_if_cuda_mismatch()
+    assert any("use CUDA" in rec.message for rec in caplog.records)
+
+
+def test_warn_if_cuda_mismatch_silent_when_ok(monkeypatch, caplog) -> None:
+    from lelab.utils import system
+
+    monkeypatch.setattr(system, "_nvidia_gpu_present", lambda: True)
+    monkeypatch.setattr(system, "_torch_cuda", lambda: (True, "2.10.0+cu124"))
+
+    with caplog.at_level(logging.WARNING, logger="lelab.utils.system"):
+        system.warn_if_cuda_mismatch()
+    assert caplog.records == []
+
+
+def test_cuda_status_endpoint_returns_expected_shape(client) -> None:
+    response = client.get("/system/cuda-status")
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) >= {"gpu_present", "cuda_available", "mismatch", "install_hint", "docs_url"}

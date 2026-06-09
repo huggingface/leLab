@@ -55,6 +55,15 @@ class ExtraStatus(BaseModel):
     install_hint: str
 
 
+class CudaStatus(BaseModel):
+    gpu_present: bool
+    cuda_available: bool
+    mismatch: bool
+    torch_version: str | None = None
+    install_hint: str
+    docs_url: str
+
+
 class InstallStartResponse(BaseModel):
     started: bool
     message: str
@@ -175,3 +184,85 @@ def handle_install_wandb_extra() -> dict[str, Any]:
 
 def handle_install_wandb_extra_status() -> dict[str, Any]:
     return wandb_install_manager.get_status()
+
+
+# Detect the common Windows/LeLab mismatch where an NVIDIA GPU is visible to the
+# OS, but the active PyTorch build cannot use CUDA. Do not auto-install torch.
+
+CUDA_TORCH_DOCS_URL = "https://pytorch.org/get-started/locally/"
+CUDA_TORCH_INSTALL_HINT = (
+    "To use the GPU, install a CUDA build of PyTorch. Pick your CUDA version at "
+    f"{CUDA_TORCH_DOCS_URL} "
+    "(for example: pip install torch --index-url https://download.pytorch.org/whl/cu124), "
+    "then restart LeLab."
+)
+
+
+def _nvidia_gpu_present() -> bool:
+    """True if an NVIDIA GPU is visible to the OS (``nvidia-smi -L`` lists one).
+
+    Dependency-free and cheap: requires nvidia-smi on PATH, then confirms it
+    actually reports a GPU. Any failure (no driver, no GPU, timeout) → False.
+    """
+    if not shutil.which("nvidia-smi"):
+        return False
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "-L"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and result.stdout.strip().startswith("GPU")
+
+
+def _torch_cuda() -> tuple[bool, str | None]:
+    """Return (cuda_available, torch_version). Missing/broken torch → (False, None)."""
+    try:
+        import torch
+    except Exception:  # torch absent or import error — treat as no CUDA
+        logger.debug("torch import failed during CUDA check", exc_info=True)
+        return False, None
+    try:
+        return bool(torch.cuda.is_available()), torch.__version__
+    except Exception:
+        logger.debug("torch.cuda.is_available() raised", exc_info=True)
+        return False, getattr(torch, "__version__", None)
+
+
+def detect_cuda_status() -> dict[str, Any]:
+    """Detect the 'NVIDIA GPU present but PyTorch is CPU-only' mismatch (issue #30)."""
+    gpu_present = _nvidia_gpu_present()
+    cuda_available, torch_version = _torch_cuda()
+    return {
+        "gpu_present": gpu_present,
+        "cuda_available": cuda_available,
+        "mismatch": gpu_present and not cuda_available,
+        "torch_version": torch_version,
+        "install_hint": CUDA_TORCH_INSTALL_HINT,
+        "docs_url": CUDA_TORCH_DOCS_URL,
+    }
+
+
+def handle_get_cuda_status() -> dict[str, Any]:
+    return detect_cuda_status()
+
+
+def warn_if_cuda_mismatch() -> None:
+    """Log a prominent warning when a GPU is present but torch is CPU-only.
+
+    Called at server startup so the user sees actionable guidance in the same
+    terminal where LeRobot's easily-missed 'Switching to cpu' line appears.
+    """
+    status = detect_cuda_status()
+    if not status["mismatch"]:
+        return
+    logger.warning(
+        "⚠️  NVIDIA GPU detected but PyTorch can't use CUDA (torch=%s). "
+        "Training and inference will run on CPU and may be much slower. %s",
+        status["torch_version"],
+        status["install_hint"],
+    )

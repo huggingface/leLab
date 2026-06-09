@@ -99,12 +99,14 @@ from .utils.config import (
 )
 from .utils.hf_auth import cached_whoami, handle_hf_auth_status, handle_hf_login, shared_hf_api
 from .utils.system import (
+    handle_get_cuda_status,
     handle_get_training_extra,
     handle_get_wandb_extra,
     handle_install_training_extra,
     handle_install_training_extra_status,
     handle_install_wandb_extra,
     handle_install_wandb_extra_status,
+    warn_if_cuda_mismatch,
 )
 
 # Set up logging
@@ -691,6 +693,12 @@ def get_runners_hardware():
 # ============================================================================
 
 
+@app.get("/system/cuda-status")
+def get_cuda_status():
+    """Report whether an NVIDIA GPU is present but PyTorch is CPU-only (issue #30)."""
+    return handle_get_cuda_status()
+
+
 @app.get("/system/training-extra")
 def get_training_extra():
     """Return whether the LeRobot training extra (accelerate) is importable."""
@@ -1158,6 +1166,12 @@ def delete_robot(name: str):
     if delete_robot_record(name):
         return {"status": "success"}
     return JSONResponse(status_code=404, content={"status": "error", "message": "Robot not found"})
+
+
+@app.on_event("startup")
+def startup_event():
+    """One-time startup diagnostics surfaced in the server terminal."""
+    warn_if_cuda_mismatch()
 
 
 @app.on_event("shutdown")
