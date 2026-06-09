@@ -1,5 +1,8 @@
 name: Lockfile registry guard
 
+permissions:
+  contents: read
+
 # Fails fast if frontend/package-lock.json resolves packages from the internal
 # HF npm mirror (npm.registries.huggingface.tech). That mirror cannot serve the
 # full dependency set from the Space/CI Docker builders, so a lockfile pinned to
