@@ -9,9 +9,17 @@ interface ApiContextType {
 const ApiContext = createContext<ApiContextType | undefined>(undefined);
 
 const STORAGE_KEY = "lelab.apiBaseUrl";
-const DEFAULT_LOCALHOST = "http://localhost:8000";
+const DEFAULT_LOCALHOST =
+  import.meta.env.VITE_LELAB_API_BASE_URL || "http://127.0.0.1:8000";
 
 const httpToWs = (url: string): string => url.replace(/^http(s?):/, "ws$1:");
+
+const LEGACY_LOCALHOST = new Set([
+  "http://localhost:8001",
+  "http://127.0.0.1:8001",
+  "http://localhost:8000",
+  "http://127.0.0.1:8000",
+]);
 
 const resolveInitialBaseUrl = (): string => {
   if (typeof window === "undefined") return DEFAULT_LOCALHOST;
@@ -28,7 +36,10 @@ const resolveInitialBaseUrl = (): string => {
     }
   }
 
-  return window.localStorage.getItem(STORAGE_KEY) || DEFAULT_LOCALHOST;
+  const stored = window.localStorage.getItem(STORAGE_KEY);
+  if (stored && !LEGACY_LOCALHOST.has(stored)) return stored;
+  if (stored) window.localStorage.setItem(STORAGE_KEY, DEFAULT_LOCALHOST);
+  return DEFAULT_LOCALHOST;
 };
 
 export const ApiProvider: React.FC<{ children: ReactNode }> = ({

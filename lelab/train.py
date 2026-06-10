@@ -65,7 +65,7 @@ class TrainingRequest(BaseModel):
     env_type: str | None = None
     env_task: str | None = None
     eval_n_episodes: int = 10
-    eval_batch_size: int = 50
+    eval_batch_size: int = 10
     eval_use_async_envs: bool = False
 
     # Policy-specific

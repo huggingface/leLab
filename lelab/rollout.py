@@ -122,6 +122,11 @@ def _resolve_policy_path(policy_ref: str) -> str:
     snapshot_download and its root is returned directly."""
     if Path(policy_ref).is_dir():
         return policy_ref
+    from .jobs import resolve_external_checkpoint_path
+
+    external_path = resolve_external_checkpoint_path(policy_ref)
+    if external_path is not None:
+        return external_path
     from huggingface_hub import snapshot_download
 
     m = _HUB_REF_RE.match(policy_ref)

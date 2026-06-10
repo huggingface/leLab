@@ -1,5 +1,7 @@
+import { RunnerTarget } from "@/lib/jobsApi";
+
 export interface TrainingConfig {
-  target: { runner: "local" | "hf_cloud"; flavor?: string };
+  target: RunnerTarget;
 
   // Dataset configuration
   dataset_repo_id: string;

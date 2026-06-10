@@ -28,7 +28,10 @@ import {
   stopJob,
   deleteJob,
   listRunnerHardware,
+  getSeeedCloudConfig,
+  saveSeeedCloudConfig,
   RunnerFlavor,
+  RunnerProvider,
 } from "@/lib/jobsApi";
 import { JobCheckpoint, listJobCheckpoints } from "@/lib/checkpointsApi";
 import CheckpointDropdown from "@/components/jobs/CheckpointDropdown";
@@ -133,7 +136,10 @@ const ConfigurationMode: React.FC = () => {
   const [isStarting, setIsStarting] = useState(false);
   const [authenticated, setAuthenticated] = useState<boolean>(false);
   const [flavors, setFlavors] = useState<RunnerFlavor[]>([]);
+  const [providers, setProviders] = useState<RunnerProvider[]>([]);
   const [hardwareLoading, setHardwareLoading] = useState(true);
+  const [seeedConnectUrl, setSeeedConnectUrl] = useState("https://sensecraft-gpu.seeed.cc/lelab/connect");
+  const [seeedConnecting, setSeeedConnecting] = useState(false);
 
   useEffect(() => {
     setDatasetsLoading(true);
@@ -173,14 +179,25 @@ const ConfigurationMode: React.FC = () => {
     listRunnerHardware(baseUrl, fetchWithHeaders)
       .then((data) => {
         setAuthenticated(data.authenticated);
-        setFlavors(data.flavors);
+        setFlavors(data.flavors ?? []);
+        setProviders(data.providers ?? []);
       })
       .catch(() => {
         setAuthenticated(false);
         setFlavors([]);
+        setProviders([]);
       })
       .finally(() => setHardwareLoading(false));
   }, [baseUrl, fetchWithHeaders, auth.status]);
+
+  useEffect(() => {
+    getSeeedCloudConfig(baseUrl, fetchWithHeaders)
+      .then((cfg) => {
+        const webUrl = cfg.web_url || "https://sensecraft-gpu.seeed.cc";
+        setSeeedConnectUrl(`${webUrl.replace(/\/$/, "")}/lelab/connect`);
+      })
+      .catch(() => setSeeedConnectUrl("https://sensecraft-gpu.seeed.cc/lelab/connect"));
+  }, [baseUrl, fetchWithHeaders]);
 
   const updateConfig = <T extends keyof TrainingConfig>(key: T, value: TrainingConfig[T]) => {
     setTrainingConfig((prev) => ({ ...prev, [key]: value }));
@@ -212,6 +229,67 @@ const ConfigurationMode: React.FC = () => {
     }
   };
 
+  const handleConnectSeeedCloud = () => {
+    setSeeedConnecting(true);
+    const popup = window.open(seeedConnectUrl, "lelab-seeed-cloud", "width=520,height=720");
+    if (!popup) {
+      setSeeedConnecting(false);
+      toast({
+        title: "Seeed Cloud",
+        description: "Browser blocked the connection window.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      window.removeEventListener("message", onMessage);
+      setSeeedConnecting(false);
+    }, 120000);
+
+    const finish = async (token: string, apiUrl?: string, webUrl?: string) => {
+      try {
+        await saveSeeedCloudConfig(baseUrl, fetchWithHeaders, {
+          token,
+          api_url: apiUrl,
+          web_url: webUrl,
+        });
+        const hardware = await listRunnerHardware(baseUrl, fetchWithHeaders);
+        setAuthenticated(hardware.authenticated);
+        setFlavors(hardware.flavors ?? []);
+        setProviders(hardware.providers ?? []);
+        toast({ title: "Seeed Cloud connected", description: "GPU flavors are available now." });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        toast({ title: "Seeed Cloud", description: msg, variant: "destructive" });
+      } finally {
+        window.clearTimeout(timeout);
+        window.removeEventListener("message", onMessage);
+        setSeeedConnecting(false);
+        popup.close();
+      }
+    };
+
+    function onMessage(event: MessageEvent) {
+      const expectedOrigin = new URL(seeedConnectUrl).origin;
+      if (event.origin !== expectedOrigin) {
+        return;
+      }
+      const data = event.data as {
+        type?: string;
+        token?: string;
+        apiUrl?: string;
+        webUrl?: string;
+      };
+      if (data?.type !== "seeed-cloud-token" || !data.token) {
+        return;
+      }
+      finish(data.token, data.apiUrl, data.webUrl);
+    }
+
+    window.addEventListener("message", onMessage);
+  };
+
   if (trainingExtraAvailable === null) {
     return (
       <div className="min-h-screen bg-slate-900 text-white p-4">
@@ -239,7 +317,10 @@ const ConfigurationMode: React.FC = () => {
 
   const targetRequiresAuth = trainingConfig.target.runner === "hf_cloud";
   const targetMissingFlavor =
-    trainingConfig.target.runner === "hf_cloud" && !trainingConfig.target.flavor;
+    (trainingConfig.target.runner === "hf_cloud" ||
+      trainingConfig.target.runner === "seeed_cloud" ||
+      trainingConfig.target.runner === "external") &&
+    !trainingConfig.target.flavor;
   const localBlocked =
     trainingConfig.target.runner === "local" && localJobRunning;
   const startDisabled =
@@ -268,7 +349,10 @@ const ConfigurationMode: React.FC = () => {
           datasetsLoading={datasetsLoading}
           authenticated={authenticated}
           flavors={flavors}
+          providers={providers}
           hardwareLoading={hardwareLoading}
+          seeedConnecting={seeedConnecting}
+          onConnectSeeedCloud={handleConnectSeeedCloud}
         />
         <div className="max-w-3xl mx-auto mt-6 flex justify-end">
           {(() => {
@@ -512,6 +596,11 @@ const MonitoringMode: React.FC<{ jobId: string }> = ({ jobId }) => {
                   <span className="text-xs px-2 py-0.5 rounded bg-amber-900/40 text-amber-200 border border-amber-700">
                     HF · {job.hf_flavor ?? "cloud"}
                   </span>
+                ) : job.runner === "seeed_cloud" || job.runner === "external" ? (
+                  <span className="text-xs px-2 py-0.5 rounded bg-emerald-900/40 text-emerald-200 border border-emerald-700">
+                    {job.runner === "seeed_cloud" ? "Seeed" : job.external_provider ?? "External"} ·{" "}
+                    {job.external_flavor ?? "GPU"}
+                  </span>
                 ) : (
                   <span className="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-200 border border-slate-600">
                     Local
@@ -525,6 +614,16 @@ const MonitoringMode: React.FC<{ jobId: string }> = ({ jobId }) => {
                     className="text-xs text-amber-300 hover:text-amber-200 underline"
                   >
                     View on Hub ↗
+                  </a>
+                )}
+                {(job.runner === "seeed_cloud" || job.runner === "external") && job.external_job_url && (
+                  <a
+                    href={job.external_job_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs text-emerald-300 hover:text-emerald-200 underline"
+                  >
+                    View provider job ↗
                   </a>
                 )}
                 {job.wandb_run_url && (

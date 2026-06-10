@@ -37,6 +37,17 @@ def test_minimal_request_yields_well_formed_argv() -> None:
     assert _arg_value(cmd, "--output_dir") == "/tmp/out"
 
 
+def test_minimal_request_eval_defaults_are_valid_for_lerobot() -> None:
+    from lelab.train import TrainingRequest, build_training_command
+
+    req = TrainingRequest(dataset_repo_id="lerobot/pusht")
+    cmd = build_training_command(req, output_dir="/tmp/out")
+
+    eval_n_episodes = int(_arg_value(cmd, "--eval.n_episodes"))
+    eval_batch_size = int(_arg_value(cmd, "--eval.batch_size"))
+    assert eval_batch_size <= eval_n_episodes
+
+
 def test_optional_dataset_fields_only_present_when_set() -> None:
     from lelab.train import TrainingRequest, build_training_command
 

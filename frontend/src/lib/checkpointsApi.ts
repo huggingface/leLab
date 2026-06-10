@@ -2,7 +2,7 @@ import { Fetcher, apiRequest } from "./apiClient";
 
 export interface JobCheckpoint {
   step: number;
-  source: "local" | "hub";
+  source: "local" | "hub" | "external";
   ref: string;
 }
 

@@ -26,6 +26,7 @@ const EssentialsCard: React.FC<EssentialsCardProps> = ({ config, updateConfig, d
   const { baseUrl, fetchWithHeaders } = useApi();
   const [wandbDialogOpen, setWandbDialogOpen] = useState(false);
   const [wandbInstallHint, setWandbInstallHint] = useState('pip install wandb');
+  const isExternalTarget = config.target.runner === 'seeed_cloud' || config.target.runner === 'external';
 
   const handleWandbToggle = async (checked: boolean) => {
     if (!checked) {
@@ -71,7 +72,9 @@ const EssentialsCard: React.FC<EssentialsCardProps> = ({ config, updateConfig, d
             />
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            HuggingFace Hub dataset repository ID
+            {isExternalTarget
+              ? 'LeLab dataset repository ID; Seeed Cloud also accepts an archive URL or SEEED_CLOUD_DATASET_URL override'
+              : 'HuggingFace Hub dataset repository ID'}
           </p>
         </div>
 
