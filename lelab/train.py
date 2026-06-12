@@ -20,9 +20,26 @@ lives in app/jobs.py.
 
 import re
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator, model_validator
 
 _SLUG_RE = re.compile(r"[^a-zA-Z0-9._-]+")
+
+OFFLINE_TRAINING_POLICY_TYPES = (
+    "act",
+    "diffusion",
+    "pi0",
+    "pi05",
+    "pi0_fast",
+    "smolvla",
+    "vqbet",
+)
+_OFFLINE_TRAINING_POLICY_TYPE_SET = set(OFFLINE_TRAINING_POLICY_TYPES)
+_POLICY_OPTION_SUPPORT = {
+    "policy_dtype": {"pi0", "pi05", "pi0_fast"},
+    "policy_gradient_checkpointing": {"pi0", "pi05", "pi0_fast"},
+    "policy_freeze_vision_encoder": {"pi0", "pi05", "smolvla"},
+    "policy_train_expert_only": {"pi0", "pi05", "smolvla"},
+}
 
 
 class TrainingRequest(BaseModel):
@@ -34,6 +51,17 @@ class TrainingRequest(BaseModel):
 
     # Policy configuration
     policy_type: str = "act"
+
+    @field_validator("policy_type")
+    @classmethod
+    def _validate_policy_type(cls, value: str) -> str:
+        if value not in _OFFLINE_TRAINING_POLICY_TYPE_SET:
+            supported = ", ".join(OFFLINE_TRAINING_POLICY_TYPES)
+            raise ValueError(
+                f"policy_type {value!r} is not supported by this offline training flow; "
+                f"supported policies: {supported}"
+            )
+        return value
 
     # Core training parameters
     steps: int = 10000
@@ -71,6 +99,10 @@ class TrainingRequest(BaseModel):
     # Policy-specific
     policy_device: str | None = "cuda"
     policy_use_amp: bool = False
+    policy_dtype: str | None = None
+    policy_gradient_checkpointing: bool | None = None
+    policy_freeze_vision_encoder: bool | None = None
+    policy_train_expert_only: bool | None = None
     # Hub upload (set by HfCloudJobRunner; not exposed in the form)
     policy_push_to_hub: bool = False
     policy_repo_id: str | None = None
@@ -84,6 +116,19 @@ class TrainingRequest(BaseModel):
     # Advanced
     use_policy_training_preset: bool = True
     config_path: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_policy_specific_options(self) -> "TrainingRequest":
+        for field_name, supported_policies in _POLICY_OPTION_SUPPORT.items():
+            if getattr(self, field_name) is None:
+                continue
+            if self.policy_type not in supported_policies:
+                supported = ", ".join(sorted(supported_policies))
+                raise ValueError(
+                    f"policy_type {self.policy_type!r} does not support {field_name}; "
+                    f"supported policies: {supported}"
+                )
+        return self
 
 
 def build_training_command(
@@ -126,6 +171,29 @@ def build_training_command(
     if request.policy_device:
         cmd.extend(["--policy.device", request.policy_device])
     cmd.extend(["--policy.use_amp", "true" if request.policy_use_amp else "false"])
+    if request.policy_dtype:
+        cmd.extend(["--policy.dtype", request.policy_dtype])
+    if request.policy_gradient_checkpointing is not None:
+        cmd.extend(
+            [
+                "--policy.gradient_checkpointing",
+                "true" if request.policy_gradient_checkpointing else "false",
+            ]
+        )
+    if request.policy_freeze_vision_encoder is not None:
+        cmd.extend(
+            [
+                "--policy.freeze_vision_encoder",
+                "true" if request.policy_freeze_vision_encoder else "false",
+            ]
+        )
+    if request.policy_train_expert_only is not None:
+        cmd.extend(
+            [
+                "--policy.train_expert_only",
+                "true" if request.policy_train_expert_only else "false",
+            ]
+        )
     # LeRobot defaults push_to_hub=True and demands --policy.repo_id when so.
     # Local jobs keep it off; HF Cloud jobs flip it on via the runner.
     cmd.extend(["--policy.push_to_hub", "true" if request.policy_push_to_hub else "false"])

@@ -61,6 +61,7 @@ yarn-error.log*
 
 # Local dev / tool state
 .claude/
+.dev/
 .playwright-mcp/
 .superpowers/
 .worktrees/

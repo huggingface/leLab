@@ -5,6 +5,10 @@ import { useApi } from "@/contexts/ApiContext";
 import { useHfAuth } from "@/contexts/HfAuthContext";
 
 import { TrainingConfig, TrainingStatus, LogEntry } from "@/components/training/types";
+import {
+  defaultsForPolicy,
+  policyAdvancedCapabilities,
+} from "@/components/training/trainingPolicies";
 import TrainingHeader from "@/components/training/TrainingHeader";
 import ConfigurationTab from "@/components/training/ConfigurationTab";
 import MonitoringStats from "@/components/training/monitoring/MonitoringStats";
@@ -70,6 +74,7 @@ function jobToStatus(job: JobRecord | null, isStarting: boolean): TrainingStatus
 function configToRequest(c: TrainingConfig): TrainingRequest {
   // The backend's TrainingRequest has more optional fields; the form covers
   // the user-meaningful subset.
+  const policyCapabilities = policyAdvancedCapabilities(c.policy_type);
   return {
     target: c.target,
     dataset_repo_id: c.dataset_repo_id,
@@ -90,6 +95,16 @@ function configToRequest(c: TrainingConfig): TrainingRequest {
     wandb_disable_artifact: c.wandb_disable_artifact,
     policy_device: c.policy_device,
     policy_use_amp: c.policy_use_amp,
+    policy_dtype: policyCapabilities.dtype ? c.policy_dtype : undefined,
+    policy_gradient_checkpointing: policyCapabilities.gradientCheckpointing
+      ? c.policy_gradient_checkpointing
+      : undefined,
+    policy_freeze_vision_encoder: policyCapabilities.freezeVisionEncoder
+      ? c.policy_freeze_vision_encoder
+      : undefined,
+    policy_train_expert_only: policyCapabilities.trainExpertOnly
+      ? c.policy_train_expert_only
+      : undefined,
     optimizer_type: c.optimizer_type,
     optimizer_lr: c.optimizer_lr,
     optimizer_weight_decay: c.optimizer_weight_decay,
@@ -124,6 +139,10 @@ const ConfigurationMode: React.FC = () => {
     wandb_disable_artifact: false,
     policy_device: "cuda",
     policy_use_amp: false,
+    policy_dtype: undefined,
+    policy_gradient_checkpointing: undefined,
+    policy_freeze_vision_encoder: undefined,
+    policy_train_expert_only: undefined,
     optimizer_type: "adam",
     use_policy_training_preset: true,
   });
@@ -200,7 +219,13 @@ const ConfigurationMode: React.FC = () => {
   }, [baseUrl, fetchWithHeaders]);
 
   const updateConfig = <T extends keyof TrainingConfig>(key: T, value: TrainingConfig[T]) => {
-    setTrainingConfig((prev) => ({ ...prev, [key]: value }));
+    setTrainingConfig((prev) => {
+      const next = { ...prev, [key]: value };
+      if (key === "policy_type" && typeof value === "string") {
+        return { ...next, ...defaultsForPolicy(value, prev) };
+      }
+      return next;
+    });
   };
 
   const handleStart = async () => {

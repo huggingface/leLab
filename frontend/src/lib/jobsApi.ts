@@ -49,6 +49,10 @@ export interface TrainingRequest {
   wandb_disable_artifact: boolean;
   policy_device?: string;
   policy_use_amp: boolean;
+  policy_dtype?: string;
+  policy_gradient_checkpointing?: boolean;
+  policy_freeze_vision_encoder?: boolean;
+  policy_train_expert_only?: boolean;
   optimizer_type?: string;
   optimizer_lr?: number;
   optimizer_weight_decay?: number;

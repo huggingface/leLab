@@ -16,6 +16,7 @@ import DatasetCombobox from '@/components/replay/DatasetCombobox';
 import { DatasetItem } from '@/lib/replayApi';
 import WandbInstallDialog from '../WandbInstallDialog';
 import { useApi } from '@/contexts/ApiContext';
+import { OFFLINE_TRAINING_POLICY_OPTIONS } from '../trainingPolicies';
 
 interface EssentialsCardProps extends ConfigComponentProps {
   datasets: DatasetItem[];
@@ -91,15 +92,11 @@ const EssentialsCard: React.FC<EssentialsCardProps> = ({ config, updateConfig, d
                 <SelectValue />
               </SelectTrigger>
               <SelectContent className="bg-slate-800 border-slate-600 text-white">
-                <SelectItem value="act">ACT (Action Chunking Transformer)</SelectItem>
-                <SelectItem value="diffusion">Diffusion Policy</SelectItem>
-                <SelectItem value="pi0">PI0</SelectItem>
-                <SelectItem value="smolvla">SmolVLA</SelectItem>
-                <SelectItem value="tdmpc">TD-MPC</SelectItem>
-                <SelectItem value="vqbet">VQ-BeT</SelectItem>
-                <SelectItem value="pi0_fast">PI0 Fast</SelectItem>
-                <SelectItem value="sac">SAC</SelectItem>
-                <SelectItem value="reward_classifier">Reward Classifier</SelectItem>
+                {OFFLINE_TRAINING_POLICY_OPTIONS.map((policy) => (
+                  <SelectItem key={policy.value} value={policy.value}>
+                    {policy.label}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>

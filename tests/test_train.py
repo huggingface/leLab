@@ -124,6 +124,25 @@ def test_seed_omitted_when_none() -> None:
     assert _arg_value(cmd2, "--seed") == "42"
 
 
+def test_pi0_memory_options_are_forwarded() -> None:
+    from lelab.train import TrainingRequest, build_training_command
+
+    req = TrainingRequest(
+        dataset_repo_id="x",
+        policy_type="pi0",
+        policy_dtype="bfloat16",
+        policy_gradient_checkpointing=True,
+        policy_freeze_vision_encoder=True,
+        policy_train_expert_only=True,
+    )
+    cmd = build_training_command(req, "/tmp/out")
+
+    assert _arg_value(cmd, "--policy.dtype") == "bfloat16"
+    assert _arg_value(cmd, "--policy.gradient_checkpointing") == "true"
+    assert _arg_value(cmd, "--policy.freeze_vision_encoder") == "true"
+    assert _arg_value(cmd, "--policy.train_expert_only") == "true"
+
+
 def test_training_request_validates_required_field() -> None:
     from pydantic import ValidationError
 
@@ -131,3 +150,51 @@ def test_training_request_validates_required_field() -> None:
 
     with pytest.raises(ValidationError):
         TrainingRequest()  # dataset_repo_id is required
+
+
+def test_training_request_accepts_offline_training_policies() -> None:
+    from lelab.train import OFFLINE_TRAINING_POLICY_TYPES, TrainingRequest
+
+    assert OFFLINE_TRAINING_POLICY_TYPES == (
+        "act",
+        "diffusion",
+        "pi0",
+        "pi05",
+        "pi0_fast",
+        "smolvla",
+        "vqbet",
+    )
+    for policy_type in OFFLINE_TRAINING_POLICY_TYPES:
+        req = TrainingRequest(dataset_repo_id="x", policy_type=policy_type)
+        assert req.policy_type == policy_type
+
+
+def test_training_request_rejects_non_offline_training_policies() -> None:
+    from pydantic import ValidationError
+
+    from lelab.train import TrainingRequest
+
+    for policy_type in ("tdmpc", "sac", "reward_classifier"):
+        with pytest.raises(ValidationError, match="not supported by this offline training flow"):
+            TrainingRequest(dataset_repo_id="x", policy_type=policy_type)
+
+
+def test_training_request_rejects_policy_options_that_policy_does_not_support() -> None:
+    from pydantic import ValidationError
+
+    from lelab.train import TrainingRequest
+
+    TrainingRequest(dataset_repo_id="x", policy_type="smolvla", policy_freeze_vision_encoder=True)
+    TrainingRequest(dataset_repo_id="x", policy_type="smolvla", policy_train_expert_only=True)
+    TrainingRequest(dataset_repo_id="x", policy_type="pi0_fast", policy_dtype="bfloat16")
+    TrainingRequest(dataset_repo_id="x", policy_type="pi0_fast", policy_gradient_checkpointing=True)
+
+    for kwargs in (
+        {"policy_type": "smolvla", "policy_dtype": "bfloat16"},
+        {"policy_type": "smolvla", "policy_gradient_checkpointing": True},
+        {"policy_type": "pi0_fast", "policy_freeze_vision_encoder": True},
+        {"policy_type": "pi0_fast", "policy_train_expert_only": True},
+        {"policy_type": "act", "policy_dtype": "bfloat16"},
+    ):
+        with pytest.raises(ValidationError, match="does not support"):
+            TrainingRequest(dataset_repo_id="x", **kwargs)

@@ -14,6 +14,7 @@ import {
 import { Separator } from '@/components/ui/separator';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { ConfigComponentProps } from '../types';
+import { policyAdvancedCapabilities } from '../trainingPolicies';
 
 const SectionHeading: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
@@ -23,6 +24,7 @@ const SectionHeading: React.FC<{ children: React.ReactNode }> = ({ children }) =
 
 const AdvancedCard: React.FC<ConfigComponentProps> = ({ config, updateConfig }) => {
   const [expanded, setExpanded] = useState(false);
+  const policyCapabilities = policyAdvancedCapabilities(config.policy_type);
 
   return (
     <Card className="bg-slate-800/50 border-slate-700 rounded-xl">
@@ -84,6 +86,70 @@ const AdvancedCard: React.FC<ConfigComponentProps> = ({ config, updateConfig }) 
                   Use Automatic Mixed Precision
                 </Label>
               </div>
+              {policyCapabilities.dtype && (
+                <div>
+                  <Label htmlFor="policy_dtype" className="text-slate-300">
+                    Policy dtype
+                  </Label>
+                  <Select
+                    value={config.policy_dtype || 'default'}
+                    onValueChange={(value) =>
+                      updateConfig('policy_dtype', value === 'default' ? undefined : value)
+                    }
+                  >
+                    <SelectTrigger id="policy_dtype" className="bg-slate-900 border-slate-600 text-white rounded-lg">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-slate-800 border-slate-600 text-white">
+                      <SelectItem value="default">Policy default</SelectItem>
+                      <SelectItem value="bfloat16">bfloat16</SelectItem>
+                      <SelectItem value="float32">float32</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              {policyCapabilities.gradientCheckpointing && (
+                <div className="flex items-center space-x-3 pt-6">
+                  <Switch
+                    id="policy_gradient_checkpointing"
+                    checked={Boolean(config.policy_gradient_checkpointing)}
+                    onCheckedChange={(checked) =>
+                      updateConfig('policy_gradient_checkpointing', checked)
+                    }
+                  />
+                  <Label htmlFor="policy_gradient_checkpointing" className="text-slate-300">
+                    Gradient checkpointing
+                  </Label>
+                </div>
+              )}
+              {policyCapabilities.freezeVisionEncoder && (
+                <div className="flex items-center space-x-3 pt-6">
+                  <Switch
+                    id="policy_freeze_vision_encoder"
+                    checked={Boolean(config.policy_freeze_vision_encoder)}
+                    onCheckedChange={(checked) =>
+                      updateConfig('policy_freeze_vision_encoder', checked)
+                    }
+                  />
+                  <Label htmlFor="policy_freeze_vision_encoder" className="text-slate-300">
+                    Freeze vision encoder
+                  </Label>
+                </div>
+              )}
+              {policyCapabilities.trainExpertOnly && (
+                <div className="flex items-center space-x-3 pt-6">
+                  <Switch
+                    id="policy_train_expert_only"
+                    checked={Boolean(config.policy_train_expert_only)}
+                    onCheckedChange={(checked) =>
+                      updateConfig('policy_train_expert_only', checked)
+                    }
+                  />
+                  <Label htmlFor="policy_train_expert_only" className="text-slate-300">
+                    Train expert only
+                  </Label>
+                </div>
+              )}
             </div>
           </section>
 
