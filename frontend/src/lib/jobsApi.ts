@@ -246,21 +246,49 @@ export interface RunnerFlavor {
   pretty_name: string;
   cpu: string;
   ram: string;
-  accelerator: string | null;
+  accelerator:
+    | string
+    | {
+        type?: string;
+        model?: string;
+        quantity?: string | number;
+        vram?: string;
+        manufacturer?: string;
+      }
+    | null;
   unit_cost_usd: number;
   unit_label: string;
+  provider?: string;
+  provider_label?: string;
+}
+
+export interface RunnerProvider {
+  id: string;
+  display_name: string;
+  authenticated: boolean;
+  flavors: RunnerFlavor[];
 }
 
 export interface RunnerHardwareResponse {
   authenticated: boolean;
   username: string | null;
   flavors: RunnerFlavor[];
+  providers: RunnerProvider[];
+}
+
+export interface SeeedCloudConfig {
+  configured: boolean;
+  authenticated: boolean;
+  auth_error: string | null;
+  api_url: string;
+  web_url: string;
 }
 
 const EMPTY_HARDWARE: RunnerHardwareResponse = {
   authenticated: false,
   username: null,
   flavors: [],
+  providers: [],
 };
 
 export async function listRunnerHardware(
@@ -271,16 +299,57 @@ export async function listRunnerHardware(
   // Backend returns 401/403 for unauthenticated users; surface as "no flavors"
   // rather than throwing so the UI can render the "log in to use cloud" hint.
   try {
-    return await apiRequest<RunnerHardwareResponse>(
+    const data = await apiRequest<RunnerHardwareResponse>(
       baseUrl,
       fetcher,
       "/jobs/runners/hardware",
       { signal, action: "List runner hardware" },
     );
+    return {
+      authenticated: Boolean(data.authenticated),
+      username: data.username ?? null,
+      flavors: Array.isArray(data.flavors) ? data.flavors : [],
+      providers: Array.isArray(data.providers)
+        ? data.providers.map((provider) => ({
+            ...provider,
+            flavors: Array.isArray(provider.flavors) ? provider.flavors : [],
+          }))
+        : [],
+    };
   } catch (e) {
     if (e instanceof ApiError) return EMPTY_HARDWARE;
     throw e;
   }
+}
+
+export async function getSeeedCloudConfig(
+  baseUrl: string,
+  fetcher: Fetcher,
+  signal?: AbortSignal,
+): Promise<SeeedCloudConfig> {
+  return apiRequest<SeeedCloudConfig>(
+    baseUrl,
+    fetcher,
+    "/compute/seeed-cloud/config",
+    { signal, action: "Get Seeed Cloud config" },
+  );
+}
+
+export async function saveSeeedCloudConfig(
+  baseUrl: string,
+  fetcher: Fetcher,
+  payload: { token: string; api_url?: string; web_url?: string },
+): Promise<SeeedCloudConfig> {
+  return apiRequest<SeeedCloudConfig>(
+    baseUrl,
+    fetcher,
+    "/compute/seeed-cloud/config",
+    {
+      method: "POST",
+      body: payload,
+      action: "Save Seeed Cloud config",
+    },
+  );
 }
 
 export interface HubJob {
@@ -292,7 +361,7 @@ export interface HubJob {
   status: { stage: string; message: string | null } | null;
   owner: string | null;
   url: string;
-  provider: string;
+  provider?: "hf_cloud" | "seeed_cloud";
 }
 
 export interface HubModel {

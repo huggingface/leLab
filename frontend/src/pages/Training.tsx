@@ -340,7 +340,14 @@ const ConfigurationMode: React.FC = () => {
     );
   }
 
-  const targetRequiresAuth = trainingConfig.target.runner === "hf_cloud";
+  const seeedAuthenticated = Boolean(
+    providers.find((provider) => provider.id === "seeed_cloud")?.authenticated,
+  );
+  const targetRequiresAuth =
+    trainingConfig.target.runner === "hf_cloud" ||
+    trainingConfig.target.runner === "seeed_cloud";
+  const targetAuthenticated =
+    trainingConfig.target.runner === "seeed_cloud" ? seeedAuthenticated : authenticated;
   const targetMissingFlavor =
     (trainingConfig.target.runner === "hf_cloud" ||
       trainingConfig.target.runner === "seeed_cloud" ||
@@ -352,12 +359,14 @@ const ConfigurationMode: React.FC = () => {
     isStarting ||
     !trainingConfig.dataset_repo_id.trim() ||
     localBlocked ||
-    (targetRequiresAuth && !authenticated) ||
+    (targetRequiresAuth && !targetAuthenticated) ||
     targetMissingFlavor;
   const startTooltip = localBlocked
     ? "Another local training is already running"
-    : targetRequiresAuth && !authenticated
-    ? "Log in to Hugging Face to use cloud compute"
+    : targetRequiresAuth && !targetAuthenticated
+    ? trainingConfig.target.runner === "seeed_cloud"
+      ? "Connect Seeed Cloud to start training"
+      : "Log in to Hugging Face to use cloud compute"
     : targetMissingFlavor
     ? "Select a hardware flavor"
     : undefined;

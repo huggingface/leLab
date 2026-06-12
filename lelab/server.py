@@ -762,6 +762,7 @@ def get_runners_hardware():
 
     external_providers = []
     for provider in discover_compute_providers():
+        provider_authenticated, _provider_auth_error = _compute_provider_auth_status(provider)
         provider_flavors = [
             {
                 **flavor,
@@ -774,7 +775,7 @@ def get_runners_hardware():
             {
                 "id": provider.id,
                 "display_name": provider.display_name,
-                "authenticated": provider.is_configured(),
+                "authenticated": provider_authenticated,
                 "flavors": provider_flavors,
             }
         )
@@ -814,9 +815,15 @@ def get_runners_hardware():
 
 @app.get("/compute/seeed-cloud/config")
 def get_seeed_cloud_config():
+    from .compute_providers import get_compute_provider
     from .seeed_cloud_config import load_config
 
-    return load_config().public_dict()
+    data = load_config().public_dict()
+    provider = get_compute_provider("seeed_cloud")
+    authenticated, auth_error = _compute_provider_auth_status(provider)
+    data["authenticated"] = authenticated
+    data["auth_error"] = auth_error
+    return data
 
 
 @app.post("/compute/seeed-cloud/config")
@@ -831,7 +838,31 @@ def save_seeed_cloud_config(payload: dict):
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return cfg.public_dict()
+    data = cfg.public_dict()
+    authenticated, auth_error = _compute_provider_auth_status(None)
+    data["authenticated"] = authenticated
+    data["auth_error"] = auth_error
+    return data
+
+
+def _compute_provider_auth_status(provider) -> tuple[bool, str | None]:
+    if provider is None:
+        try:
+            from .compute_providers import get_compute_provider
+
+            provider = get_compute_provider("seeed_cloud")
+        except Exception as exc:
+            return False, str(exc)
+    if provider is None:
+        return False, None
+    auth_status = getattr(provider, "auth_status", None)
+    if callable(auth_status):
+        try:
+            authenticated, error = auth_status()
+            return bool(authenticated), str(error) if error else None
+        except Exception as exc:
+            return False, str(exc)
+    return bool(provider.is_configured()), None
 
 
 def _list_hf_jobs_hardware(api):

@@ -68,6 +68,9 @@ class _Provider:
     def is_configured(self) -> bool:
         return True
 
+    def auth_status(self):
+        return True, None
+
     def list_flavors(self):
         return [
             {
@@ -119,6 +122,14 @@ class _Provider:
 class _UnconfiguredProvider(_Provider):
     def is_configured(self) -> bool:
         return False
+
+    def auth_status(self):
+        return False, "missing token"
+
+
+class _ExpiredTokenProvider(_Provider):
+    def auth_status(self):
+        return False, "invalid or expired token"
 
 
 class _ExternalRunner:
@@ -364,6 +375,18 @@ def test_runner_hardware_includes_unconfigured_provider_flavor_catalog(monkeypat
             ],
         }
     ]
+
+
+def test_runner_hardware_keeps_public_provider_flavors_when_token_expired(monkeypatch) -> None:
+    from lelab import server
+
+    monkeypatch.setenv("LELAB_COMPUTE_PROVIDER_MODULES", "tests.test_compute_providers:_ExpiredTokenProvider")
+    monkeypatch.setattr(server, "cached_whoami", lambda: None)
+
+    body = server.get_runners_hardware()
+
+    assert body["providers"][0]["authenticated"] is False
+    assert body["providers"][0]["flavors"][0]["name"] == "rtx-4090"
 
 
 def test_hub_jobs_includes_seeed_cloud_jobs_without_hf_login(monkeypatch) -> None:

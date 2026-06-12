@@ -250,7 +250,7 @@ const TargetCard: React.FC<TargetCardProps> = ({
                     <CollapsibleContent className="ml-3 border-l border-slate-700 pl-2">
                       {!provider.authenticated && provider.id === SEEED_PROVIDER_ID ? (
                         <div className="flex items-center justify-between gap-3 px-3 py-2">
-                          <span className="text-xs text-slate-500">Connect to unlock Seeed Cloud flavors.</span>
+                          <span className="text-xs text-slate-500">Connect to start training on Seeed Cloud.</span>
                           <Button
                             type="button"
                             size="sm"
@@ -279,7 +279,7 @@ const TargetCard: React.FC<TargetCardProps> = ({
                             value,
                             formatProviderFlavor(prefix, f),
                             formatFlavorMeta(f),
-                            !provider.authenticated,
+                            provider.id !== SEEED_PROVIDER_ID && !provider.authenticated,
                           );
                         })
                       ) : (
