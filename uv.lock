@@ -1056,7 +1056,7 @@ provides-extras = ["dev", "test"]
 [[package]]
 name = "lelab-compute-seeed-cloud"
 version = "0.1.0"
-source = { git = "https://github.com/Seeed-Solution/lelab-compute-seeed-cloud.git#8a053bc814dbaf77c7652b69ff84f99fea9c025d" }
+source = { git = "https://github.com/Seeed-Solution/lelab-compute-seeed-cloud.git#1d00226fae39e800ddfaf0ff6a47812a3759402d" }
 
 [[package]]
 name = "lerobot"
