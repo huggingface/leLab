@@ -93,7 +93,10 @@ const UpdateNotice = () => {
         if (!o && !updating) dismiss(dontAsk);
       }}
     >
-      <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-lg">
+      <DialogContent
+        className="bg-slate-800 border-slate-700 text-white max-w-lg"
+        onOpenAutoFocus={(e) => e.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-3 text-white">
             <Sparkles className="w-5 h-5 text-amber-400" />
