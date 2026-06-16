@@ -750,13 +750,13 @@ def install_wandb_extra_status():
     return handle_install_wandb_extra_status()
 
 
-@app.get("/update-check")
+@app.get("/system/update-check")
 def update_check():
     """Report whether a newer LeLab commit exists on GitHub (cached, silent on failure)."""
     return handle_update_check()
 
 
-@app.post("/update")
+@app.post("/system/update")
 def run_update():
     """Run the pip upgrade in-process; the user must restart lelab afterwards."""
     return handle_run_update()

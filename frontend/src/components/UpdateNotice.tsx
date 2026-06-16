@@ -59,7 +59,9 @@ const UpdateNotice = () => {
     setUpdating(true);
     setOutput(null);
     try {
-      const r = await fetchWithHeaders(`${baseUrl}/update`, { method: "POST" });
+      const r = await fetchWithHeaders(`${baseUrl}/system/update`, {
+        method: "POST",
+      });
       const body: { success: boolean; message: string; output: string } =
         await r.json();
       if (body.success) {

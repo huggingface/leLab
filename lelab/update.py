@@ -118,7 +118,9 @@ def _github_json(path: str) -> Any | None:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
+        # URL is always GITHUB_API (a fixed https:// constant) plus an
+        # internally-built path; no user-controlled scheme.
+        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:  # noqa: S310  # nosec B310
             return json.loads(resp.read().decode())
     except Exception as exc:  # noqa: BLE001 — network check must never raise
         logger.debug("GitHub API call failed for %s: %s", path, exc)
@@ -192,7 +194,14 @@ def handle_update_check() -> dict[str, Any]:
 
 
 def handle_run_update() -> UpdateResult:
-    """Run the pip upgrade in-process (best-effort). User must restart after."""
+    """Run the pip upgrade in-process (best-effort). User must restart after.
+
+    Unlike the /system extra-installs (Popen + background thread + log polling
+    via InstallManager), this is a single blocking subprocess.run: the update is
+    a one-shot, fire-and-restart action with no live log UI, so streaming
+    machinery would be unused complexity. FastAPI runs this sync handler in a
+    threadpool, and the frontend shows a spinner for the duration.
+    """
     source = get_installed_source()
     if source is None:
         return UpdateResult(

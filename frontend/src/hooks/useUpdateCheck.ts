@@ -37,7 +37,7 @@ export function useUpdateCheck(): UseUpdateCheckResult {
   useEffect(() => {
     if (isHostedSpace()) return;
     let cancelled = false;
-    fetchWithHeaders(`${baseUrl}/update-check`)
+    fetchWithHeaders(`${baseUrl}/system/update-check`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data: UpdateStatus | null) => {
         if (cancelled || !data || !data.update_available) return;
