@@ -445,8 +445,36 @@ const Calibration = () => {
     setShowPortDetection(true);
   };
 
+  // Write the port for the current side straight into the robot record, so a
+  // re-detected USB port (which shuffles on reboot/reconnect) sticks without
+  // needing a full re-calibration. Mirrors the camera write-back above.
+  const persistPort = useCallback(
+    async (nextPort: string) => {
+      if (!robotName || !nextPort) return;
+      const field = deviceType === "robot" ? "follower_port" : "leader_port";
+      // Skip redundant writes when the value already matches the record.
+      if (robot && robot[field] === nextPort) return;
+      try {
+        const res = await fetchWithHeaders(
+          `${baseUrl}/robots/${encodeURIComponent(robotName)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ [field]: nextPort }),
+          }
+        );
+        const data = await res.json();
+        if (data.robot) setRobot(data.robot);
+      } catch (e) {
+        console.error("Failed to save port to robot record:", e);
+      }
+    },
+    [robotName, deviceType, robot, baseUrl, fetchWithHeaders]
+  );
+
   const handlePortDetected = (detectedPort: string) => {
     setPort(detectedPort);
+    persistPort(detectedPort);
   };
 
   const getStatusDisplay = () => {
@@ -575,6 +603,7 @@ const Calibration = () => {
                     id="port"
                     value={port}
                     onChange={(e) => setPort(e.target.value)}
+                    onBlur={(e) => persistPort(e.target.value)}
                     placeholder="/dev/tty.usbmodem..."
                     className="bg-slate-700 border-slate-600 text-white rounded-md flex-1"
                   />
