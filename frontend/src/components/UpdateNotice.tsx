@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Loader2, Copy, Sparkles } from "lucide-react";
+import { Loader2, Copy, Sparkles, ChevronRight } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -7,6 +7,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useApi } from "@/contexts/ApiContext";
@@ -104,20 +109,28 @@ const UpdateNotice = () => {
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="flex items-start gap-2">
-            <code className="min-w-0 flex-1 px-2 py-1.5 rounded bg-slate-900 text-sky-300 text-xs break-all whitespace-pre-wrap">
-              {status.update_command}
-            </code>
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={copyCommand}
-              title="Copy command"
-              className="shrink-0 bg-slate-900 border-slate-600 text-white hover:bg-slate-700"
-            >
-              <Copy className="w-4 h-4" />
-            </Button>
-          </div>
+          <Collapsible>
+            <CollapsibleTrigger className="group flex items-center gap-1.5 text-xs font-medium text-slate-300 hover:text-white transition-colors">
+              <ChevronRight className="w-3.5 h-3.5 transition-transform group-data-[state=open]:rotate-90" />
+              Or update manually
+            </CollapsibleTrigger>
+            <CollapsibleContent className="pt-2">
+              <div className="flex items-start gap-2">
+                <code className="min-w-0 flex-1 px-2 py-1.5 rounded bg-slate-900 text-sky-300 text-xs break-all whitespace-pre-wrap">
+                  {status.update_command}
+                </code>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={copyCommand}
+                  title="Copy command"
+                  className="shrink-0 bg-slate-900 border-slate-600 text-white hover:bg-slate-700"
+                >
+                  <Copy className="w-4 h-4" />
+                </Button>
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
 
           {output && (
             <pre className="max-h-40 overflow-auto rounded bg-slate-900 p-2 text-xs text-slate-300 whitespace-pre-wrap">
