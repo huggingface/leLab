@@ -31,4 +31,5 @@ jobs:
           git config user.name "GitHub CI"
           git add -A
           git commit -m "Sync from leLab @ ${GITHUB_SHA}"
-          git push -f https://Nico-robot:$HF_TOKEN@huggingface.co/spaces/lerobot/LeLab main
+          git remote add hf https://Nico-robot:$HF_TOKEN@huggingface.co/spaces/lerobot/LeLab
+          git push -f hf main
