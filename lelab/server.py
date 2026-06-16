@@ -80,6 +80,7 @@ from .teleoperate import (
 
 # Training is now job-based; see app/jobs.py.
 from .train import TrainingRequest
+from .update import handle_run_update, handle_update_check
 from .utils import config
 from .utils.config import (
     FOLLOWER_CONFIG_PATH,
@@ -747,6 +748,18 @@ def install_wandb_extra():
 def install_wandb_extra_status():
     """Return current wandb install state plus any pending log lines (drained on read)."""
     return handle_install_wandb_extra_status()
+
+
+@app.get("/update-check")
+def update_check():
+    """Report whether a newer LeLab commit exists on GitHub (cached, silent on failure)."""
+    return handle_update_check()
+
+
+@app.post("/update")
+def run_update():
+    """Run the pip upgrade in-process; the user must restart lelab afterwards."""
+    return handle_run_update()
 
 
 # Replay is rendered by the embedded lerobot/visualize_dataset Space; no backend routes needed.

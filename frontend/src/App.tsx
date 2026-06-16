@@ -16,6 +16,7 @@ import Upload from "@/pages/Upload";
 import NotFound from "@/pages/NotFound";
 import SingleTabGuard from "@/components/SingleTabGuard";
 import TeleopStopNotice from "@/components/TeleopStopNotice";
+import UpdateNotice from "@/components/UpdateNotice";
 import { TooltipProvider } from "@radix-ui/react-tooltip";
 import { ApiProvider } from "./contexts/ApiContext";
 import { HfAuthProvider } from "./contexts/HfAuthContext";
@@ -34,6 +35,7 @@ function App() {
                   <BrowserRouter>
                     <SingleTabGuard>
                       <TeleopStopNotice />
+                      <UpdateNotice />
                       <Routes>
                         <Route path="/" element={<Landing />} />
                         <Route path="/teleoperation" element={<Teleoperation />} />
