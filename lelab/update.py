@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shlex
 import shutil
 import subprocess
 import sys
@@ -124,17 +125,23 @@ def _github_json(path: str) -> Any | None:
         return None
 
 
-def _update_command(owner: str, repo: str) -> str:
-    return f"pip install --upgrade --force-reinstall git+https://github.com/{owner}/{repo}.git"
-
-
 def _build_update_cmd(owner: str, repo: str) -> list[str]:
-    """Pick the installer for the running Python (uv venvs ship no pip)."""
+    """Pick the installer for the running Python.
+
+    The hosted/standard install uses uv (uv venvs ship no pip), so prefer
+    `uv pip install` pinned to this interpreter when uv is on PATH, matching
+    the extra-install flow in utils/system.py. Fall back to `python -m pip`.
+    """
     target = f"git+https://github.com/{owner}/{repo}.git"
     flags = ["--upgrade", "--force-reinstall", target]
     if shutil.which("uv"):
         return ["uv", "pip", "install", "--python", sys.executable, *flags]
     return [sys.executable, "-m", "pip", "install", *flags]
+
+
+def _update_command(owner: str, repo: str) -> str:
+    """The exact command the Update button runs — shown so manual copy matches."""
+    return shlex.join(_build_update_cmd(owner, repo))
 
 
 def _compute_status() -> dict[str, Any]:

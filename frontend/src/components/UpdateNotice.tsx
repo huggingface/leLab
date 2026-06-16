@@ -104,8 +104,8 @@ const UpdateNotice = () => {
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="flex items-center gap-2">
-            <code className="flex-1 px-2 py-1.5 rounded bg-slate-900 text-sky-300 text-xs overflow-x-auto whitespace-nowrap">
+          <div className="flex items-start gap-2">
+            <code className="min-w-0 flex-1 px-2 py-1.5 rounded bg-slate-900 text-sky-300 text-xs break-all whitespace-pre-wrap">
               {status.update_command}
             </code>
             <Button
@@ -130,6 +130,7 @@ const UpdateNotice = () => {
               <Checkbox
                 checked={dontAsk}
                 onCheckedChange={(v) => setDontAsk(v === true)}
+                className="border-slate-300 data-[state=checked]:bg-slate-300 data-[state=checked]:text-slate-900"
               />
               Don't ask me again
             </label>
