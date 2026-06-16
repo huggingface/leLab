@@ -31,6 +31,7 @@ import sys
 import time
 import urllib.request
 from importlib.metadata import PackageNotFoundError, distribution
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
@@ -127,14 +128,28 @@ def _github_json(path: str) -> Any | None:
         return None
 
 
-def _build_update_cmd(owner: str, repo: str) -> list[str]:
-    """Pick the installer for the running Python.
+def _is_uv_tool_install() -> bool:
+    """True when LeLab runs from a `uv tool install` (the standard install).
 
-    The hosted/standard install uses uv (uv venvs ship no pip), so prefer
-    `uv pip install` pinned to this interpreter when uv is on PATH, matching
-    the extra-install flow in utils/system.py. Fall back to `python -m pip`.
+    uv tools live in an isolated env under `<data>/uv/tools/<name>/`, so the
+    running interpreter sits inside a `uv/tools` path segment.
+    """
+    return "uv/tools" in Path(sys.executable).as_posix()
+
+
+def _build_update_cmd(owner: str, repo: str) -> list[str]:
+    """Pick the right updater for how LeLab was installed.
+
+    - Standard install is `uv tool install`: update the tool in place with
+      `--force`, which re-fetches the latest commit even though the version
+      string is unchanged.
+    - uv venv install: `uv pip install` pinned to this interpreter (uv venvs
+      ship no pip), matching the extra-install flow in utils/system.py.
+    - Plain pip env: `python -m pip install`.
     """
     target = f"git+https://github.com/{owner}/{repo}.git"
+    if shutil.which("uv") and _is_uv_tool_install():
+        return ["uv", "tool", "install", "--force", target]
     flags = ["--upgrade", "--force-reinstall", target]
     if shutil.which("uv"):
         return ["uv", "pip", "install", "--python", sys.executable, *flags]
