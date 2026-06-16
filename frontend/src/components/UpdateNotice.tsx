@@ -42,7 +42,10 @@ const UpdateNotice = () => {
     if (!status.update_command) return;
     try {
       await navigator.clipboard.writeText(status.update_command);
-      toast({ title: "Copied", description: "Update command copied to clipboard." });
+      toast({
+        title: "Copied",
+        description: "Update command copied to clipboard.",
+      });
     } catch {
       toast({
         title: "Copy failed",
@@ -57,13 +60,18 @@ const UpdateNotice = () => {
     setOutput(null);
     try {
       const r = await fetchWithHeaders(`${baseUrl}/update`, { method: "POST" });
-      const body: { success: boolean; message: string; output: string } = await r.json();
+      const body: { success: boolean; message: string; output: string } =
+        await r.json();
       if (body.success) {
         toast({ title: "Updated", description: body.message });
         dismiss(false);
       } else {
         setOutput(body.output || body.message);
-        toast({ title: "Update failed", description: body.message, variant: "destructive" });
+        toast({
+          title: "Update failed",
+          description: body.message,
+          variant: "destructive",
+        });
       }
     } catch (e) {
       toast({
@@ -90,7 +98,9 @@ const UpdateNotice = () => {
             LeLab update available
           </DialogTitle>
           <DialogDescription className="text-slate-300">
-            You're {behind}. Update to get the latest fixes and features.
+            You're {behind} 😱.
+            <br />
+            Update to get the latest fixes and features 🤗.
             {status.compare_url && (
               <>
                 {" "}
