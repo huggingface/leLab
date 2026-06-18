@@ -17,8 +17,10 @@ import re
 import shutil
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
+from unittest.mock import patch
 
 from pydantic import BaseModel
 
@@ -31,6 +33,7 @@ from lerobot.scripts.lerobot_record import RecordConfig
 from lerobot.teleoperators.so_leader import SO101LeaderConfig
 
 from .utils.config import setup_calibration_files, with_lelab_tag
+from .utils.hf_auth import cached_whoami
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +54,56 @@ last_recording_info: dict[str, Any] | None = (
 # Guards the start path so two concurrent POST /start-recording calls cannot
 # both pass the active-flag check.
 _state_lock = threading.Lock()
+
+
+def _sanitize_dataset_repo_component(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]", "_", value.strip()).strip("._-")
+
+
+def _default_dataset_namespace() -> str:
+    try:
+        info = cached_whoami()
+    except Exception:
+        logger.exception("Failed to resolve Hugging Face username for dataset namespace")
+        info = None
+
+    namespace = info.get("name") if isinstance(info, dict) else None
+    if namespace:
+        return _sanitize_dataset_repo_component(namespace) or "local"
+    return "local"
+
+
+def _normalize_dataset_repo_id(repo_id: str, *, resume: bool) -> str:
+    repo_id = repo_id.strip()
+    if not repo_id:
+        return repo_id
+
+    if "/" in repo_id:
+        namespace, name = repo_id.split("/", 1)
+        namespace = _sanitize_dataset_repo_component(namespace) or _default_dataset_namespace()
+    else:
+        namespace = _default_dataset_namespace()
+        name = repo_id
+
+    name = _sanitize_dataset_repo_component(name) or "dataset"
+    if not resume:
+        name = f"{name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    return f"{namespace}/{name}"
+
+
+def _recording_phase_should_rerecord(web_events: dict) -> bool:
+    return bool(web_events.get("rerecord_episode"))
+
+
+@contextmanager
+def _use_existing_calibration_input():
+    # LeRobot's SO arm connect path may prompt:
+    # "Press ENTER to use provided calibration file ...".
+    # Recording runs in a web worker thread, so waiting for stdin would leave
+    # the UI stuck in PREPARING forever. Returning "" chooses the existing
+    # calibration file and avoids the interactive recalibration path.
+    with patch("builtins.input", return_value=""):
+        yield
 
 
 class RecordingRequest(BaseModel):
@@ -197,6 +250,70 @@ def create_record_config(request: RecordingRequest) -> RecordConfig:
     return record_config
 
 
+def _camera_backend_for_platform():
+    import platform
+
+    from lerobot.cameras.configs import Cv2Backends
+
+    if platform.system() == "Darwin":
+        return Cv2Backends.AVFOUNDATION
+    if platform.system() == "Linux":
+        return Cv2Backends.V4L2
+    return Cv2Backends.ANY
+
+
+def _wait_for_opencv_cameras(cameras: dict, *, timeout_s: float = 8.0) -> None:
+    opencv_cameras = [
+        (name, cfg)
+        for name, cfg in cameras.items()
+        if cfg.get("type") == "opencv"
+    ]
+    if not opencv_cameras:
+        return
+
+    import cv2
+
+    backend = _camera_backend_for_platform()
+    deadline = time.time() + timeout_s
+    last_error = ""
+
+    while time.time() < deadline:
+        opened_caps = []
+        try:
+            for name, cfg in opencv_cameras:
+                index = cfg.get("camera_index", 0)
+                cap = cv2.VideoCapture(index, backend.value)
+                opened_caps.append(cap)
+                if not cap.isOpened():
+                    last_error = f"{name} (index {index}) did not open"
+                    break
+                if cfg.get("width"):
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, cfg["width"])
+                if cfg.get("height"):
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg["height"])
+                if cfg.get("fps"):
+                    cap.set(cv2.CAP_PROP_FPS, cfg["fps"])
+                ok, _frame = cap.read()
+                if not ok:
+                    last_error = f"{name} (index {index}) opened but did not return a frame"
+                    break
+            else:
+                logger.info("OpenCV camera preflight passed for %s", [name for name, _ in opencv_cameras])
+                return
+        finally:
+            for cap in opened_caps:
+                cap.release()
+
+        logger.info("Waiting for camera resources: %s", last_error)
+        time.sleep(0.5)
+
+    raise RuntimeError(
+        "Camera is not available for recording. "
+        f"Last check failed: {last_error or 'unknown camera error'}. "
+        "Close any browser/app preview using the camera, or run `lerobot-find-cameras opencv`."
+    )
+
+
 def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
     """Handle start recording request by using the existing record() function"""
     global \
@@ -236,21 +353,14 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
         last_recording_info = None
 
     try:
-        # Sanitize the dataset name so push_to_hub never rejects a finished
-        # recording over an invalid character. HF repo names allow only
-        # [A-Za-z0-9._-]; everything else becomes "_".
+        # LeRobot requires repo_id to be namespace/name even for local
+        # recording. The UI may provide only a bare dataset name, so normalize
+        # it before constructing RecordConfig and before the worker starts.
         if request.dataset_repo_id:
-            if "/" in request.dataset_repo_id:
-                namespace, name = request.dataset_repo_id.split("/", 1)
-                name = re.sub(r"[^A-Za-z0-9._-]", "_", name)
-                request.dataset_repo_id = f"{namespace}/{name}"
-            else:
-                request.dataset_repo_id = re.sub(r"[^A-Za-z0-9._-]", "_", request.dataset_repo_id)
-        # Stamp the repo_id with a timestamp (matches lerobot-record CLI behavior),
-        # so each session lands in a unique directory and the frontend gets the
-        # final id back in the response and status payload.
-        if not request.resume and request.dataset_repo_id:
-            request.dataset_repo_id = f"{request.dataset_repo_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            request.dataset_repo_id = _normalize_dataset_repo_id(
+                request.dataset_repo_id,
+                resume=request.resume,
+            )
 
         logger.info(f"Starting recording for dataset: {request.dataset_repo_id}")
         logger.info(f"Task: {request.single_task}")
@@ -294,6 +404,8 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
                         list(request.cameras.keys()),
                     )
                     time.sleep(2.0)
+                    _wait_for_opencv_cameras(request.cameras)
+                    time.sleep(0.2)
 
                 dataset = record_with_web_events(record_config, recording_events)
                 logger.info(f"Recording completed successfully. Dataset has {dataset.num_episodes} episodes")
@@ -308,11 +420,12 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
                     "robot_type": getattr(dataset.meta, "robot_type", "Unknown robot"),
                 }
             except Exception as e:
-                logger.exception("Recording session failed")
+                error_message = str(e) or repr(e)
+                logger.exception("Recording session failed: %s", error_message)
                 current_phase = "error"
                 if recording_start_time:
                     session_end_elapsed_seconds = int(time.time() - recording_start_time)
-                last_recording_info = {"success": False, "error": str(e)}
+                last_recording_info = {"success": False, "error": error_message}
             finally:
                 if current_phase != "error":
                     current_phase = "completed"
@@ -413,8 +526,9 @@ def handle_recording_status() -> dict[str, Any]:
         "current_phase": current_phase,  # "preparing", "recording", "resetting", "completed"
         "session_ended": session_ended,  # New field to indicate session completion
         "available_controls": {
-            "stop_recording": recording_active,  # ESC key replacement
-            "exit_early": recording_active,  # Right arrow key replacement
+            "stop_recording": recording_active and current_phase != "stopping",  # ESC key replacement
+            "exit_early": recording_active
+            and current_phase in ["recording", "resetting"],  # Right arrow key replacement
             "rerecord_episode": recording_active
             and current_phase == "recording",  # Only during recording phase
         },
@@ -455,6 +569,8 @@ def handle_recording_status() -> dict[str, Any]:
                 status["phase_time_limit_s"] = recording_config.reset_time_s
     elif session_end_elapsed_seconds is not None:
         status["session_elapsed_seconds"] = session_end_elapsed_seconds
+    if current_phase == "error" and last_recording_info and last_recording_info.get("error"):
+        status["error"] = last_recording_info["error"]
 
     return status
 
@@ -631,7 +747,8 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
     # 🔧 ROBOT CONNECTION: Connect with enhanced error handling for camera conflicts
     try:
         logger.info("🔧 ROBOT CONNECTION: Attempting to connect robot...")
-        robot.connect()
+        with _use_existing_calibration_input():
+            robot.connect()
         logger.info("✅ ROBOT CONNECTION: Robot connected successfully")
     except Exception as e:
         logger.error(f"❌ ROBOT CONNECTION: Failed to connect robot: {e}")
@@ -646,7 +763,8 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
     if teleop is not None:
         try:
             logger.info("🔧 TELEOP CONNECTION: Attempting to connect teleoperator...")
-            teleop.connect()
+            with _use_existing_calibration_input():
+                teleop.connect()
             logger.info("✅ TELEOP CONNECTION: Teleoperator connected successfully")
         except Exception as e:
             logger.error(f"❌ TELEOP CONNECTION: Failed to connect teleoperator: {e}")
@@ -713,25 +831,23 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
 
             logger.info(f"Recording phase completed - events state: {web_events}")
 
-            # Check if exit_early was triggered (use our tracking flag)
-            recording_interrupted_by_exit_early = web_events.get("_exit_early_triggered", False)
-            if recording_interrupted_by_exit_early:
-                logger.info("🟡 RECORDING PHASE INTERRUPTED BY EXIT_EARLY - proceeding to save episode")
+            # Whether the phase ended by timeout or by Advance, the collected
+            # buffer is a valid episode. Only the explicit Re-record control
+            # should clear the buffer and keep the same episode number.
+            if web_events.get("_exit_early_triggered", False):
+                logger.info("🟡 RECORDING PHASE ADVANCED BY USER - proceeding to save episode")
                 print(
-                    f"🟡 STATUS CHANGE: Recording phase interrupted by user - episode {current_episode} data collected"
+                    f"🟡 STATUS CHANGE: Recording phase advanced by user - episode {current_episode} data collected"
                 )
-                # Reset our tracking flag
                 web_events["_exit_early_triggered"] = False
             else:
-                # Recording completed due to timeout - trigger re-record behavior
-                logger.info("⏰ RECORDING PHASE COMPLETED DUE TO TIMEOUT - triggering re-record")
+                logger.info("⏰ RECORDING PHASE COMPLETED DUE TO TIMEOUT - proceeding to save episode")
                 print(
-                    f"⏰ STATUS CHANGE: Recording timeout reached for episode {current_episode} - re-recording"
+                    f"⏰ STATUS CHANGE: Recording timeout reached for episode {current_episode} - saving"
                 )
-                web_events["rerecord_episode"] = True
 
             # Handle rerecord logic first (before saving)
-            if web_events["rerecord_episode"]:
+            if _recording_phase_should_rerecord(web_events):
                 log_say("Re-record episode", cfg.play_sounds)
                 print(
                     f"🔄 STATUS CHANGE: Re-recording episode {current_episode} (episode number stays the same)"

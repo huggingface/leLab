@@ -14,6 +14,8 @@ import {
 
 interface Props {
   job: HubJob;
+  onOpen?: (job: HubJob) => void;
+  busy?: boolean;
 }
 
 function relativeTime(iso: string | null): string {
@@ -45,7 +47,7 @@ const stagePresentation: Record<string, StagePresentation> = {
   CANCELLED: { label: "Cancelled", color: "text-amber-400", Icon: AlertTriangle },
 };
 
-const HubJobCard: React.FC<Props> = ({ job }) => {
+const HubJobCard: React.FC<Props> = ({ job, onOpen, busy = false }) => {
   const stage = job.status?.stage?.toUpperCase() ?? "";
   const present: StagePresentation = stagePresentation[stage] ?? {
     label: stage || "Unknown",
@@ -55,34 +57,47 @@ const HubJobCard: React.FC<Props> = ({ job }) => {
   const Icon = present.Icon;
   const title =
     job.docker_image ?? job.space_id ?? `Job ${job.id.slice(0, 12)}…`;
+  const hasUrl = Boolean(job.url);
+  const canOpen = Boolean(onOpen || hasUrl);
 
   return (
     <Card
-      onClick={() => window.open(job.url, "_blank", "noopener,noreferrer")}
-      className="bg-slate-800/50 border-slate-700 rounded-xl cursor-pointer hover:border-slate-500 transition-colors"
+      onClick={() => {
+        if (busy) return;
+        if (onOpen) {
+          onOpen(job);
+          return;
+        }
+        if (hasUrl) window.open(job.url, "_blank", "noopener,noreferrer");
+      }}
+      className={`bg-slate-800/50 border-slate-700 rounded-xl hover:border-slate-500 transition-colors ${
+        canOpen ? "cursor-pointer" : ""
+      }`}
     >
       <CardContent className="p-4 space-y-3">
         <div className="flex items-start justify-between gap-2">
           <div className={`flex items-center gap-1.5 text-xs font-semibold ${present.color}`}>
-            <Icon className={`w-3.5 h-3.5 ${present.spin ? "animate-spin" : ""}`} />
+            <Icon className={`w-3.5 h-3.5 ${present.spin || busy ? "animate-spin" : ""}`} />
             {present.label}
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            asChild
-            className="h-7 w-7 text-slate-400 hover:text-white"
-            aria-label="View on Hub"
-          >
-            <a
-              href={job.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
+          {hasUrl ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              asChild
+              className="h-7 w-7 text-slate-400 hover:text-white"
+              aria-label="View provider job"
             >
-              <ExternalLink className="w-3.5 h-3.5" />
-            </a>
-          </Button>
+              <a
+                href={job.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            </Button>
+          ) : null}
         </div>
         <div>
           <div className="text-white font-semibold truncate" title={title}>

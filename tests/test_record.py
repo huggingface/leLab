@@ -70,6 +70,89 @@ def test_create_record_config_pins_dshow_on_windows(monkeypatch: pytest.MonkeyPa
     assert config.robot.cameras["wrist"].backend == Cv2Backends.DSHOW
 
 
+def test_recording_status_disables_advance_while_stopping(monkeypatch) -> None:
+    from lelab import record
+
+    monkeypatch.setattr(record, "recording_active", True)
+    monkeypatch.setattr(record, "recording_events", {"stop_recording": True, "exit_early": True})
+    monkeypatch.setattr(record, "recording_config", None)
+    monkeypatch.setattr(record, "current_phase", "stopping")
+
+    result = record.handle_recording_status()
+
+    assert result["recording_active"] is True
+    assert result["current_phase"] == "stopping"
+    assert result["available_controls"]["stop_recording"] is False
+    assert result["available_controls"]["exit_early"] is False
+    assert result["available_controls"]["rerecord_episode"] is False
+
+
+def test_recording_status_exposes_error_message(monkeypatch) -> None:
+    from lelab import record
+
+    monkeypatch.setattr(record, "recording_active", False)
+    monkeypatch.setattr(record, "recording_config", None)
+    monkeypatch.setattr(record, "current_phase", "error")
+    monkeypatch.setattr(record, "session_end_elapsed_seconds", 2)
+    monkeypatch.setattr(record, "last_recording_info", {"success": False, "error": "camera failed"})
+
+    result = record.handle_recording_status()
+
+    assert result["session_ended"] is True
+    assert result["error"] == "camera failed"
+
+
+def test_recording_connect_uses_existing_calibration_input() -> None:
+    from lelab.record import _use_existing_calibration_input
+
+    with _use_existing_calibration_input():
+        assert input("Press ENTER to use provided calibration file") == ""
+
+
+def test_bare_dataset_repo_id_gets_hf_namespace(monkeypatch) -> None:
+    from lelab import record
+
+    monkeypatch.setattr(record, "cached_whoami", lambda: {"name": "links7"})
+
+    result = record._normalize_dataset_repo_id("soarm 101", resume=False)
+
+    assert result.startswith("links7/soarm_101_")
+
+
+def test_bare_dataset_repo_id_uses_local_namespace_without_hf(monkeypatch) -> None:
+    from lelab import record
+
+    monkeypatch.setattr(record, "cached_whoami", lambda: None)
+
+    result = record._normalize_dataset_repo_id("soarm_101", resume=False)
+
+    assert result.startswith("local/soarm_101_")
+
+
+def test_namespaced_dataset_repo_id_keeps_namespace(monkeypatch) -> None:
+    from lelab import record
+
+    monkeypatch.setattr(record, "cached_whoami", lambda: {"name": "other"})
+
+    result = record._normalize_dataset_repo_id("links7/soarm 101", resume=False)
+
+    assert result.startswith("links7/soarm_101_")
+
+
+@pytest.mark.parametrize(
+    ("events", "should_rerecord"),
+    [
+        ({"exit_early": False, "rerecord_episode": False}, False),
+        ({"exit_early": False, "_exit_early_triggered": True, "rerecord_episode": False}, False),
+        ({"exit_early": True, "rerecord_episode": True}, True),
+    ],
+)
+def test_recording_phase_rerecord_only_when_requested(events, should_rerecord) -> None:
+    from lelab.record import _recording_phase_should_rerecord
+
+    assert _recording_phase_should_rerecord(events) is should_rerecord
+
+
 def test_build_camera_configs_uses_default_backend_when_unset() -> None:
     from lelab.record import _build_camera_configs
     from lerobot.cameras.configs import Cv2Backends

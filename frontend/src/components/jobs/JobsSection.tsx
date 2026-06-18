@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useApi } from "@/contexts/ApiContext";
@@ -9,6 +10,7 @@ import {
   HubModel,
   JobProgressSnapshot,
   JobRecord,
+  attachProviderJob,
   deleteJob,
   listHubJobs,
   listJobs,
@@ -42,6 +44,7 @@ const isHubJobActive = (h: HubJob) =>
 const JobsSection: React.FC = () => {
   const { baseUrl, fetchWithHeaders } = useApi();
   const { toast } = useToast();
+  const navigate = useNavigate();
 
   const [jobs, setJobs] = useState<JobRecord[]>([]);
   const [hubJobs, setHubJobs] = useState<HubJob[]>([]);
@@ -49,6 +52,7 @@ const JobsSection: React.FC = () => {
   const [hubAuthenticated, setHubAuthenticated] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [attachingJobId, setAttachingJobId] = useState<string | null>(null);
 
   const { selectedRecord } = useRobots();
   const [inferenceModalOpen, setInferenceModalOpen] = useState(false);
@@ -148,6 +152,30 @@ const JobsSection: React.FC = () => {
     }
   };
 
+  const handleHubJobOpen = async (job: HubJob) => {
+    if (job.provider !== "seeed_cloud") {
+      if (job.url) window.open(job.url, "_blank", "noopener,noreferrer");
+      return;
+    }
+    try {
+      setAttachingJobId(job.id);
+      const record = await attachProviderJob(baseUrl, fetchWithHeaders, "seeed_cloud", job.id);
+      setJobs((prev) => {
+        if (prev.some((item) => item.id === record.id)) return prev;
+        return [record, ...prev];
+      });
+      navigate(`/training/${record.id}`);
+    } catch (e) {
+      toast({
+        title: "Attach failed",
+        description: e instanceof Error ? e.message : String(e),
+        variant: "destructive",
+      });
+    } finally {
+      setAttachingJobId(null);
+    }
+  };
+
   const query = search.trim().toLowerCase();
   const matchesQuery = useCallback(
     (text: string | null | undefined) =>
@@ -176,7 +204,7 @@ const JobsSection: React.FC = () => {
     [filteredJobs],
   );
   const trackedCloudJobs = useMemo(
-    () => filteredJobs.filter((j) => j.runner === "hf_cloud"),
+    () => filteredJobs.filter((j) => j.runner === "hf_cloud" || j.runner === "seeed_cloud"),
     [filteredJobs],
   );
   const importedJobs = useMemo(
@@ -195,8 +223,17 @@ const JobsSection: React.FC = () => {
     [trackedCloudJobs],
   );
   const untrackedHubJobs = useMemo(
-    () => filteredHubJobs.filter((h) => !trackedHfJobIds.has(h.id)),
-    [filteredHubJobs, trackedHfJobIds],
+    () =>
+      filteredHubJobs.filter((h) => {
+        if (h.provider === "hf_cloud") return !trackedHfJobIds.has(h.id);
+        if (h.provider === "seeed_cloud") {
+          return !trackedCloudJobs.some(
+            (j) => j.external_provider === "seeed_cloud" && j.external_job_id === h.id,
+          );
+        }
+        return true;
+      }),
+    [filteredHubJobs, trackedCloudJobs, trackedHfJobIds],
   );
   // Hide model repos that map 1-to-1 to a tracked cloud job (those already
   // appear via JobCard); the remainder are past trainings the registry no
@@ -369,7 +406,12 @@ const JobsSection: React.FC = () => {
                 />
               ))}
               {untrackedHubActive.map((job) => (
-                <HubJobCard key={job.id} job={job} />
+                <HubJobCard
+                  key={job.id}
+                  job={job}
+                  onOpen={handleHubJobOpen}
+                  busy={attachingJobId === job.id}
+                />
               ))}
               {untrackedHubModels.map((model) => (
                 <HubModelCard key={model.repo_id} model={model} />
@@ -406,7 +448,12 @@ const JobsSection: React.FC = () => {
                 />
               ))}
               {untrackedHubInactive.map((job) => (
-                <HubJobCard key={job.id} job={job} />
+                <HubJobCard
+                  key={job.id}
+                  job={job}
+                  onOpen={handleHubJobOpen}
+                  busy={attachingJobId === job.id}
+                />
               ))}
             </div>
           </CollapsibleContent>

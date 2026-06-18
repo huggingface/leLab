@@ -51,8 +51,12 @@ def test_invalidate_whoami_cache_clears_cached_value() -> None:
 def test_handle_hf_auth_status_returns_dict() -> None:
     from lelab.utils import hf_auth
 
-    # handle_hf_auth_status() calls the module-level whoami() directly.
-    with patch("lelab.utils.hf_auth.whoami", return_value={"name": "alice", "orgs": []}):
+    # handle_hf_auth_status() delegates through cached_whoami(), so patch the
+    # shared HfApi's underlying network call and force a deterministic token.
+    with (
+        patch("lelab.utils.hf_auth.get_token", return_value="hf_fake_token"),
+        patch.object(hf_auth._WHOAMI_API, "_inner_whoami", return_value={"name": "alice", "orgs": []}),
+    ):
         hf_auth.invalidate_whoami_cache()
         result = hf_auth.handle_hf_auth_status()
         assert isinstance(result, dict)

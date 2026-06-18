@@ -16,6 +16,7 @@ import DatasetCombobox from '@/components/replay/DatasetCombobox';
 import { DatasetItem } from '@/lib/replayApi';
 import WandbInstallDialog from '../WandbInstallDialog';
 import { useApi } from '@/contexts/ApiContext';
+import { OFFLINE_TRAINING_POLICY_OPTIONS } from '../trainingPolicies';
 
 interface EssentialsCardProps extends ConfigComponentProps {
   datasets: DatasetItem[];
@@ -26,6 +27,7 @@ const EssentialsCard: React.FC<EssentialsCardProps> = ({ config, updateConfig, d
   const { baseUrl, fetchWithHeaders } = useApi();
   const [wandbDialogOpen, setWandbDialogOpen] = useState(false);
   const [wandbInstallHint, setWandbInstallHint] = useState('pip install wandb');
+  const isExternalTarget = config.target.runner === 'seeed_cloud' || config.target.runner === 'external';
 
   const handleWandbToggle = async (checked: boolean) => {
     if (!checked) {
@@ -71,7 +73,9 @@ const EssentialsCard: React.FC<EssentialsCardProps> = ({ config, updateConfig, d
             />
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            HuggingFace Hub dataset repository ID
+            {isExternalTarget
+              ? 'LeLab dataset repository ID; Seeed Cloud also accepts an archive URL or SEEED_CLOUD_DATASET_URL override'
+              : 'HuggingFace Hub dataset repository ID'}
           </p>
         </div>
 
@@ -88,15 +92,11 @@ const EssentialsCard: React.FC<EssentialsCardProps> = ({ config, updateConfig, d
                 <SelectValue />
               </SelectTrigger>
               <SelectContent className="bg-slate-800 border-slate-600 text-white">
-                <SelectItem value="act">ACT (Action Chunking Transformer)</SelectItem>
-                <SelectItem value="diffusion">Diffusion Policy</SelectItem>
-                <SelectItem value="pi0">PI0</SelectItem>
-                <SelectItem value="smolvla">SmolVLA</SelectItem>
-                <SelectItem value="tdmpc">TD-MPC</SelectItem>
-                <SelectItem value="vqbet">VQ-BeT</SelectItem>
-                <SelectItem value="pi0_fast">PI0 Fast</SelectItem>
-                <SelectItem value="sac">SAC</SelectItem>
-                <SelectItem value="reward_classifier">Reward Classifier</SelectItem>
+                {OFFLINE_TRAINING_POLICY_OPTIONS.map((policy) => (
+                  <SelectItem key={policy.value} value={policy.value}>
+                    {policy.label}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>

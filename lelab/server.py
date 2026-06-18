@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import concurrent.futures
 import contextlib
 import glob
 import json
@@ -132,9 +133,34 @@ class StartTrainingBody(BaseModel):
         return cls(config=TrainingRequest.model_validate(raw))
 
 
+class SPAStaticFiles(StaticFiles):
+    """Serve React Router routes from index.html while preserving real 404s."""
+
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == 404 and self._should_fallback_to_index(path, scope):
+                return await super().get_response("index.html", scope)
+            raise
+
+    @staticmethod
+    def _should_fallback_to_index(path: str, scope) -> bool:
+        if scope.get("method") not in {"GET", "HEAD"}:
+            return False
+        if path.startswith(("assets/", "favicon.ico", "lovable-uploads/", "so-101-urdf/")):
+            return False
+        headers = {
+            key.decode("latin-1").lower(): value.decode("latin-1")
+            for key, value in scope.get("headers", [])
+        }
+        return "text/html" in headers.get("accept", "")
+
+
 # Cache for HF Jobs hardware flavors (5-minute TTL)
 _flavors_cache: dict = {"data": None, "fetched_at": 0.0}
 _FLAVOR_CACHE_TTL_SECONDS = 300.0
+_HF_HARDWARE_TIMEOUT_SECONDS = 4.0
 
 
 app = FastAPI()
@@ -510,54 +536,54 @@ def list_jobs(limit: int = 10):
 
 @app.get("/jobs/hub")
 def list_hub_jobs():
-    """List the user's HF Cloud compute Jobs and their uploaded LeRobot model
-    repos on huggingface.co.
+    """List online compute Jobs and uploaded LeRobot model repos.
 
-    Returns 200 with empty lists when no token is configured so the frontend
-    can render an unauthenticated empty state without surfacing an error.
+    HF Cloud jobs come from huggingface.co. Seeed Cloud jobs come from the
+    external compute provider's v2 LeLab API when configured.
 
     Declared before `/jobs/{job_id}` so FastAPI's first-match routing doesn't
     treat "hub" as a job id.
     """
     info = cached_whoami()
-    if info is None:
-        return {"authenticated": False, "jobs": [], "models": []}
-    api = shared_hf_api()
-
-    authors: list[str] = []
-    if info.get("name"):
-        authors.append(info["name"])
-    for o in info.get("orgs", []) or []:
-        if isinstance(o, dict) and o.get("name"):
-            authors.append(o["name"])
-
-    try:
-        jobs = api.list_jobs()
-    except Exception as exc:
-        logger.warning("list_jobs failed: %s", exc)
-        jobs = []
-
-    seen_models: set[str] = set()
+    hf_jobs = []
     models: list[dict] = []
-    for author in authors:
+    authors: list[str] = []
+    if info is not None:
+        api = shared_hf_api()
+        if info.get("name"):
+            authors.append(info["name"])
+        for o in info.get("orgs", []) or []:
+            if isinstance(o, dict) and o.get("name"):
+                authors.append(o["name"])
+
         try:
-            for m in api.list_models(author=author, filter="LeRobot", limit=200):
-                if m.id in seen_models:
-                    continue
-                seen_models.add(m.id)
-                models.append(
-                    {
-                        "repo_id": m.id,
-                        "last_modified": m.last_modified.isoformat() if m.last_modified else None,
-                        "private": bool(getattr(m, "private", False)),
-                    }
-                )
+            hf_jobs = api.list_jobs()
         except Exception as exc:
-            logger.warning("list_models(%s) failed: %s", author, exc)
+            logger.warning("list_jobs failed: %s", exc)
+            hf_jobs = []
+
+        seen_models: set[str] = set()
+        for author in authors:
+            try:
+                for m in api.list_models(author=author, filter="LeRobot", limit=200):
+                    if m.id in seen_models:
+                        continue
+                    seen_models.add(m.id)
+                    models.append(
+                        {
+                            "repo_id": m.id,
+                            "last_modified": m.last_modified.isoformat() if m.last_modified else None,
+                            "private": bool(getattr(m, "private", False)),
+                        }
+                    )
+            except Exception as exc:
+                logger.warning("list_models(%s) failed: %s", author, exc)
     models.sort(key=lambda m: m["last_modified"] or "", reverse=True)
 
+    seeed_jobs, seeed_authenticated = _list_seeed_cloud_hub_jobs()
+
     return {
-        "authenticated": True,
+        "authenticated": info is not None or seeed_authenticated,
         "jobs": [
             {
                 "id": ji.id,
@@ -568,11 +594,64 @@ def list_hub_jobs():
                 "status": ({"stage": ji.status.stage, "message": ji.status.message} if ji.status else None),
                 "owner": ji.owner.name if ji.owner else None,
                 "url": ji.url,
+                "provider": "hf_cloud",
             }
-            for ji in jobs
-        ],
+            for ji in hf_jobs
+        ]
+        + seeed_jobs,
         "models": models,
     }
+
+
+def _list_seeed_cloud_hub_jobs() -> tuple[list[dict], bool]:
+    try:
+        from .compute_providers import get_compute_provider
+
+        provider = get_compute_provider("seeed_cloud")
+        if provider is None or not provider.is_configured():
+            return [], False
+        list_jobs = getattr(provider, "list_jobs", None)
+        if not callable(list_jobs):
+            return [], True
+        jobs = list_jobs()
+    except Exception as exc:
+        logger.warning("list seeed cloud jobs failed: %s", exc)
+        return [], False
+
+    return [
+        {
+            "id": job.id,
+            "created_at": job.created_at,
+            "docker_image": _seeed_hub_job_title(job),
+            "space_id": None,
+            "flavor": job.gpu_type or None,
+            "status": {
+                "stage": _seeed_hub_stage(job.status),
+                "message": job.error_message or None,
+            },
+            "owner": "Seeed Cloud",
+            "url": job.external_job_url or "",
+            "provider": "seeed_cloud",
+        }
+        for job in jobs
+    ], True
+
+
+def _seeed_hub_job_title(job) -> str:
+    policy = (job.policy_type or "training").upper()
+    suffix = f" · {job.id[:12]}…" if job.id else ""
+    return f"Seeed · {policy}{suffix}"
+
+
+def _seeed_hub_stage(status: str) -> str:
+    status = (status or "").upper()
+    if status == "SUCCEEDED":
+        return "COMPLETED"
+    if status in {"FAILED", "CANCELLED", "CANCELED"}:
+        return status
+    if status:
+        return "RUNNING"
+    return "UNKNOWN"
 
 
 @app.get("/jobs/{job_id}")
@@ -651,6 +730,16 @@ def stop_job(job_id: str):
         raise HTTPException(status_code=409, detail=f"Job {job_id!r} is not running") from exc
 
 
+@app.post("/jobs/providers/{provider_id}/jobs/{remote_job_id}/attach")
+def attach_provider_job(provider_id: str, remote_job_id: str):
+    try:
+        return job_registry.attach_external(provider_id, remote_job_id)
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Remote job {remote_job_id!r} not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.delete("/jobs/{job_id}", status_code=204)
 def delete_job(job_id: str):
     try:
@@ -669,19 +758,39 @@ def get_runners_hardware():
     keep this endpoint cheap (it can be re-fetched whenever auth state
     changes). The whoami cache is invalidated on login.
     """
+    from .compute_providers import discover_compute_providers
+
+    external_providers = []
+    for provider in discover_compute_providers():
+        provider_authenticated, _provider_auth_error = _compute_provider_auth_status(provider)
+        provider_flavors = [
+            {
+                **flavor,
+                "provider": provider.id,
+                "provider_label": provider.display_name,
+            }
+            for flavor in provider.list_flavors()
+        ]
+        external_providers.append(
+            {
+                "id": provider.id,
+                "display_name": provider.display_name,
+                "authenticated": provider_authenticated,
+                "flavors": provider_flavors,
+            }
+        )
+
     info = cached_whoami()
     if info is None or not info.get("name"):
-        return {"authenticated": False, "username": None, "flavors": []}
+        return {"authenticated": False, "username": None, "flavors": [], "providers": external_providers}
     username: str = info["name"]
     api = shared_hf_api()
 
     now = time.time()
     if _flavors_cache["data"] is None or now - _flavors_cache["fetched_at"] > _FLAVOR_CACHE_TTL_SECONDS:
-        try:
-            hw_list = api.list_jobs_hardware()
-        except Exception as exc:
-            logger.warning("list_jobs_hardware failed: %s", exc)
-            return {"authenticated": True, "username": username, "flavors": []}
+        hw_list = _list_hf_jobs_hardware(api)
+        if hw_list is None:
+            return {"authenticated": True, "username": username, "flavors": [], "providers": external_providers}
         _flavors_cache["data"] = [
             {
                 "name": h.name,
@@ -700,7 +809,75 @@ def get_runners_hardware():
         "authenticated": True,
         "username": username,
         "flavors": _flavors_cache["data"],
+        "providers": external_providers,
     }
+
+
+@app.get("/compute/seeed-cloud/config")
+def get_seeed_cloud_config():
+    from .compute_providers import get_compute_provider
+    from .seeed_cloud_config import load_config
+
+    data = load_config().public_dict()
+    provider = get_compute_provider("seeed_cloud")
+    authenticated, auth_error = _compute_provider_auth_status(provider)
+    data["authenticated"] = authenticated
+    data["auth_error"] = auth_error
+    return data
+
+
+@app.post("/compute/seeed-cloud/config")
+def save_seeed_cloud_config(payload: dict):
+    from .seeed_cloud_config import save_config
+
+    try:
+        cfg = save_config(
+            api_url=str(payload.get("api_url") or ""),
+            web_url=str(payload.get("web_url") or ""),
+            token=str(payload.get("token") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    data = cfg.public_dict()
+    authenticated, auth_error = _compute_provider_auth_status(None)
+    data["authenticated"] = authenticated
+    data["auth_error"] = auth_error
+    return data
+
+
+def _compute_provider_auth_status(provider) -> tuple[bool, str | None]:
+    if provider is None:
+        try:
+            from .compute_providers import get_compute_provider
+
+            provider = get_compute_provider("seeed_cloud")
+        except Exception as exc:
+            return False, str(exc)
+    if provider is None:
+        return False, None
+    auth_status = getattr(provider, "auth_status", None)
+    if callable(auth_status):
+        try:
+            authenticated, error = auth_status()
+            return bool(authenticated), str(error) if error else None
+        except Exception as exc:
+            return False, str(exc)
+    return bool(provider.is_configured()), None
+
+
+def _list_hf_jobs_hardware(api):
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(api.list_jobs_hardware)
+    try:
+        return future.result(timeout=_HF_HARDWARE_TIMEOUT_SECONDS)
+    except concurrent.futures.TimeoutError:
+        logger.warning("list_jobs_hardware timed out after %.1fs", _HF_HARDWARE_TIMEOUT_SECONDS)
+        return None
+    except Exception as exc:
+        logger.warning("list_jobs_hardware failed: %s", exc)
+        return None
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 # ============================================================================

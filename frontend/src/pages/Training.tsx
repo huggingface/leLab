@@ -5,6 +5,10 @@ import { useApi } from "@/contexts/ApiContext";
 import { useHfAuth } from "@/contexts/HfAuthContext";
 
 import { TrainingConfig, TrainingStatus, LogEntry } from "@/components/training/types";
+import {
+  defaultsForPolicy,
+  policyAdvancedCapabilities,
+} from "@/components/training/trainingPolicies";
 import TrainingHeader from "@/components/training/TrainingHeader";
 import ConfigurationTab from "@/components/training/ConfigurationTab";
 import MonitoringStats from "@/components/training/monitoring/MonitoringStats";
@@ -28,7 +32,10 @@ import {
   stopJob,
   deleteJob,
   listRunnerHardware,
+  getSeeedCloudConfig,
+  saveSeeedCloudConfig,
   RunnerFlavor,
+  RunnerProvider,
 } from "@/lib/jobsApi";
 import { JobCheckpoint, listJobCheckpoints } from "@/lib/checkpointsApi";
 import CheckpointDropdown from "@/components/jobs/CheckpointDropdown";
@@ -67,6 +74,7 @@ function jobToStatus(job: JobRecord | null, isStarting: boolean): TrainingStatus
 function configToRequest(c: TrainingConfig): TrainingRequest {
   // The backend's TrainingRequest has more optional fields; the form covers
   // the user-meaningful subset.
+  const policyCapabilities = policyAdvancedCapabilities(c.policy_type);
   return {
     target: c.target,
     dataset_repo_id: c.dataset_repo_id,
@@ -87,6 +95,16 @@ function configToRequest(c: TrainingConfig): TrainingRequest {
     wandb_disable_artifact: c.wandb_disable_artifact,
     policy_device: c.policy_device,
     policy_use_amp: c.policy_use_amp,
+    policy_dtype: policyCapabilities.dtype ? c.policy_dtype : undefined,
+    policy_gradient_checkpointing: policyCapabilities.gradientCheckpointing
+      ? c.policy_gradient_checkpointing
+      : undefined,
+    policy_freeze_vision_encoder: policyCapabilities.freezeVisionEncoder
+      ? c.policy_freeze_vision_encoder
+      : undefined,
+    policy_train_expert_only: policyCapabilities.trainExpertOnly
+      ? c.policy_train_expert_only
+      : undefined,
     optimizer_type: c.optimizer_type,
     optimizer_lr: c.optimizer_lr,
     optimizer_weight_decay: c.optimizer_weight_decay,
@@ -121,6 +139,10 @@ const ConfigurationMode: React.FC = () => {
     wandb_disable_artifact: false,
     policy_device: "cuda",
     policy_use_amp: false,
+    policy_dtype: undefined,
+    policy_gradient_checkpointing: undefined,
+    policy_freeze_vision_encoder: undefined,
+    policy_train_expert_only: undefined,
     optimizer_type: "adam",
     use_policy_training_preset: true,
   });
@@ -133,7 +155,10 @@ const ConfigurationMode: React.FC = () => {
   const [isStarting, setIsStarting] = useState(false);
   const [authenticated, setAuthenticated] = useState<boolean>(false);
   const [flavors, setFlavors] = useState<RunnerFlavor[]>([]);
+  const [providers, setProviders] = useState<RunnerProvider[]>([]);
   const [hardwareLoading, setHardwareLoading] = useState(true);
+  const [seeedConnectUrl, setSeeedConnectUrl] = useState("https://sensecraft-gpu.seeed.cc/lelab/connect");
+  const [seeedConnecting, setSeeedConnecting] = useState(false);
 
   useEffect(() => {
     setDatasetsLoading(true);
@@ -173,17 +198,34 @@ const ConfigurationMode: React.FC = () => {
     listRunnerHardware(baseUrl, fetchWithHeaders)
       .then((data) => {
         setAuthenticated(data.authenticated);
-        setFlavors(data.flavors);
+        setFlavors(data.flavors ?? []);
+        setProviders(data.providers ?? []);
       })
       .catch(() => {
         setAuthenticated(false);
         setFlavors([]);
+        setProviders([]);
       })
       .finally(() => setHardwareLoading(false));
   }, [baseUrl, fetchWithHeaders, auth.status]);
 
+  useEffect(() => {
+    getSeeedCloudConfig(baseUrl, fetchWithHeaders)
+      .then((cfg) => {
+        const webUrl = cfg.web_url || "https://sensecraft-gpu.seeed.cc";
+        setSeeedConnectUrl(`${webUrl.replace(/\/$/, "")}/lelab/connect`);
+      })
+      .catch(() => setSeeedConnectUrl("https://sensecraft-gpu.seeed.cc/lelab/connect"));
+  }, [baseUrl, fetchWithHeaders]);
+
   const updateConfig = <T extends keyof TrainingConfig>(key: T, value: TrainingConfig[T]) => {
-    setTrainingConfig((prev) => ({ ...prev, [key]: value }));
+    setTrainingConfig((prev) => {
+      const next = { ...prev, [key]: value };
+      if (key === "policy_type" && typeof value === "string") {
+        return { ...next, ...defaultsForPolicy(value, prev) };
+      }
+      return next;
+    });
   };
 
   const handleStart = async () => {
@@ -212,6 +254,67 @@ const ConfigurationMode: React.FC = () => {
     }
   };
 
+  const handleConnectSeeedCloud = () => {
+    setSeeedConnecting(true);
+    const popup = window.open(seeedConnectUrl, "lelab-seeed-cloud", "width=520,height=720");
+    if (!popup) {
+      setSeeedConnecting(false);
+      toast({
+        title: "Seeed Cloud",
+        description: "Browser blocked the connection window.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      window.removeEventListener("message", onMessage);
+      setSeeedConnecting(false);
+    }, 120000);
+
+    const finish = async (token: string, apiUrl?: string, webUrl?: string) => {
+      try {
+        await saveSeeedCloudConfig(baseUrl, fetchWithHeaders, {
+          token,
+          api_url: apiUrl,
+          web_url: webUrl,
+        });
+        const hardware = await listRunnerHardware(baseUrl, fetchWithHeaders);
+        setAuthenticated(hardware.authenticated);
+        setFlavors(hardware.flavors ?? []);
+        setProviders(hardware.providers ?? []);
+        toast({ title: "Seeed Cloud connected", description: "GPU flavors are available now." });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        toast({ title: "Seeed Cloud", description: msg, variant: "destructive" });
+      } finally {
+        window.clearTimeout(timeout);
+        window.removeEventListener("message", onMessage);
+        setSeeedConnecting(false);
+        popup.close();
+      }
+    };
+
+    function onMessage(event: MessageEvent) {
+      const expectedOrigin = new URL(seeedConnectUrl).origin;
+      if (event.origin !== expectedOrigin) {
+        return;
+      }
+      const data = event.data as {
+        type?: string;
+        token?: string;
+        apiUrl?: string;
+        webUrl?: string;
+      };
+      if (data?.type !== "seeed-cloud-token" || !data.token) {
+        return;
+      }
+      finish(data.token, data.apiUrl, data.webUrl);
+    }
+
+    window.addEventListener("message", onMessage);
+  };
+
   if (trainingExtraAvailable === null) {
     return (
       <div className="min-h-screen bg-slate-900 text-white p-4">
@@ -237,21 +340,33 @@ const ConfigurationMode: React.FC = () => {
     );
   }
 
-  const targetRequiresAuth = trainingConfig.target.runner === "hf_cloud";
+  const seeedAuthenticated = Boolean(
+    providers.find((provider) => provider.id === "seeed_cloud")?.authenticated,
+  );
+  const targetRequiresAuth =
+    trainingConfig.target.runner === "hf_cloud" ||
+    trainingConfig.target.runner === "seeed_cloud";
+  const targetAuthenticated =
+    trainingConfig.target.runner === "seeed_cloud" ? seeedAuthenticated : authenticated;
   const targetMissingFlavor =
-    trainingConfig.target.runner === "hf_cloud" && !trainingConfig.target.flavor;
+    (trainingConfig.target.runner === "hf_cloud" ||
+      trainingConfig.target.runner === "seeed_cloud" ||
+      trainingConfig.target.runner === "external") &&
+    !trainingConfig.target.flavor;
   const localBlocked =
     trainingConfig.target.runner === "local" && localJobRunning;
   const startDisabled =
     isStarting ||
     !trainingConfig.dataset_repo_id.trim() ||
     localBlocked ||
-    (targetRequiresAuth && !authenticated) ||
+    (targetRequiresAuth && !targetAuthenticated) ||
     targetMissingFlavor;
   const startTooltip = localBlocked
     ? "Another local training is already running"
-    : targetRequiresAuth && !authenticated
-    ? "Log in to Hugging Face to use cloud compute"
+    : targetRequiresAuth && !targetAuthenticated
+    ? trainingConfig.target.runner === "seeed_cloud"
+      ? "Connect Seeed Cloud to start training"
+      : "Log in to Hugging Face to use cloud compute"
     : targetMissingFlavor
     ? "Select a hardware flavor"
     : undefined;
@@ -268,7 +383,10 @@ const ConfigurationMode: React.FC = () => {
           datasetsLoading={datasetsLoading}
           authenticated={authenticated}
           flavors={flavors}
+          providers={providers}
           hardwareLoading={hardwareLoading}
+          seeedConnecting={seeedConnecting}
+          onConnectSeeedCloud={handleConnectSeeedCloud}
         />
         <div className="max-w-3xl mx-auto mt-6 flex justify-end">
           {(() => {
@@ -512,6 +630,11 @@ const MonitoringMode: React.FC<{ jobId: string }> = ({ jobId }) => {
                   <span className="text-xs px-2 py-0.5 rounded bg-amber-900/40 text-amber-200 border border-amber-700">
                     HF · {job.hf_flavor ?? "cloud"}
                   </span>
+                ) : job.runner === "seeed_cloud" || job.runner === "external" ? (
+                  <span className="text-xs px-2 py-0.5 rounded bg-emerald-900/40 text-emerald-200 border border-emerald-700">
+                    {job.runner === "seeed_cloud" ? "Seeed" : job.external_provider ?? "External"} ·{" "}
+                    {job.external_flavor ?? "GPU"}
+                  </span>
                 ) : (
                   <span className="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-200 border border-slate-600">
                     Local
@@ -525,6 +648,16 @@ const MonitoringMode: React.FC<{ jobId: string }> = ({ jobId }) => {
                     className="text-xs text-amber-300 hover:text-amber-200 underline"
                   >
                     View on Hub ↗
+                  </a>
+                )}
+                {(job.runner === "seeed_cloud" || job.runner === "external") && job.external_job_url && (
+                  <a
+                    href={job.external_job_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs text-emerald-300 hover:text-emerald-200 underline"
+                  >
+                    View provider job ↗
                   </a>
                 )}
                 {job.wandb_run_url && (

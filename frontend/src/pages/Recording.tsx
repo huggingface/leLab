@@ -54,7 +54,7 @@ interface RecordingConfig {
   streaming_encoding: boolean;
 }
 
-type Phase = "preparing" | "recording" | "resetting" | "completed";
+type Phase = "preparing" | "recording" | "resetting" | "stopping" | "completed" | "error";
 
 interface BackendStatus {
   recording_active: boolean;
@@ -67,6 +67,7 @@ interface BackendStatus {
   session_elapsed_seconds?: number;
   session_ended?: boolean;
   dataset_repo_id?: string;
+  error?: string;
   available_controls: {
     stop_recording: boolean;
     exit_early: boolean;
@@ -96,6 +97,7 @@ const Recording = () => {
   // Bumps on each re-record so the auto-advance warning re-fires for the same episode number.
   const [rerecordTick, setRerecordTick] = useState(0);
   const warningFiredForPhaseRef = useRef<{ phase: Phase | null; episode: number | null; tick: number }>({ phase: null, episode: null, tick: 0 });
+  const errorHandledRef = useRef(false);
   // Guards against React StrictMode double-invocation of the start effect.
   const startInitiatedRef = useRef(false);
 
@@ -186,6 +188,19 @@ const Recording = () => {
           warningFiredForPhaseRef.current = { phase: real, episode: ep, tick };
         }
 
+        if (!status.recording_active && status.session_ended && status.current_phase === "error") {
+          if (!errorHandledRef.current) {
+            errorHandledRef.current = true;
+            setRecordingSessionStarted(false);
+            toast({
+              title: "Recording failed",
+              description: status.error || status.message || "Check the robot connection and try again.",
+              variant: "destructive",
+            });
+          }
+          return;
+        }
+
         if (!status.recording_active && status.session_ended) {
           const datasetInfo = {
             dataset_repo_id:
@@ -225,6 +240,7 @@ const Recording = () => {
       const data = await response.json();
 
       if (response.ok) {
+        errorHandledRef.current = false;
         setRecordingSessionStarted(true);
         toast({
           title: "Recording Started",
@@ -437,6 +453,8 @@ const Recording = () => {
     if (currentPhase === "recording") return `RECORDING EPISODE ${currentEpisode}`;
     if (currentPhase === "resetting") return "RESET — GET READY";
     if (currentPhase === "preparing") return "PREPARING SESSION";
+    if (currentPhase === "stopping") return "STOPPING RECORDING";
+    if (currentPhase === "error") return "RECORDING ERROR";
     return "SESSION COMPLETE";
   };
 
@@ -452,9 +470,18 @@ const Recording = () => {
       ? "End Episode"
       : currentPhase === "resetting"
       ? "Start Next Episode"
+      : currentPhase === "stopping"
+      ? "Stopping..."
+      : currentPhase === "error"
+      ? "Recording failed"
       : "Advance";
 
   const PrimaryIcon = currentPhase === "recording" ? SkipForward : Play;
+  const canAdvance =
+    backendStatus.available_controls.exit_early &&
+    optimisticPhase === null &&
+    (currentPhase === "recording" || currentPhase === "resetting");
+  const progressPercent = phaseTimeLimit > 0 ? Math.min((phaseElapsedTime / phaseTimeLimit) * 100, 100) : 0;
 
   return (
     <div className="min-h-screen bg-black text-white p-8">
@@ -547,23 +574,19 @@ const Recording = () => {
             <div
               className={`h-1.5 rounded-full transition-all duration-500 ${phaseColor.bar}`}
               style={{
-                width: `${Math.min((phaseElapsedTime / phaseTimeLimit) * 100, 100)}%`,
+                width: `${progressPercent}%`,
               }}
             />
           </div>
 
           <Button
             onClick={handleExitEarly}
-            disabled={
-              !backendStatus.available_controls.exit_early ||
-              optimisticPhase !== null ||
-              currentPhase === "completed"
-            }
+            disabled={!canAdvance}
             className={`w-full text-white font-semibold py-6 text-lg disabled:opacity-50 ${phaseColor.button}`}
           >
             <PrimaryIcon className="w-5 h-5 mr-2" />
             {primaryLabel}
-            {currentPhase !== "completed" && (
+            {(currentPhase === "recording" || currentPhase === "resetting") && (
               <span className="ml-3 px-2 py-0.5 rounded text-xs font-mono bg-black/30 text-white/70">SPACE / →</span>
             )}
           </Button>

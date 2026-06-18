@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import logging
+import concurrent.futures
 import types
 
 from huggingface_hub import HfApi, get_token, login as hf_login, whoami
@@ -21,6 +22,7 @@ from huggingface_hub.errors import HfHubHTTPError, LocalTokenNotFoundError
 logger = logging.getLogger(__name__)
 
 LOGIN_COMMAND = "hf auth login"
+_WHOAMI_TIMEOUT_SECONDS = 4.0
 
 # /whoami-v2 is heavily rate-limited (security). Share one HfApi across the
 # app so its in-process whoami cache (cache=True) actually hits — otherwise
@@ -51,11 +53,18 @@ def cached_whoami() -> dict | None:
     token = get_token()
     if not token:
         return None
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(_WHOAMI_API.whoami, token=token, cache=True)
     try:
-        return _WHOAMI_API.whoami(token=token, cache=True)
+        return future.result(timeout=_WHOAMI_TIMEOUT_SECONDS)
+    except concurrent.futures.TimeoutError:
+        logger.info("whoami timed out after %.1fs", _WHOAMI_TIMEOUT_SECONDS)
+        return None
     except Exception as exc:
         logger.info("whoami failed: %s", exc)
         return None
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def shared_hf_api() -> HfApi:
@@ -72,22 +81,20 @@ def invalidate_whoami_cache() -> None:
 
 
 def handle_hf_auth_status() -> dict:
-    try:
-        info = whoami()
-        return {
-            "authenticated": True,
-            "username": info["name"],
-            "orgs": [o["name"] for o in info.get("orgs", [])],
-            "login_command": LOGIN_COMMAND,
-        }
-    except (LocalTokenNotFoundError, HfHubHTTPError, OSError) as e:
-        logger.info(f"HF auth check: not authenticated ({type(e).__name__})")
+    info = cached_whoami()
+    if info is None:
         return {
             "authenticated": False,
             "username": None,
             "orgs": [],
             "login_command": LOGIN_COMMAND,
         }
+    return {
+        "authenticated": True,
+        "username": info["name"],
+        "orgs": [o["name"] for o in info.get("orgs", [])],
+        "login_command": LOGIN_COMMAND,
+    }
 
 
 def handle_hf_login(token: str) -> dict:

@@ -28,8 +28,10 @@ import shutil
 import signal
 import subprocess
 import sys
+import tarfile
 import threading
 import time
+import urllib.parse
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -44,14 +46,41 @@ logger = logging.getLogger(__name__)
 
 
 JobState = Literal["running", "done", "failed", "interrupted"]
+SEEED_CLOUD_PROVIDER_ID = "seeed_cloud"
 
 
 class JobTarget(BaseModel):
     """Where a job should run. `local` ⇒ LocalJobRunner. `hf_cloud` requires
-    a non-empty `flavor` from HfApi.list_jobs_hardware()."""
+    a non-empty `flavor` from HfApi.list_jobs_hardware(). `seeed_cloud` is the
+    Seeed-maintained external compute provider. `external` keeps the generic
+    provider extension hook available without exposing it as the common path."""
 
-    runner: Literal["local", "hf_cloud"] = "local"
+    runner: Literal["local", "hf_cloud", "seeed_cloud", "external"] = "local"
+    provider: str | None = None
     flavor: str | None = None
+
+
+def _target_provider_id(target: JobTarget) -> str | None:
+    if target.runner == "seeed_cloud":
+        return SEEED_CLOUD_PROVIDER_ID
+    if target.runner == "external":
+        return target.provider
+    return None
+
+
+_EXTERNAL_RUNNING_STATUSES = {
+    "QUEUED",
+    "INSTANCE_CREATING",
+    "DATASET_PREPARING",
+    "INSTANCE_READY",
+    "TRAINING_STARTING",
+    "TRAINING_RUNNING",
+    "ARTIFACT_UPLOADING",
+    "RUNNING",
+    "SCHEDULING",
+}
+_EXTERNAL_SUCCESS_STATUSES = {"SUCCEEDED", "COMPLETED", "DONE"}
+_EXTERNAL_FAILED_STATUSES = {"FAILED", "CANCELLED", "CANCELED"}
 
 
 class TrainingMetrics(BaseModel):
@@ -79,7 +108,7 @@ class JobRecord(BaseModel):
     exit_code: int | None = None
     error_message: str | None = None
     metrics: TrainingMetrics = TrainingMetrics()
-    runner: Literal["local", "hf_cloud", "imported"] = "local"
+    runner: Literal["local", "hf_cloud", "imported", "seeed_cloud", "external"] = "local"
     # PID of the detached subprocess (local runner only); survives uvicorn
     # --reload so a fresh registry can re-attach by tailing the log file.
     process_pid: int | None = None
@@ -88,6 +117,11 @@ class JobRecord(BaseModel):
     hf_flavor: str | None = None
     hf_repo_id: str | None = None
     hf_job_url: str | None = None
+    # External compute provider identifiers (external runner only).
+    external_provider: str | None = None
+    external_flavor: str | None = None
+    external_job_id: str | None = None
+    external_job_url: str | None = None
     # Captured from training stdout the first time wandb prints the run URL.
     wandb_run_url: str | None = None
     # Number of checkpoints currently visible (local: filesystem; cloud:
@@ -103,7 +137,7 @@ class JobCheckpoint(BaseModel):
     snapshot_download for hub refs)."""
 
     step: int
-    source: Literal["local", "hub"]
+    source: Literal["local", "hub", "external"]
     ref: str
 
 
@@ -168,6 +202,59 @@ def _parse_duration(s: str) -> float | None:
     except ValueError:
         return None
     return None
+
+
+def _external_job_state(status: str) -> JobState:
+    normalized = (status or "").upper()
+    if normalized in _EXTERNAL_SUCCESS_STATUSES:
+        return "done"
+    if normalized in _EXTERNAL_FAILED_STATUSES:
+        return "failed"
+    if normalized in _EXTERNAL_RUNNING_STATUSES:
+        return "running"
+    return "running"
+
+
+def _training_request_from_external_job(job) -> TrainingRequest:
+    raw_config = getattr(job, "training_config", None)
+    config = dict(raw_config) if isinstance(raw_config, dict) else {}
+    config.setdefault("dataset_repo_id", f"seeed-cloud/{getattr(job, 'id', 'remote-job')}")
+    if getattr(job, "policy_type", None):
+        config.setdefault("policy_type", getattr(job, "policy_type"))
+    if getattr(job, "train_steps", None):
+        config.setdefault("steps", getattr(job, "train_steps"))
+    return TrainingRequest.model_validate(config)
+
+
+def _training_metrics_from_external_job(job) -> TrainingMetrics:
+    out = TrainingMetrics(total_steps=int(getattr(job, "train_steps", 0) or 0))
+    remote = getattr(job, "metrics", None)
+    if remote is None:
+        return out
+    out.current_step = int(getattr(remote, "current_step", 0) or 0)
+    out.total_steps = int(getattr(remote, "total_steps", 0) or out.total_steps)
+    out.current_loss = getattr(remote, "current_loss", None)
+    out.current_lr = getattr(remote, "current_lr", None)
+    out.grad_norm = getattr(remote, "grad_norm", None)
+    out.eta_seconds = getattr(remote, "eta_seconds", None)
+    return out
+
+
+def _external_flavor(job) -> str | None:
+    target = getattr(job, "target", None)
+    if isinstance(target, dict) and target.get("flavor"):
+        return str(target["flavor"])
+    gpu_type = str(getattr(job, "gpu_type", "") or "").strip()
+    return gpu_type or None
+
+
+def _parse_external_timestamp(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
 
 
 def parse_metrics_into(line: str, metrics: TrainingMetrics) -> None:
@@ -567,6 +654,100 @@ _LANGUAGE_CONDITIONED_POLICY_TYPES = {"smolvla", "pi0", "pi0_fast", "pi05"}
 
 _HUB_CKPT_REF_RE = re.compile(r"^(?P<repo>[^@]+)@checkpoints/(?P<step_dir>\d+)$")
 _HUB_ROOT_REF_RE = re.compile(r"^(?P<repo>[^@]+)@root$")
+_EXTERNAL_CKPT_REF_RE = re.compile(r"^seeed-cloud://(?P<provider>[^/]+)/(?P<job_id>[^/]+)/(?P<step>\d+)$")
+
+
+def _external_checkpoint_ref(provider_id: str, remote_job_id: str, step: int) -> str:
+    return (
+        "seeed-cloud://"
+        + urllib.parse.quote(provider_id, safe="")
+        + "/"
+        + urllib.parse.quote(remote_job_id, safe="")
+        + f"/{step}"
+    )
+
+
+def _external_checkpoint_cache_dir(provider_id: str, remote_job_id: str, step: int) -> Path:
+    return (
+        Path.home()
+        / ".cache"
+        / "huggingface"
+        / "lerobot"
+        / "external_checkpoints"
+        / provider_id
+        / remote_job_id
+        / str(step)
+    )
+
+
+def _find_pretrained_model_dir(root: Path) -> Path | None:
+    direct = root / "pretrained_model"
+    if (direct / "config.json").is_file():
+        return direct
+    if (root / "config.json").is_file():
+        return root
+    for config_path in root.rglob("config.json"):
+        if config_path.parent.name == "pretrained_model":
+            return config_path.parent
+    return None
+
+
+def _safe_extract_tar(archive_path: Path, dest_dir: Path) -> None:
+    dest_root = dest_dir.resolve()
+    with tarfile.open(archive_path, "r:*") as archive:
+        for member in archive.getmembers():
+            target = (dest_dir / member.name).resolve()
+            if target != dest_root and dest_root not in target.parents:
+                raise ValueError(f"Unsafe path in artifact archive: {member.name!r}")
+        try:
+            archive.extractall(dest_dir, filter="data")
+        except TypeError:
+            archive.extractall(dest_dir)
+
+
+def resolve_external_checkpoint_path(policy_ref: str) -> str | None:
+    match = _EXTERNAL_CKPT_REF_RE.match(policy_ref)
+    if not match:
+        return None
+    provider_id = urllib.parse.unquote(match.group("provider"))
+    remote_job_id = urllib.parse.unquote(match.group("job_id"))
+    step = int(match.group("step"))
+
+    from .compute_providers import get_compute_provider
+
+    provider = get_compute_provider(provider_id)
+    if provider is None or not provider.is_configured():
+        raise ValueError(f"compute provider {provider_id!r} is not configured")
+    download_artifact = getattr(provider, "download_artifact", None)
+    if not callable(download_artifact):
+        raise ValueError(f"compute provider {provider_id!r} cannot download training artifacts")
+
+    cache_dir = _external_checkpoint_cache_dir(provider_id, remote_job_id, step)
+    extract_dir = cache_dir / "extracted"
+    existing = _find_pretrained_model_dir(extract_dir)
+    if existing is not None:
+        return str(existing)
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    artifact_path = cache_dir / "model.tar.gz"
+    for attempt in range(2):
+        if not artifact_path.is_file():
+            download_artifact(remote_job_id, artifact_path)
+        if extract_dir.exists():
+            shutil.rmtree(extract_dir)
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            _safe_extract_tar(artifact_path, extract_dir)
+            break
+        except (tarfile.TarError, EOFError, OSError):
+            with contextlib.suppress(OSError):
+                artifact_path.unlink()
+            if attempt == 1:
+                raise
+    resolved = _find_pretrained_model_dir(extract_dir)
+    if resolved is None:
+        raise FileNotFoundError(f"No pretrained_model/config.json found in artifact for {remote_job_id}")
+    return str(resolved)
 
 
 def _read_checkpoint_config(ckpt: JobCheckpoint) -> dict[str, object]:
@@ -580,6 +761,10 @@ def _read_checkpoint_config(ckpt: JobCheckpoint) -> dict[str, object]:
     """
     if ckpt.source == "local":
         with open(Path(ckpt.ref) / "config.json") as f:
+            return json.load(f)
+    external_path = resolve_external_checkpoint_path(ckpt.ref)
+    if external_path is not None:
+        with open(Path(external_path) / "config.json") as f:
             return json.load(f)
     from huggingface_hub import hf_hub_download
 
@@ -784,6 +969,10 @@ class JobRegistry:
         target = target or JobTarget()
         if target.runner == "hf_cloud" and not target.flavor:
             raise ValueError("flavor is required when runner is hf_cloud")
+        if target.runner == "seeed_cloud" and not target.flavor:
+            raise ValueError("flavor is required when runner is seeed_cloud")
+        if target.runner == "external" and not target.provider:
+            raise ValueError("provider is required when runner is external")
 
         with self._lock:
             # Local trainings are bounded by this machine's GPU/USB resources,
@@ -806,7 +995,9 @@ class JobRegistry:
                 output_dir=lerobot_output_dir,
                 started_at=time.time(),
                 runner=target.runner,
-                hf_flavor=target.flavor,
+                hf_flavor=target.flavor if target.runner == "hf_cloud" else None,
+                external_provider=_target_provider_id(target),
+                external_flavor=target.flavor if target.runner in {"seeed_cloud", "external"} else None,
             )
 
             job_dir.mkdir(parents=True, exist_ok=True)
@@ -816,8 +1007,19 @@ class JobRegistry:
             log_path = _job_log_path(self._output_root, job_id)
             if target.runner == "local":
                 runner = LocalJobRunner(record.metrics, log_file_path=log_path)
-            else:
+            elif target.runner == "hf_cloud":
                 runner = HfCloudJobRunner(record.metrics, log_path, target.flavor)
+            else:
+                from .compute_providers import get_compute_provider
+
+                provider_id = _target_provider_id(target) or ""
+                provider = get_compute_provider(provider_id)
+                if provider is None:
+                    raise ValueError(f"compute provider {provider_id!r} is not available")
+                if not provider.is_configured():
+                    raise ValueError(f"compute provider {provider_id!r} is not configured")
+                provider_target = JobTarget(runner="external", provider=provider_id, flavor=target.flavor)
+                runner = provider.create_runner(record.metrics, log_path, provider_target)
 
             try:
                 runner.start(job_id, config, lerobot_output_dir)
@@ -832,12 +1034,19 @@ class JobRegistry:
             # Capture runner-specific identifiers.
             if target.runner == "local":
                 record.process_pid = runner.pid()
-            else:
+            elif target.runner == "hf_cloud":
                 record.hf_job_id = runner.hf_job_id()
                 record.hf_job_url = runner.hf_job_url()
                 # config was mutated by HfCloudJobRunner.start to set
                 # policy_repo_id; mirror it onto the record for the UI.
                 record.hf_repo_id = config.policy_repo_id
+            else:
+                get_external_id = getattr(runner, "external_job_id", None)
+                get_external_url = getattr(runner, "external_job_url", None)
+                if callable(get_external_id):
+                    record.external_job_id = get_external_id()
+                if callable(get_external_url):
+                    record.external_job_url = get_external_url()
 
             self._persist(record, force=True)
             self._runners[job_id] = runner
@@ -879,16 +1088,22 @@ class JobRegistry:
 
         # Best-effort policy type for the display name; inference reads the
         # real config from the checkpoint, so a wrong guess here is harmless.
+        # Imported pseudo-jobs may point at a generic model repo whose config
+        # type is not accepted by the offline training request validator.
         policy_type = "model"
         with contextlib.suppress(Exception):
             policy_type = str(_read_checkpoint_config(ckpts[-1]).get("type") or "model")
+        try:
+            imported_config = TrainingRequest(dataset_repo_id="(imported)", policy_type=policy_type)
+        except Exception:
+            imported_config = TrainingRequest(dataset_repo_id="(imported)")
 
-        job_id = _generate_job_id(policy_type, "imported")
+        job_id = _generate_job_id(imported_config.policy_type, "imported")
         record = JobRecord(
             id=job_id,
             name=name or f"Imported · {label}",
             state="done",
-            config=TrainingRequest(dataset_repo_id="(imported)", policy_type=policy_type),
+            config=imported_config,
             output_dir=output_dir,
             started_at=time.time(),
             ended_at=time.time(),
@@ -900,6 +1115,91 @@ class JobRegistry:
             self._persist(record, force=True)
         self._notify_change()
         return record
+
+    def attach_external(self, provider_id: str, remote_job_id: str) -> JobRecord:
+        if provider_id != SEEED_CLOUD_PROVIDER_ID:
+            raise ValueError("only seeed_cloud provider attach is supported")
+
+        from .compute_providers import get_compute_provider
+
+        provider = get_compute_provider(provider_id)
+        if provider is None:
+            raise ValueError(f"compute provider {provider_id!r} is not available")
+        if not provider.is_configured():
+            raise ValueError(f"compute provider {provider_id!r} is not configured")
+
+        with self._lock:
+            existing = next(
+                (
+                    record
+                    for record in self._records.values()
+                    if record.external_provider == provider_id and record.external_job_id == remote_job_id
+                ),
+                None,
+            )
+        if existing is not None:
+            return existing
+
+        remote_job = self._find_provider_job(provider, remote_job_id)
+        config = _training_request_from_external_job(remote_job)
+        metrics = _training_metrics_from_external_job(remote_job)
+        state = _external_job_state(getattr(remote_job, "status", ""))
+        job_id = _generate_job_id(config.policy_type, config.dataset_repo_id)
+        job_dir = _job_dir(self._output_root, job_id)
+        output_dir = str(job_dir / "run")
+        log_path = _job_log_path(self._output_root, job_id)
+
+        record = JobRecord(
+            id=job_id,
+            name=f"{config.policy_type.upper()} · {config.dataset_repo_id}",
+            state=state,
+            config=config,
+            output_dir=output_dir,
+            started_at=_parse_external_timestamp(getattr(remote_job, "created_at", None)) or time.time(),
+            ended_at=(
+                _parse_external_timestamp(getattr(remote_job, "updated_at", None))
+                if state in {"done", "failed"}
+                else None
+            ),
+            error_message=getattr(remote_job, "error_message", "") or None,
+            metrics=metrics,
+            runner="seeed_cloud",
+            external_provider=provider_id,
+            external_flavor=_external_flavor(remote_job),
+            external_job_id=remote_job_id,
+            external_job_url=getattr(remote_job, "external_job_url", "") or None,
+        )
+
+        runner = None
+        if state == "running":
+            provider_target = JobTarget(
+                runner="external",
+                provider=provider_id,
+                flavor=record.external_flavor,
+            )
+            runner = provider.create_runner(record.metrics, log_path, provider_target)
+            reattach = getattr(runner, "reattach", None)
+            if not callable(reattach):
+                raise ValueError(f"compute provider {provider_id!r} cannot reattach remote jobs")
+            reattach(remote_job_id)
+
+        with self._lock:
+            job_dir.mkdir(parents=True, exist_ok=True)
+            self._records[job_id] = record
+            if runner is not None:
+                self._runners[job_id] = runner
+            self._persist(record, force=True)
+        self._notify_change()
+        return record
+
+    def _find_provider_job(self, provider, remote_job_id: str):
+        list_jobs = getattr(provider, "list_jobs", None)
+        if not callable(list_jobs):
+            raise JobNotFoundError(remote_job_id)
+        for job in list_jobs():
+            if getattr(job, "id", None) == remote_job_id:
+                return job
+        raise JobNotFoundError(remote_job_id)
 
     def stop(self, job_id: str) -> JobRecord:
         with self._lock:
@@ -936,8 +1236,14 @@ class JobRegistry:
         restart marked the job 'interrupted').
         """
         with self._lock:
-            if job_id not in self._records:
+            record = self._records.get(job_id)
+            if record is None:
                 raise JobNotFoundError(job_id)
+        if record.runner in {"seeed_cloud", "external"} and record.external_provider and record.external_job_id:
+            logs = self._read_external_logs(record)
+            if logs:
+                self._write_log_lines(job_id, logs)
+                return logs
         path = _job_log_path(self._output_root, job_id)
         if not path.exists():
             return []
@@ -953,6 +1259,37 @@ class JobRegistry:
                     continue  # skip a malformed line rather than 500ing
         return out
 
+    def _read_external_logs(self, record: JobRecord) -> builtins.list[LogLine]:
+        if not record.external_provider or not record.external_job_id:
+            return []
+        try:
+            from .compute_providers import get_compute_provider
+
+            provider = get_compute_provider(record.external_provider)
+            if provider is None or not provider.is_configured():
+                return []
+            list_logs = getattr(provider, "list_logs", None)
+            if not callable(list_logs):
+                return []
+            out: list[LogLine] = []
+            for item in list_logs(record.external_job_id):
+                timestamp = _parse_external_timestamp(getattr(item, "created_at", None)) or time.time()
+                out.append(LogLine(timestamp=timestamp, message=str(getattr(item, "content", ""))))
+            return out
+        except Exception as exc:
+            logger.debug("Failed to read external logs for %s: %s", record.id, exc)
+            return []
+
+    def _write_log_lines(self, job_id: str, logs: builtins.list[LogLine]) -> None:
+        try:
+            path = _job_log_path(self._output_root, job_id)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("w") as f:
+                for line in logs:
+                    f.write(line.model_dump_json() + "\n")
+        except Exception as exc:
+            logger.debug("Failed to persist external logs for %s: %s", job_id, exc)
+
     def read_metrics_history(self, job_id: str) -> builtins.list[MetricsHistoryPoint]:
         """Reconstruct the per-step loss/lr/grad-norm series from log.jsonl.
 
@@ -961,8 +1298,13 @@ class JobRegistry:
         on every call; cache later if a slow file ever shows up.
         """
         with self._lock:
-            if job_id not in self._records:
+            record = self._records.get(job_id)
+            if record is None:
                 raise JobNotFoundError(job_id)
+        if record.runner in {"seeed_cloud", "external"} and record.external_provider and record.external_job_id:
+            external = self._read_external_metrics_history(record)
+            if external:
+                return external
         path = _job_log_path(self._output_root, job_id)
         if not path.exists():
             return []
@@ -1000,6 +1342,39 @@ class JobRegistry:
         points.sort(key=lambda p: p.step)
         return points
 
+    def _read_external_metrics_history(self, record: JobRecord) -> builtins.list[MetricsHistoryPoint]:
+        if not record.external_provider or not record.external_job_id:
+            return []
+        try:
+            from .compute_providers import get_compute_provider
+
+            provider = get_compute_provider(record.external_provider)
+            if provider is None or not provider.is_configured():
+                return []
+            list_history = getattr(provider, "list_metrics_history", None)
+            if not callable(list_history):
+                return []
+            points: list[MetricsHistoryPoint] = []
+            for item in list_history(record.external_job_id):
+                step = int(getattr(item, "step", 0) or 0)
+                if step <= 0:
+                    continue
+                point = MetricsHistoryPoint(
+                    step=step,
+                    loss=getattr(item, "loss", None),
+                    lr=getattr(item, "lr", None),
+                    grad_norm=getattr(item, "grad_norm", None),
+                )
+                if points and points[-1].step == point.step:
+                    points[-1] = point
+                else:
+                    points.append(point)
+            points.sort(key=lambda p: p.step)
+            return points
+        except Exception as exc:
+            logger.debug("Failed to read external metrics history for %s: %s", record.id, exc)
+            return []
+
     def _checkpoints_for(self, record: JobRecord) -> builtins.list[JobCheckpoint]:
         if record.runner == "imported":
             if record.hf_repo_id:
@@ -1007,7 +1382,40 @@ class JobRegistry:
             return _list_imported_local(record.output_dir)
         if record.runner == "local":
             return _list_local_checkpoints(record.output_dir)
+        if record.runner in {"seeed_cloud", "external"} and record.external_provider and record.external_job_id:
+            external = self._list_external_checkpoints(record)
+            if external:
+                return external
         return self._list_cloud_cached(record.hf_repo_id)
+
+    def _list_external_checkpoints(self, record: JobRecord) -> builtins.list[JobCheckpoint]:
+        if not record.external_provider or not record.external_job_id:
+            return []
+        try:
+            from .compute_providers import get_compute_provider
+
+            provider = get_compute_provider(record.external_provider)
+            if provider is None or not provider.is_configured():
+                return []
+            remote_job = self._find_provider_job(provider, record.external_job_id)
+            if _external_job_state(getattr(remote_job, "status", "")) != "done":
+                return []
+            if not str(getattr(remote_job, "artifact_url", "") or "").strip():
+                return []
+            metrics = getattr(remote_job, "metrics", None)
+            step = int(getattr(metrics, "current_step", 0) or getattr(remote_job, "train_steps", 0) or record.config.steps or 0)
+            if step <= 0:
+                return []
+            return [
+                JobCheckpoint(
+                    step=step,
+                    source="external",
+                    ref=_external_checkpoint_ref(record.external_provider, record.external_job_id, step),
+                )
+            ]
+        except Exception as exc:
+            logger.debug("Failed to list external checkpoints for %s: %s", record.id, exc)
+            return []
 
     def list_checkpoints(self, job_id: str) -> builtins.list[JobCheckpoint]:
         """Return checkpoints saved for this job, ascending by step.
@@ -1146,6 +1554,41 @@ class JobRegistry:
                     )
                     runner.reattach(record.hf_job_id)
                     self._runners[record.id] = runner
+                elif record.runner in {"seeed_cloud", "external"} and record.external_provider and record.external_job_id:
+                    from .compute_providers import get_compute_provider
+
+                    provider = get_compute_provider(record.external_provider)
+                    if provider is not None and provider.is_configured():
+                        logger.info(
+                            "Re-attaching to external compute job %s (provider=%s external_job_id=%s)",
+                            record.id,
+                            record.external_provider,
+                            record.external_job_id,
+                        )
+                        provider_target = JobTarget(
+                            runner="external",
+                            provider=record.external_provider,
+                            flavor=record.external_flavor,
+                        )
+                        runner = provider.create_runner(
+                            record.metrics,
+                            _job_log_path(self._output_root, record.id),
+                            provider_target,
+                        )
+                        reattach = getattr(runner, "reattach", None)
+                        if callable(reattach):
+                            reattach(record.external_job_id)
+                            self._runners[record.id] = runner
+                        else:
+                            record.state = "interrupted"
+                            if record.ended_at is None:
+                                record.ended_at = time.time()
+                            self._write_meta(record)
+                    else:
+                        record.state = "interrupted"
+                        if record.ended_at is None:
+                            record.ended_at = time.time()
+                        self._write_meta(record)
                 else:
                     # Malformed running record — mark interrupted.
                     record.state = "interrupted"

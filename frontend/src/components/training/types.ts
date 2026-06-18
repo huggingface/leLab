@@ -1,5 +1,7 @@
+import { RunnerTarget } from "@/lib/jobsApi";
+
 export interface TrainingConfig {
-  target: { runner: "local" | "hf_cloud"; flavor?: string };
+  target: RunnerTarget;
 
   // Dataset configuration
   dataset_repo_id: string;
@@ -32,6 +34,10 @@ export interface TrainingConfig {
   // Policy-specific parameters
   policy_device?: string;
   policy_use_amp: boolean;
+  policy_dtype?: string;
+  policy_gradient_checkpointing?: boolean;
+  policy_freeze_vision_encoder?: boolean;
+  policy_train_expert_only?: boolean;
 
   // Optimizer parameters
   optimizer_type?: string;

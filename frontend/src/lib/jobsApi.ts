@@ -1,6 +1,11 @@
 import { ApiError, Fetcher, apiRequest } from "./apiClient";
 
 export type JobState = "running" | "done" | "failed" | "interrupted";
+export type RunnerTarget =
+  | { runner: "local" }
+  | { runner: "hf_cloud"; flavor?: string }
+  | { runner: "seeed_cloud"; flavor?: string }
+  | { runner: "external"; provider: string; flavor?: string };
 
 export interface TrainingMetrics {
   current_step: number;
@@ -44,13 +49,17 @@ export interface TrainingRequest {
   wandb_disable_artifact: boolean;
   policy_device?: string;
   policy_use_amp: boolean;
+  policy_dtype?: string;
+  policy_gradient_checkpointing?: boolean;
+  policy_freeze_vision_encoder?: boolean;
+  policy_train_expert_only?: boolean;
   optimizer_type?: string;
   optimizer_lr?: number;
   optimizer_weight_decay?: number;
   optimizer_grad_clip_norm?: number;
   use_policy_training_preset: boolean;
   // Optional target for runner dispatch; omitted ⇒ local.
-  target?: { runner: "local" | "hf_cloud"; flavor?: string };
+  target?: RunnerTarget;
 }
 
 export interface JobRecord {
@@ -64,11 +73,15 @@ export interface JobRecord {
   exit_code: number | null;
   error_message: string | null;
   metrics: TrainingMetrics;
-  runner: "local" | "hf_cloud" | "imported";
+  runner: "local" | "hf_cloud" | "imported" | "seeed_cloud" | "external";
   hf_job_id: string | null;
   hf_flavor: string | null;
   hf_repo_id: string | null;
   hf_job_url: string | null;
+  external_provider: string | null;
+  external_flavor: string | null;
+  external_job_id: string | null;
+  external_job_url: string | null;
   wandb_run_url: string | null;
   checkpoint_count: number;
 }
@@ -200,6 +213,23 @@ export async function stopJob(
   });
 }
 
+export async function attachProviderJob(
+  baseUrl: string,
+  fetcher: Fetcher,
+  providerId: string,
+  remoteJobId: string,
+): Promise<JobRecord> {
+  return apiRequest<JobRecord>(
+    baseUrl,
+    fetcher,
+    `/jobs/providers/${encodeURIComponent(providerId)}/jobs/${encodeURIComponent(remoteJobId)}/attach`,
+    {
+      method: "POST",
+      action: "Attach provider job",
+    },
+  );
+}
+
 export async function deleteJob(
   baseUrl: string,
   fetcher: Fetcher,
@@ -216,21 +246,49 @@ export interface RunnerFlavor {
   pretty_name: string;
   cpu: string;
   ram: string;
-  accelerator: string | null;
+  accelerator:
+    | string
+    | {
+        type?: string;
+        model?: string;
+        quantity?: string | number;
+        vram?: string;
+        manufacturer?: string;
+      }
+    | null;
   unit_cost_usd: number;
   unit_label: string;
+  provider?: string;
+  provider_label?: string;
+}
+
+export interface RunnerProvider {
+  id: string;
+  display_name: string;
+  authenticated: boolean;
+  flavors: RunnerFlavor[];
 }
 
 export interface RunnerHardwareResponse {
   authenticated: boolean;
   username: string | null;
   flavors: RunnerFlavor[];
+  providers: RunnerProvider[];
+}
+
+export interface SeeedCloudConfig {
+  configured: boolean;
+  authenticated: boolean;
+  auth_error: string | null;
+  api_url: string;
+  web_url: string;
 }
 
 const EMPTY_HARDWARE: RunnerHardwareResponse = {
   authenticated: false,
   username: null,
   flavors: [],
+  providers: [],
 };
 
 export async function listRunnerHardware(
@@ -241,16 +299,57 @@ export async function listRunnerHardware(
   // Backend returns 401/403 for unauthenticated users; surface as "no flavors"
   // rather than throwing so the UI can render the "log in to use cloud" hint.
   try {
-    return await apiRequest<RunnerHardwareResponse>(
+    const data = await apiRequest<RunnerHardwareResponse>(
       baseUrl,
       fetcher,
       "/jobs/runners/hardware",
       { signal, action: "List runner hardware" },
     );
+    return {
+      authenticated: Boolean(data.authenticated),
+      username: data.username ?? null,
+      flavors: Array.isArray(data.flavors) ? data.flavors : [],
+      providers: Array.isArray(data.providers)
+        ? data.providers.map((provider) => ({
+            ...provider,
+            flavors: Array.isArray(provider.flavors) ? provider.flavors : [],
+          }))
+        : [],
+    };
   } catch (e) {
     if (e instanceof ApiError) return EMPTY_HARDWARE;
     throw e;
   }
+}
+
+export async function getSeeedCloudConfig(
+  baseUrl: string,
+  fetcher: Fetcher,
+  signal?: AbortSignal,
+): Promise<SeeedCloudConfig> {
+  return apiRequest<SeeedCloudConfig>(
+    baseUrl,
+    fetcher,
+    "/compute/seeed-cloud/config",
+    { signal, action: "Get Seeed Cloud config" },
+  );
+}
+
+export async function saveSeeedCloudConfig(
+  baseUrl: string,
+  fetcher: Fetcher,
+  payload: { token: string; api_url?: string; web_url?: string },
+): Promise<SeeedCloudConfig> {
+  return apiRequest<SeeedCloudConfig>(
+    baseUrl,
+    fetcher,
+    "/compute/seeed-cloud/config",
+    {
+      method: "POST",
+      body: payload,
+      action: "Save Seeed Cloud config",
+    },
+  );
 }
 
 export interface HubJob {
@@ -262,6 +361,7 @@ export interface HubJob {
   status: { stage: string; message: string | null } | null;
   owner: string | null;
   url: string;
+  provider?: "hf_cloud" | "seeed_cloud";
 }
 
 export interface HubModel {
