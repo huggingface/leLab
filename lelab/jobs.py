@@ -1088,16 +1088,22 @@ class JobRegistry:
 
         # Best-effort policy type for the display name; inference reads the
         # real config from the checkpoint, so a wrong guess here is harmless.
+        # Imported pseudo-jobs may point at a generic model repo whose config
+        # type is not accepted by the offline training request validator.
         policy_type = "model"
         with contextlib.suppress(Exception):
             policy_type = str(_read_checkpoint_config(ckpts[-1]).get("type") or "model")
+        try:
+            imported_config = TrainingRequest(dataset_repo_id="(imported)", policy_type=policy_type)
+        except Exception:
+            imported_config = TrainingRequest(dataset_repo_id="(imported)")
 
-        job_id = _generate_job_id(policy_type, "imported")
+        job_id = _generate_job_id(imported_config.policy_type, "imported")
         record = JobRecord(
             id=job_id,
             name=name or f"Imported · {label}",
             state="done",
-            config=TrainingRequest(dataset_repo_id="(imported)", policy_type=policy_type),
+            config=imported_config,
             output_dir=output_dir,
             started_at=time.time(),
             ended_at=time.time(),
