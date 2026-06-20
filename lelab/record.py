@@ -40,6 +40,10 @@ logger = logging.getLogger(__name__)
 # Global variables for recording state
 recording_active = False
 recording_thread: threading.Thread | None = None
+# Live SO101Follower for the active session, set once the robot connects so the
+# /camera-feed endpoint can peek its cameras' latest frames. Reset to None on
+# teardown. Always gated behind `recording_active` by readers.
+current_robot = None
 recording_events = None  # Events dict for controlling recording session
 recording_config = None  # Store recording configuration
 recording_start_time = None  # Track when recording started
@@ -458,6 +462,10 @@ def handle_recording_status() -> dict[str, Any]:
         status["current_episode"] = current_episode
         status["total_episodes"] = recording_config.num_episodes
         status["saved_episodes"] = saved_episodes  # Track completed episodes
+        # Names of the cameras the user configured for this session. The frontend
+        # renders a live /camera-feed/{name} preview for exactly these — nothing
+        # else — so only configured cameras are ever shown.
+        status["cameras"] = list(recording_config.cameras.keys())
 
         # Add session start time if available
         if recording_start_time:
@@ -478,6 +486,50 @@ def handle_recording_status() -> dict[str, Any]:
         status["session_elapsed_seconds"] = session_end_elapsed_seconds
 
     return status
+
+
+def camera_feed_frames(cam_key: str, fps: float = 15.0):
+    """Yield multipart-MJPEG chunks of one recording camera's latest frames.
+
+    Reads via the camera's non-blocking `read_latest()` peek, so it shares the
+    record loop's lock-protected frame buffer with zero device contention (never
+    `async_read()`, which would consume the new-frame event and could disturb
+    record timing). Streams only while a session is live and the named camera
+    exists; ends cleanly otherwise so the browser <img> stops. Capped well below
+    the record fps so it stays a passive observer.
+    """
+    import cv2
+
+    interval = 1.0 / fps
+    # The session sets `current_robot` only after the robot connects (which is
+    # preceded by a ~2s camera-release wait), so give it a moment to appear.
+    deadline = time.time() + 15.0
+    while recording_active and current_robot is None and time.time() < deadline:
+        time.sleep(0.1)
+
+    while recording_active and current_robot is not None:
+        cam = current_robot.cameras.get(cam_key)
+        if cam is None:
+            # Unknown/removed camera — nothing to stream.
+            break
+        try:
+            # read_latest() returns an RGB frame (OpenCVCamera default color
+            # mode); may raise if the camera hasn't produced a fresh frame yet.
+            frame = cam.read_latest()
+        except (TimeoutError, RuntimeError):
+            time.sleep(interval)
+            continue
+        except Exception as e:
+            logger.warning("camera-feed %s: unexpected read error: %s", cam_key, e)
+            break
+
+        bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        ok, buf = cv2.imencode(".jpg", bgr)
+        if not ok:
+            time.sleep(interval)
+            continue
+        yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n"
+        time.sleep(interval)
 
 
 def handle_get_dataset_info(request: DatasetInfoRequest) -> dict[str, Any]:
@@ -614,7 +666,7 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
     from lerobot.utils.feature_utils import hw_to_dataset_features
     from lerobot.utils.utils import log_say
 
-    global current_phase, phase_start_time, current_episode, saved_episodes
+    global current_phase, phase_start_time, current_episode, saved_episodes, current_robot
 
     robot = make_robot_from_config(cfg.robot)
     teleop = make_teleoperator_from_config(cfg.teleop) if cfg.teleop is not None else None
@@ -716,6 +768,12 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
         if teleop is not None:
             teleop.configure()
         logger.info("✅ Devices ready")
+
+        # Expose the connected robot so /camera-feed can stream its cameras'
+        # latest frames during the session (cleared in the finally below). Set
+        # only after the cameras are connected so the feed never peeks a
+        # half-open device.
+        current_robot = robot
 
         while saved_episodes < cfg.dataset.num_episodes:
             # RECORDING PHASE - with dataset (matches original record.py exactly)
@@ -896,6 +954,9 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
         log_say("Stop recording", cfg.play_sounds, blocking=True)
 
     finally:
+        # Stop the camera-feed endpoint from reading before tearing the cameras
+        # down, so it can't peek a half-disconnected device.
+        current_robot = None
         try:
             # Writes the parquet footers for meta/episodes/. Without it the
             # dataset is invalid on disk, so reopening it (upload,

@@ -28,7 +28,7 @@ from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.datastructures import Headers
@@ -36,7 +36,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
 from starlette.types import Scope
 
-from . import datasets as dataset_browser
+# Import our custom recording functionality
+from . import datasets as dataset_browser, record as _record
 
 # Import our custom calibration functionality
 from .calibrate import CalibrationRequest, calibration_manager
@@ -47,8 +48,6 @@ from .jobs import (
     JobTarget,
     job_registry,
 )
-
-# Import our custom recording functionality
 from .record import (
     DatasetInfoRequest,
     RecordingRequest,
@@ -441,6 +440,22 @@ def stop_recording():
 def recording_status():
     """Get the current recording status"""
     return handle_recording_status()
+
+
+@app.get("/camera-feed/{cam_key}")
+def camera_feed(cam_key: str):
+    """Live MJPEG preview of one configured camera during an active recording.
+
+    Browsers render `multipart/x-mixed-replace` directly in an <img>, so the
+    frontend just points an <img> at this URL. Only valid while a session is
+    active; the generator ends itself when recording stops.
+    """
+    if not _record.recording_active:
+        raise HTTPException(status_code=409, detail="No active recording session")
+    return StreamingResponse(
+        _record.camera_feed_frames(cam_key),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
 
 
 @app.post("/recording-exit-early")

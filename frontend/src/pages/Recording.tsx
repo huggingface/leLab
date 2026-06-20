@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
@@ -68,6 +68,7 @@ interface BackendStatus {
   session_ended?: boolean;
   dataset_repo_id?: string;
   error?: string;
+  cameras?: string[]; // Names of the cameras configured for this session
   available_controls: {
     stop_recording: boolean;
     exit_early: boolean;
@@ -99,6 +100,60 @@ const Recording = () => {
   const warningFiredForPhaseRef = useRef<{ phase: Phase | null; episode: number | null; tick: number }>({ phase: null, episode: null, tick: 0 });
   // Guards against React StrictMode double-invocation of the start effect.
   const startInitiatedRef = useRef(false);
+
+  // --- Camera preview layout -------------------------------------------------
+  // Aspect ratio (width / height) of the configured cameras, used to size the
+  // preview windows without letterboxing. Falls back to 4:3 if unknown.
+  const cameraAspect = useMemo(() => {
+    const cams = (recordingConfig as unknown as { cameras?: unknown })?.cameras;
+    const list = Array.isArray(cams)
+      ? cams
+      : cams && typeof cams === "object"
+      ? Object.values(cams as Record<string, unknown>)
+      : [];
+    const first = list[0] as { width?: number; height?: number } | undefined;
+    if (first?.width && first?.height) return first.width / first.height;
+    return 4 / 3;
+  }, [recordingConfig]);
+
+  // Measure the space left for the camera windows (via ResizeObserver, so it
+  // re-fits on any viewport change) to size them as large as possible while
+  // keeping the whole page within one screen (no scroll).
+  const [cameraArea, setCameraArea] = useState({ w: 0, h: 0 });
+  const cameraAreaObserver = useRef<ResizeObserver | null>(null);
+  const cameraAreaRef = useCallback((node: HTMLDivElement | null) => {
+    cameraAreaObserver.current?.disconnect();
+    cameraAreaObserver.current = null;
+    if (node) {
+      const ro = new ResizeObserver((entries) => {
+        const r = entries[0].contentRect;
+        setCameraArea({ w: r.width, h: r.height });
+      });
+      ro.observe(node);
+      cameraAreaObserver.current = ro;
+    }
+  }, []);
+
+  // Pick the column count and per-window pixel size that maximizes the video
+  // area within the measured space, given the camera count and aspect ratio.
+  const cameraCount = backendStatus?.cameras?.length ?? 0;
+  const cameraWindow = useMemo(() => {
+    const { w, h } = cameraArea;
+    if (!cameraCount || w <= 0 || h <= 0) return { width: 0, height: 0 };
+    const gap = 12; // matches the grid's gap-3
+    let best = { width: 0, height: 0, area: -1 };
+    for (let cols = 1; cols <= cameraCount; cols++) {
+      const rows = Math.ceil(cameraCount / cols);
+      const cellW = (w - gap * (cols - 1)) / cols;
+      const cellH = (h - gap * (rows - 1)) / rows;
+      if (cellW <= 0 || cellH <= 0) continue;
+      const width = Math.min(cellW, cellH * cameraAspect);
+      const height = width / cameraAspect;
+      const area = width * height;
+      if (area > best.area) best = { width, height, area };
+    }
+    return { width: Math.floor(best.width), height: Math.floor(best.height) };
+  }, [cameraArea, cameraCount, cameraAspect]);
 
   const toggleMute = useCallback(() => {
     setMutedState((prev) => {
@@ -475,9 +530,9 @@ const Recording = () => {
   const PrimaryIcon = currentPhase === "recording" ? SkipForward : Play;
 
   return (
-    <div className="min-h-screen bg-black text-white p-8">
-      <div className="max-w-2xl mx-auto">
-        <div className="mb-8">
+    <div className="h-screen bg-black text-white p-6 flex flex-col overflow-hidden">
+      <div className="max-w-7xl w-full mx-auto flex-1 min-h-0 flex flex-col">
+        <div className="mb-3 flex-shrink-0">
           <Button
             onClick={() => navigate("/")}
             variant="outline"
@@ -488,8 +543,8 @@ const Recording = () => {
           </Button>
         </div>
 
-        <div className="bg-gray-900 rounded-lg border border-gray-700 p-8">
-          <div className="flex justify-end items-center gap-4 mb-6 text-sm text-gray-400">
+        <div className="bg-gray-900 rounded-lg border border-gray-700 p-6 flex-1 min-h-0 flex flex-col justify-center">
+          <div className="flex justify-end items-center gap-4 mb-3 flex-shrink-0 text-sm text-gray-400">
             <span aria-label={`Episode ${currentEpisode} of ${totalEpisodes}`}>
               Episode <span className="text-white font-semibold">{currentEpisode}</span> / {totalEpisodes}
             </span>
@@ -541,7 +596,7 @@ const Recording = () => {
             </DropdownMenu>
           </div>
 
-          <div className="text-center mb-6">
+          <div className="text-center mb-3 flex-shrink-0">
             <div
               role="status"
               aria-live="polite"
@@ -552,7 +607,36 @@ const Recording = () => {
             </div>
           </div>
 
-          <div className="text-center mb-4">
+          {/* Camera windows for the cameras configured for this session. Shown
+              from the preparing phase so the slots are laid out immediately;
+              each fills with its live feed once the robot is connected and
+              recording/resetting. This is the flexible region: it absorbs the
+              space left after the fixed chrome, and cameraWindow sizes each feed
+              as large as fits so the whole page stays within one screen. */}
+          {backendStatus.cameras &&
+            backendStatus.cameras.length > 0 &&
+            currentPhase !== "completed" && (
+              <div
+                ref={cameraAreaRef}
+                className="flex-1 min-h-0 flex flex-wrap gap-3 justify-center content-center overflow-hidden mb-3"
+              >
+                {backendStatus.cameras.map((name) => (
+                  <CameraFeed
+                    key={name}
+                    baseUrl={baseUrl}
+                    name={name}
+                    live={
+                      currentPhase === "recording" ||
+                      currentPhase === "resetting"
+                    }
+                    width={cameraWindow.width}
+                    height={cameraWindow.height}
+                  />
+                ))}
+              </div>
+            )}
+
+          <div className="text-center mb-3 flex-shrink-0">
             <div className={`text-7xl font-mono font-bold leading-none ${phaseColor.timer}`}>
               {formatTime(phaseElapsedTime)}
             </div>
@@ -561,7 +645,7 @@ const Recording = () => {
             </div>
           </div>
 
-          <div className="w-full bg-gray-800 rounded-full h-1.5 mb-8">
+          <div className="w-full bg-gray-800 rounded-full h-1.5 mb-4 flex-shrink-0">
             <div
               className={`h-1.5 rounded-full transition-all duration-500 ${phaseColor.bar}`}
               style={{
@@ -577,7 +661,7 @@ const Recording = () => {
               optimisticPhase !== null ||
               currentPhase === "completed"
             }
-            className={`w-full text-white font-semibold py-6 text-lg disabled:opacity-50 ${phaseColor.button}`}
+            className={`w-full flex-shrink-0 text-white font-semibold py-6 text-lg disabled:opacity-50 ${phaseColor.button}`}
           >
             <PrimaryIcon className="w-5 h-5 mr-2" />
             {primaryLabel}
@@ -615,6 +699,78 @@ const Recording = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  );
+};
+
+interface CameraFeedProps {
+  baseUrl: string;
+  name: string;
+  // False during the preparing phase: show an empty slot until the camera is
+  // connected and streaming. True once recording/resetting, when frames flow.
+  live: boolean;
+  // Pixel size computed by the parent to fit the available space. The box is
+  // sized to the camera's aspect ratio, so the video fills it without letterbox.
+  width: number;
+  height: number;
+}
+
+// Renders one recording camera's window at an explicit size. During preparing it
+// shows an empty placeholder; once live it plays the backend MJPEG stream. The
+// browser renders a `multipart/x-mixed-replace` response natively in an <img>,
+// so we just point it at /camera-feed/{name}. If the stream errors before frames
+// flow (camera still warming up), retry with a cache-busting key after a delay.
+const CameraFeed: React.FC<CameraFeedProps> = ({
+  baseUrl,
+  name,
+  live,
+  width,
+  height,
+}) => {
+  const [reloadKey, setReloadKey] = useState(0);
+  const [hasError, setHasError] = useState(false);
+  const retryRef = useRef<number | null>(null);
+
+  const src = `${baseUrl}/camera-feed/${encodeURIComponent(name)}?k=${reloadKey}`;
+
+  useEffect(() => {
+    return () => {
+      if (retryRef.current) window.clearTimeout(retryRef.current);
+    };
+  }, []);
+
+  const handleError = useCallback(() => {
+    setHasError(true);
+    if (retryRef.current) window.clearTimeout(retryRef.current);
+    retryRef.current = window.setTimeout(() => {
+      setHasError(false);
+      setReloadKey((k) => k + 1);
+    }, 1500);
+  }, []);
+
+  // 0 before the first measurement; skip rendering a zero-size box.
+  if (width <= 0 || height <= 0) return null;
+
+  return (
+    <div
+      style={{ width, height }}
+      className="relative bg-gray-900 rounded-lg border border-gray-700 overflow-hidden flex items-center justify-center"
+    >
+      {!live ? (
+        <span className="text-gray-500 text-sm">Getting ready…</span>
+      ) : hasError ? (
+        <span className="text-gray-500 text-sm">Connecting feed…</span>
+      ) : (
+        <img
+          src={src}
+          alt={`${name} live feed`}
+          onError={handleError}
+          className="w-full h-full object-cover"
+        />
+      )}
+      <span className="absolute bottom-2 left-2 px-2 py-0.5 rounded bg-black/60 text-sm text-gray-200">
+        {name}
+      </span>
     </div>
   );
 };
