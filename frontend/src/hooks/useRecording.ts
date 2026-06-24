@@ -13,6 +13,10 @@ import { CameraConfig } from "@/components/recording/CameraConfiguration";
  * Pass the currently selected robot; cameras are seeded from it each time the
  * modal opens.
  */
+type StartRecordingOptions = {
+  fps?: number | null;
+};
+
 export const useRecording = (robot: RobotRecord | null) => {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -51,7 +55,7 @@ export const useRecording = (robot: RobotRecord | null) => {
     }
   };
 
-  const startRecording = async () => {
+  const startRecording = async (options: StartRecordingOptions = {}) => {
     if (!robot) {
       toast({
         title: "No robot selected",
@@ -137,7 +141,7 @@ export const useRecording = (robot: RobotRecord | null) => {
       num_episodes: numEpisodes,
       episode_time_s: episodeTimeS,
       reset_time_s: resetTimeS,
-      fps: 30,
+      fps: isResuming && options.fps != null ? options.fps : 30,
       video: true,
       push_to_hub: false,
       resume: isResuming,

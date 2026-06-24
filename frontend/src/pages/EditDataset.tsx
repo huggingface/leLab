@@ -294,7 +294,7 @@ const EditDataset = () => {
 
             <div className="space-y-2">
               <Button
-                onClick={rec.startRecording}
+                onClick={() => rec.startRecording({ fps: datasetInfo.fps })}
                 disabled={!canRecord}
                 className="bg-red-500 hover:bg-red-600 text-white disabled:opacity-40 disabled:cursor-not-allowed"
               >
