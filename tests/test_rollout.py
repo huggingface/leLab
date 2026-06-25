@@ -261,3 +261,43 @@ def test_handle_start_inference_blocked_when_already_active(monkeypatch) -> None
     assert result["success"] is False
     assert result["status_code"] == 409
     assert "already active" in result["message"]
+
+
+def test_classify_outcome_ok_warns_and_fails() -> None:
+    from lelab.rollout import _classify_outcome
+
+    # rc 0/None => the run was fine.
+    assert _classify_outcome(0, True, "overload") == "ok"
+    assert _classify_outcome(None, True, None) == "ok"
+    # Non-zero AFTER the rollout started, with a torque-disable/overload on
+    # shutdown => the skill ran; only cleanup tripped.
+    assert _classify_outcome(1, True, "Motor 6 overload, torque_enable failed") == "ran_with_warning"
+    # Never started, or an unrelated error => a real failure.
+    assert _classify_outcome(1, False, "overload") == "failed"
+    assert _classify_outcome(1, True, "could not connect to the arm") == "failed"
+
+
+def test_friendly_hint_maps_common_failures() -> None:
+    from lelab.rollout import _friendly_hint
+
+    assert "gripper" in (_friendly_hint("Motor overload detected") or "").lower()
+    assert "connect" in (_friendly_hint("Failed to connect to the follower") or "").lower()
+    assert _friendly_hint("some unrecognised traceback") is None
+    assert _friendly_hint(None) is None
+
+
+def test_extract_error_from_log_pulls_exception_tail(tmp_path) -> None:
+    from lelab.rollout import _extract_error_from_log
+
+    log = tmp_path / "rollout.log"
+    log.write_text(
+        "INFO starting rollout\n"
+        "Traceback (most recent call last):\n"
+        '  File "x.py", line 1\n'
+        "RuntimeError: gripper overload during shutdown\n",
+        encoding="utf-8",
+    )
+    out = _extract_error_from_log(str(log))
+    assert out is not None and "RuntimeError: gripper overload during shutdown" in out
+    assert _extract_error_from_log(None) is None
+    assert _extract_error_from_log(str(tmp_path / "missing.log")) is None
