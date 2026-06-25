@@ -127,3 +127,55 @@ def test_cuda_status_endpoint_returns_expected_shape(client) -> None:
     assert response.status_code == 200
     body = response.json()
     assert set(body) >= {"gpu_present", "cuda_available", "mismatch", "install_hint", "docs_url"}
+
+
+def test_policy_extra_maps_policies_to_install_targets() -> None:
+    """smolvla/pi0/pi0_fast/diffusion map to the right probe module + lerobot[extra]."""
+    from lelab.utils.system import handle_get_policy_extra
+
+    smol = handle_get_policy_extra("smolvla")
+    assert smol["needs_extra"] is True
+    assert smol["package"] == "transformers"
+    assert smol["install_target"] == "lerobot[smolvla]"
+    assert "lerobot[smolvla]" in smol["install_hint"]
+
+    # pi0 and pi0_fast share the lerobot[pi] extra; diffusion uses diffusers.
+    assert handle_get_policy_extra("pi0")["install_target"] == "lerobot[pi]"
+    assert handle_get_policy_extra("pi0_fast")["install_target"] == "lerobot[pi]"
+    assert handle_get_policy_extra("diffusion")["package"] == "diffusers"
+    assert handle_get_policy_extra("diffusion")["install_target"] == "lerobot[diffusion]"
+
+
+def test_policy_extra_core_policy_needs_nothing() -> None:
+    from lelab.utils.system import handle_get_policy_extra
+
+    act = handle_get_policy_extra("act")
+    assert act["needs_extra"] is False
+    assert act["available"] is True
+    assert act["install_target"] == ""
+
+
+def test_policy_extra_available_reflects_find_spec(monkeypatch) -> None:
+    import importlib.util
+
+    from lelab.utils import system
+
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
+    assert system.handle_get_policy_extra("smolvla")["available"] is True
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
+    assert system.handle_get_policy_extra("smolvla")["available"] is False
+
+
+def test_policy_extra_install_is_noop_for_core_policy() -> None:
+    from lelab.utils.system import handle_install_policy_extra, handle_install_policy_extra_status
+
+    assert handle_install_policy_extra("act")["started"] is False
+    assert handle_install_policy_extra_status("act")["state"] == "done"
+
+
+def test_policy_extra_route_known_and_core(client) -> None:
+    smol = client.get("/system/policy-extra/smolvla").json()
+    assert smol["needs_extra"] is True
+    assert smol["install_target"] == "lerobot[smolvla]"
+    core = client.get("/system/policy-extra/act").json()
+    assert core["needs_extra"] is False

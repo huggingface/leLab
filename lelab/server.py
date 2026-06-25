@@ -101,8 +101,11 @@ from .utils.config import (
 from .utils.hf_auth import cached_whoami, handle_hf_auth_status, handle_hf_login, shared_hf_api
 from .utils.system import (
     handle_get_cuda_status,
+    handle_get_policy_extra,
     handle_get_training_extra,
     handle_get_wandb_extra,
+    handle_install_policy_extra,
+    handle_install_policy_extra_status,
     handle_install_training_extra,
     handle_install_training_extra_status,
     handle_install_wandb_extra,
@@ -748,6 +751,25 @@ def install_wandb_extra():
 def install_wandb_extra_status():
     """Return current wandb install state plus any pending log lines (drained on read)."""
     return handle_install_wandb_extra_status()
+
+
+@app.get("/system/policy-extra/{policy_type}")
+def get_policy_extra(policy_type: str):
+    """Whether the optional LeRobot extra a policy needs (e.g. transformers for
+    smolvla/pi0, diffusers for diffusion) is importable. Core policies report available."""
+    return handle_get_policy_extra(policy_type)
+
+
+@app.post("/system/policy-extra/{policy_type}/install")
+def install_policy_extra(policy_type: str):
+    """Spawn `pip install lerobot[<extra>]` for the policy's extra in the background."""
+    return handle_install_policy_extra(policy_type)
+
+
+@app.get("/system/policy-extra/{policy_type}/install-status")
+def install_policy_extra_status(policy_type: str):
+    """Return the policy extra's install state plus any pending log lines (drained on read)."""
+    return handle_install_policy_extra_status(policy_type)
 
 
 @app.get("/system/update-check")

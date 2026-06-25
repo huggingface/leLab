@@ -186,6 +186,85 @@ def handle_install_wandb_extra_status() -> dict[str, Any]:
     return wandb_install_manager.get_status()
 
 
+# --------------------------------------------------------------------------- #
+# Policy extras
+# --------------------------------------------------------------------------- #
+# Some LeRobot policies import an optional extra at construction time; training
+# (or inference) otherwise dies with a buried ImportError once the subprocess is
+# already running. Map each such policy to the module we probe and the
+# ``pip install lerobot[extra]`` target. Policies not listed (act, vqbet, tdmpc,
+# sac, reward_classifier) need nothing extra.
+POLICY_EXTRAS: dict[str, tuple[str, str]] = {
+    # policy_type: (probe_module, install_target)
+    "smolvla": ("transformers", "lerobot[smolvla]"),
+    "pi0": ("transformers", "lerobot[pi]"),
+    "pi0_fast": ("transformers", "lerobot[pi]"),
+    "diffusion": ("diffusers", "lerobot[diffusion]"),
+}
+
+# One install manager per install target (lerobot[smolvla] / lerobot[pi] / …),
+# created lazily so pi0 and pi0_fast share the lerobot[pi] install.
+_policy_install_managers: dict[str, InstallManager] = {}
+
+
+def _policy_install_manager(policy_type: str) -> InstallManager | None:
+    spec = POLICY_EXTRAS.get(policy_type)
+    if spec is None:
+        return None
+    target = spec[1]
+    mgr = _policy_install_managers.get(target)
+    if mgr is None:
+        mgr = InstallManager(target)
+        _policy_install_managers[target] = mgr
+    return mgr
+
+
+def handle_get_policy_extra(policy_type: str) -> dict[str, Any]:
+    """Whether the optional extra a policy needs is importable right now.
+
+    Probed live (not cached at import) so a restart after installing is picked
+    up. Policies that need nothing report ``available`` so the UI never blocks
+    them.
+    """
+    spec = POLICY_EXTRAS.get(policy_type)
+    if spec is None:
+        return {
+            "policy_type": policy_type,
+            "needs_extra": False,
+            "available": True,
+            "package": "",
+            "install_target": "",
+            "install_hint": "",
+        }
+    probe, target = spec
+    try:
+        available = importlib.util.find_spec(probe) is not None
+    except (ImportError, ValueError):
+        available = False
+    return {
+        "policy_type": policy_type,
+        "needs_extra": True,
+        "available": available,
+        "package": probe,
+        "install_target": target,
+        "install_hint": f"pip install '{target}'",
+    }
+
+
+def handle_install_policy_extra(policy_type: str) -> dict[str, Any]:
+    mgr = _policy_install_manager(policy_type)
+    if mgr is None:
+        return {"started": False, "message": f"'{policy_type}' needs no extra package."}
+    return mgr.start()
+
+
+def handle_install_policy_extra_status(policy_type: str) -> dict[str, Any]:
+    mgr = _policy_install_manager(policy_type)
+    if mgr is None:
+        return {"state": "done", "error": None, "logs": []}
+    return mgr.get_status()
+
+
 # Detect the common Windows/LeLab mismatch where an NVIDIA GPU is visible to the
 # OS, but the active PyTorch build cannot use CUDA. Do not auto-install torch.
 
