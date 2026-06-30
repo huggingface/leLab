@@ -31,5 +31,6 @@ jobs:
           git config user.name "GitHub CI"
           git add -A
           git commit -m "Sync from leLab @ ${GITHUB_SHA}"
-          git remote add hf https://Nico-robot:$HF_TOKEN@huggingface.co/spaces/lerobot/LeLab
+          git remote add hf https://huggingface.co/spaces/lerobot/LeLab
+          git config credential.helper '!f() { echo "username=Nico-robot"; echo "password=$HF_TOKEN"; }; f'
           git push -f hf main
