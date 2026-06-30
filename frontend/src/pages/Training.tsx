@@ -199,28 +199,31 @@ const ConfigurationMode: React.FC = () => {
       return;
     }
 
-    // Pre-flight: smolvla/pi0/diffusion need an optional package. Catch it here
-    // with a one-click installer instead of a buried ImportError after the job
-    // has already started.
-    try {
-      const r = await fetchWithHeaders(
-        `${baseUrl}/system/policy-extra/${trainingConfig.policy_type}`,
-      );
-      if (r.ok) {
-        const extra = await r.json();
-        if (extra.needs_extra && !extra.available) {
-          setPolicyExtra({
-            policyType: trainingConfig.policy_type,
-            packageName: extra.package,
-            installTarget: extra.install_target,
-            installHint: extra.install_hint,
-          });
-          return;
+    // Pre-flight: smolvla/pi0/diffusion need an optional package installed
+    // locally. Catch it here with a one-click installer instead of a buried
+    // ImportError after the job has already started. Cloud jobs run in their
+    // own environment, so the local package is irrelevant — skip the check.
+    if (trainingConfig.target.runner === "local") {
+      try {
+        const r = await fetchWithHeaders(
+          `${baseUrl}/system/policy-extra/${trainingConfig.policy_type}`,
+        );
+        if (r.ok) {
+          const extra = await r.json();
+          if (extra.needs_extra && !extra.available) {
+            setPolicyExtra({
+              policyType: trainingConfig.policy_type,
+              packageName: extra.package,
+              installTarget: extra.install_target,
+              installHint: extra.install_hint,
+            });
+            return;
+          }
         }
+      } catch {
+        // Check failed (offline / older backend) — fall through and let the
+        // job report any problem itself.
       }
-    } catch {
-      // Check failed (offline / older backend) — fall through and let the job
-      // report any problem itself.
     }
 
     setIsStarting(true);
