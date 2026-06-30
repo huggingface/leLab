@@ -11,100 +11,211 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Tests for lelab.runners.hf_cloud — covers the host-side wandb credential
-resolution path. HfCloudJobRunner itself talks to HF Jobs and is not unit-
-testable without a heavy mock of HfApi; we intentionally leave it for
-integration tests."""
+"""Tests for lelab.runners.hf_cloud.
+
+With LeRobot's native remote-training feature, HfCloudJobRunner is a thin
+subprocess tailer: it runs `lerobot-train --job.target=<flavor>` locally and
+parses the submission markers lerobot prints to stdout. The credential / dataset
+/ checkpoint-upload work is now lerobot's. The unit-testable surface is the
+stdout parser (`_on_line`) — it must stay in lockstep with the exact strings
+lerobot's submit_to_hf emits. Submission against HF Jobs is left to integration
+tests."""
 
 from __future__ import annotations
 
-import netrc
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-import pytest
-
-
-def test_resolve_wandb_api_key_prefers_environment_variable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from lelab.runners.hf_cloud import resolve_wandb_api_key
-
-    monkeypatch.setenv("WANDB_API_KEY", "env-key-123")
-    assert resolve_wandb_api_key() == "env-key-123"
+from lelab.jobs import TrainingMetrics
+from lelab.runners.hf_cloud import HfCloudJobRunner
 
 
-def test_resolve_wandb_api_key_falls_back_to_netrc(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When WANDB_API_KEY is unset, the function must read the same place
-    `wandb login` writes — ~/.netrc under machine api.wandb.ai."""
-    from lelab.runners.hf_cloud import resolve_wandb_api_key
-
-    monkeypatch.delenv("WANDB_API_KEY", raising=False)
-
-    class _FakeNetrc:
-        def authenticators(self, host):
-            assert host == "api.wandb.ai"
-            return ("login", "account", "netrc-key-456")
-
-    monkeypatch.setattr(netrc, "netrc", lambda: _FakeNetrc())
-    assert resolve_wandb_api_key() == "netrc-key-456"
+def _runner(tmp_path: Path) -> HfCloudJobRunner:
+    return HfCloudJobRunner(TrainingMetrics(), tmp_path / "log.jsonl", flavor="t4-small")
 
 
-def test_resolve_wandb_api_key_returns_none_when_netrc_has_no_wandb_entry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from lelab.runners.hf_cloud import resolve_wandb_api_key
-
-    monkeypatch.delenv("WANDB_API_KEY", raising=False)
-
-    class _FakeNetrc:
-        def authenticators(self, host):
-            return None
-
-    monkeypatch.setattr(netrc, "netrc", lambda: _FakeNetrc())
-    assert resolve_wandb_api_key() is None
+def _stage_info(stage: str) -> MagicMock:
+    """A fake huggingface_hub JobInfo with .status.stage."""
+    info = MagicMock()
+    info.status.stage = stage
+    return info
 
 
-def test_resolve_wandb_api_key_returns_none_when_netrc_missing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """No env var, no ~/.netrc — neither source has it, caller decides."""
-    from lelab.runners.hf_cloud import resolve_wandb_api_key
+def test_on_line_parses_submission_markers(tmp_path: Path) -> None:
+    """Feed the exact lines lerobot's submit_to_hf prints and assert the
+    runner picks up the job id, page URL, and (bare) model repo id."""
+    runner = _runner(tmp_path)
+    for line in [
+        "Submitting job to HF Jobs (flavor=t4-small, image=huggingface/lerobot-gpu:latest) ...",
+        "Job submitted: 0123abcd",
+        "  Job page:   https://huggingface.co/jobs/me/0123abcd",
+        "  Model repo: https://huggingface.co/me/act_dataset_2026-06-30",
+        "  Monitor:    hf jobs logs 0123abcd",
+    ]:
+        runner._on_line(line)
 
-    monkeypatch.delenv("WANDB_API_KEY", raising=False)
-
-    def _raise_missing():
-        raise FileNotFoundError("~/.netrc")
-
-    monkeypatch.setattr(netrc, "netrc", _raise_missing)
-    assert resolve_wandb_api_key() is None
-
-
-def test_resolve_wandb_api_key_returns_none_when_netrc_parse_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from lelab.runners.hf_cloud import resolve_wandb_api_key
-
-    monkeypatch.delenv("WANDB_API_KEY", raising=False)
-
-    def _raise_parse():
-        raise netrc.NetrcParseError("bad netrc", "~/.netrc", 1)
-
-    monkeypatch.setattr(netrc, "netrc", _raise_parse)
-    assert resolve_wandb_api_key() is None
+    assert runner.hf_job_id() == "0123abcd"
+    assert runner.hf_job_url() == "https://huggingface.co/jobs/me/0123abcd"
+    assert runner.hf_repo_id() == "me/act_dataset_2026-06-30"
 
 
-def test_resolve_wandb_api_key_returns_none_when_password_is_empty(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An empty password from netrc is treated as missing — the helper
-    contract is 'returns the usable key or None', not 'returns whatever
-    netrc happened to have'."""
-    from lelab.runners.hf_cloud import resolve_wandb_api_key
+def test_on_line_ignores_unrelated_lines(tmp_path: Path) -> None:
+    runner = _runner(tmp_path)
+    runner._on_line("INFO step:250 loss:0.42 lr:1e-4")
+    runner._on_line("Training:   1%| | 125/10000 [02:02<2:36:10,  1.05step/s]")
 
-    monkeypatch.delenv("WANDB_API_KEY", raising=False)
+    assert runner.hf_job_id() is None
+    assert runner.hf_job_url() is None
+    assert runner.hf_repo_id() is None
 
-    class _FakeNetrc:
-        def authenticators(self, host):
-            return ("login", "account", "")
 
-    monkeypatch.setattr(netrc, "netrc", lambda: _FakeNetrc())
-    assert resolve_wandb_api_key() is None
+def test_on_line_keeps_first_job_id(tmp_path: Path) -> None:
+    """Once parsed, ids are sticky — a later spurious match must not clobber."""
+    runner = _runner(tmp_path)
+    runner._on_line("Job submitted: first")
+    runner._on_line("Job submitted: second")
+    assert runner.hf_job_id() == "first"
+
+
+# -- reattach: re-stream remote logs via the Python API (no `hf` CLI) ----------
+
+
+def test_reattach_streams_remote_logs_through_pipeline(tmp_path: Path) -> None:
+    """reattach() must re-stream the job's logs via HfApi.fetch_job_logs(follow=True)
+    — not the `hf` CLI — feeding the same parse/persist/queue pipeline as the
+    subprocess path: markers parsed, metrics updated, lines queued + persisted."""
+    runner = _runner(tmp_path)
+    remote_lines = [
+        "Job submitted: jb_42\n",
+        "  Model repo: https://huggingface.co/me/act_run\n",
+        "INFO step:250 loss:0.42 lr:1e-4\n",
+    ]
+    api = MagicMock()
+    api.fetch_job_logs.return_value = iter(remote_lines)
+
+    with patch("lelab.runners.hf_cloud.shared_hf_api", return_value=api):
+        runner.reattach("jb_42")
+        assert runner._reattach_thread is not None
+        runner._reattach_thread.join(timeout=5)
+
+    api.fetch_job_logs.assert_called_once_with(job_id="jb_42", follow=True)
+    assert runner.hf_repo_id() == "me/act_run"  # parsed from the streamed marker
+    assert runner._metrics.current_step == 250  # metrics parsed from the streamed line
+    messages = [line.message for line in runner.stream_log_lines()]
+    assert "Job submitted: jb_42" in messages
+    assert (tmp_path / "log.jsonl").exists()  # lines were persisted
+
+
+def test_reattach_survives_fetch_job_logs_error(tmp_path: Path) -> None:
+    """If the job is already gone, fetch_job_logs raises; reattach must not crash."""
+    runner = _runner(tmp_path)
+    api = MagicMock()
+    api.fetch_job_logs.side_effect = RuntimeError("job not found")
+
+    with patch("lelab.runners.hf_cloud.shared_hf_api", return_value=api):
+        runner.reattach("gone")
+        assert runner._reattach_thread is not None
+        runner._reattach_thread.join(timeout=5)
+
+    assert runner.stream_log_lines() == []  # nothing queued, no exception escaped
+
+
+# -- stop(): cancel the remote job too -----------------------------------------
+
+
+def test_stop_cancels_remote_job_when_id_known(tmp_path: Path) -> None:
+    runner = _runner(tmp_path)
+    runner._hf_job_id = "jb_99"
+    api = MagicMock()
+    with patch("lelab.runners.hf_cloud.shared_hf_api", return_value=api):
+        runner.stop()
+    api.cancel_job.assert_called_once_with(job_id="jb_99")
+
+
+def test_stop_without_id_does_not_cancel(tmp_path: Path) -> None:
+    """Before the submission marker is parsed there is no id; stop() must not
+    call cancel_job (killing only the local tail would leave the pod running,
+    but there is nothing we can cancel yet) and must not raise."""
+    runner = _runner(tmp_path)
+    assert runner.hf_job_id() is None
+    api = MagicMock()
+    with patch("lelab.runners.hf_cloud.shared_hf_api", return_value=api):
+        runner.stop()
+    api.cancel_job.assert_not_called()
+
+
+def test_stop_ignores_cancel_job_failure(tmp_path: Path) -> None:
+    """An already-finished job 404s on cancel; stop() must swallow it."""
+    runner = _runner(tmp_path)
+    runner._hf_job_id = "done"
+    api = MagicMock()
+    api.cancel_job.side_effect = RuntimeError("404 not found")
+    with patch("lelab.runners.hf_cloud.shared_hf_api", return_value=api):
+        runner.stop()  # must not raise
+
+
+# -- reattach liveness/returncode derived from the remote stage ----------------
+
+
+def test_reattach_stage_maps_to_liveness_and_returncode(tmp_path: Path) -> None:
+    """On the reattach path, inspect_job's stage is authoritative: non-terminal
+    → running/None; COMPLETED → done/0; ERROR or CANCELED → done/1."""
+    runner = _runner(tmp_path)
+    runner._reattached_job_id = "jb_1"  # force the reattach branch
+    api = MagicMock()
+
+    with patch("lelab.runners.hf_cloud.shared_hf_api", return_value=api):
+        runner._stage_fetched_at = 0.0
+        api.inspect_job.return_value = _stage_info("RUNNING")
+        assert runner.is_running() is True
+        runner._stage_fetched_at = 0.0
+        assert runner.returncode() is None
+
+        runner._stage_fetched_at = 0.0
+        api.inspect_job.return_value = _stage_info("COMPLETED")
+        assert runner.is_running() is False
+        runner._stage_fetched_at = 0.0
+        assert runner.returncode() == 0
+
+        for bad in ("ERROR", "CANCELED"):
+            runner._stage_fetched_at = 0.0
+            api.inspect_job.return_value = _stage_info(bad)
+            assert runner.is_running() is False
+            runner._stage_fetched_at = 0.0
+            assert runner.returncode() == 1
+
+
+def test_reattach_stage_poll_is_throttled(tmp_path: Path) -> None:
+    """inspect_job is cached for the poll interval so the ~1Hz watchdog calling
+    is_running()/returncode() repeatedly doesn't hammer the /jobs API."""
+    runner = _runner(tmp_path)
+    runner._reattached_job_id = "jb_1"
+    api = MagicMock()
+    api.inspect_job.return_value = _stage_info("RUNNING")
+    with patch("lelab.runners.hf_cloud.shared_hf_api", return_value=api):
+        runner.is_running()
+        runner.is_running()
+        runner.returncode()
+    api.inspect_job.assert_called_once()  # subsequent calls hit the TTL cache
+
+
+def test_reattach_handles_jobstage_enum(tmp_path: Path) -> None:
+    """huggingface_hub may return status.stage as a JobStage enum rather than a
+    str. _remote_stage must unwrap `.value`; otherwise str(enum).upper() yields
+    'JOBSTAGE.COMPLETED', never matches a terminal stage, and the reattached job
+    is stranded as 'running' forever."""
+    from enum import Enum
+
+    class _JobStage(Enum):
+        COMPLETED = "COMPLETED"
+
+    runner = _runner(tmp_path)
+    runner._reattached_job_id = "jb_1"
+    api = MagicMock()
+    info = MagicMock()
+    info.status.stage = _JobStage.COMPLETED
+    api.inspect_job.return_value = info
+    with patch("lelab.runners.hf_cloud.shared_hf_api", return_value=api):
+        assert runner.is_running() is False
+        runner._stage_fetched_at = 0.0
+        assert runner.returncode() == 0

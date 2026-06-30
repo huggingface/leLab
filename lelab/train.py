@@ -19,8 +19,12 @@ lives in app/jobs.py.
 """
 
 import re
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from lelab.jobs import JobTarget
 
 _SLUG_RE = re.compile(r"[^a-zA-Z0-9._-]+")
 
@@ -44,7 +48,7 @@ class TrainingRequest(BaseModel):
     # Logging and checkpointing
     log_freq: int = 250
     save_freq: int = 1000
-    eval_freq: int = 0
+    env_eval_freq: int = 0
     save_checkpoint: bool = True
 
     # Output configuration
@@ -87,7 +91,10 @@ class TrainingRequest(BaseModel):
 
 
 def build_training_command(
-    request: TrainingRequest, output_dir: str, python_executable: str = "python"
+    request: TrainingRequest,
+    output_dir: str,
+    python_executable: str = "python",
+    job_target: "JobTarget | None" = None,
 ) -> list[str]:
     """Build the argv list to invoke `<python_executable> -m lerobot.scripts.lerobot_train`.
 
@@ -126,20 +133,28 @@ def build_training_command(
     if request.policy_device:
         cmd.extend(["--policy.device", request.policy_device])
     cmd.extend(["--policy.use_amp", "true" if request.policy_use_amp else "false"])
+    # On HF Cloud, lerobot's submit_to_hf owns the model repo and sets push_to_hub on
+    # the pod itself; _pod_forwarded_args drops any --policy.push_to_hub/--policy.repo_id
+    # we'd pass, so we must not emit them. Local runs keep the existing behavior:
     # LeRobot defaults push_to_hub=True and demands --policy.repo_id when so.
-    # Local jobs keep it off; HF Cloud jobs flip it on via the runner.
-    cmd.extend(["--policy.push_to_hub", "true" if request.policy_push_to_hub else "false"])
-    if request.policy_push_to_hub and request.policy_repo_id:
-        cmd.extend(["--policy.repo_id", request.policy_repo_id])
+    is_cloud = job_target is not None and job_target.runner == "hf_cloud"
+    if not is_cloud:
+        cmd.extend(["--policy.push_to_hub", "true" if request.policy_push_to_hub else "false"])
+        if request.policy_push_to_hub and request.policy_repo_id:
+            cmd.extend(["--policy.repo_id", request.policy_repo_id])
 
     # Logging / checkpointing
     cmd.extend(["--log_freq", str(request.log_freq)])
     cmd.extend(["--save_freq", str(request.save_freq)])
-    cmd.extend(["--eval_freq", str(request.eval_freq)])
+    cmd.extend(["--env_eval_freq", str(request.env_eval_freq)])
     cmd.extend(["--save_checkpoint", "true" if request.save_checkpoint else "false"])
 
-    # Output
-    cmd.extend(["--output_dir", output_dir])
+    # Output. On HF Cloud the pod, not this host, runs the trainer: an absolute host
+    # output_dir (e.g. ~/.cache/.../outputs/train) is baked into the staged config and
+    # the pod crashes trying to mkdir it under /Users. Checkpoints land on the Hub repo
+    # anyway, so we omit it for cloud and let lerobot pick its in-pod default.
+    if not is_cloud:
+        cmd.extend(["--output_dir", output_dir])
     cmd.extend(["--resume", "true" if request.resume else "false"])
     if request.job_name:
         cmd.extend(["--job_name", request.job_name])
@@ -184,5 +199,19 @@ def build_training_command(
     cmd.extend(["--use_policy_training_preset", "true" if request.use_policy_training_preset else "false"])
     if request.config_path:
         cmd.extend(["--config_path", request.config_path])
+
+    # HF Jobs: --job.target=<flavor> dispatches the run remotely (lerobot commit #3856).
+    # Image/timeout use lerobot's JobConfig defaults. lelab tags its jobs; lerobot always
+    # adds a "lerobot" tag too. A pod's local checkpoints die with it, so push each one to
+    # the model repo's checkpoints/<step>/ tree (the native replacement for lelab's old
+    # in-pod uploader) — that's what makes the trained checkpoints reachable afterwards.
+    if is_cloud and job_target.flavor:
+        cmd.extend(["--job.target", job_target.flavor])
+        cmd.extend(["--job.tags", '["lelab"]'])
+        # save_checkpoint_to_hub needs policy.repo_id, which submit_to_hf only sets on the
+        # fresh-run path; on a resume it isn't set before validate(), so the flag would
+        # abort the submit. A resume already pushes back to its source repo, so skip it.
+        if request.save_checkpoint and not request.resume:
+            cmd.extend(["--save_checkpoint_to_hub", "true"])
 
     return cmd

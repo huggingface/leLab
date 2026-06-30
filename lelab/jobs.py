@@ -30,7 +30,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import datetime
 from pathlib import Path
 from queue import Empty, Queue
@@ -208,11 +208,14 @@ def parse_metrics_into(line: str, metrics: TrainingMetrics) -> None:
         logger.debug("Error parsing log line %r: %s", line, exc)
 
 
-class LocalJobRunner:
-    """Run a training as a local subprocess.
+class SubprocessJobRunner:
+    """Spawn a subprocess and pump its stdout into a log file + in-memory queue.
 
-    The runner is single-shot: instantiate a fresh one per job. Lifetime of
-    the underlying subprocess is bounded by this object's existence in memory.
+    The shared engine behind both LocalJobRunner (which runs `lerobot-train`
+    directly) and HfCloudJobRunner (which runs `lerobot-train --job.target=...`,
+    a local process that submits the job and streams the remote logs to its own
+    stdout). Subclasses override `_on_line` to inspect each stdout line for
+    runner-specific markers (e.g. the HF job id / page URL).
     """
 
     def __init__(
@@ -229,26 +232,20 @@ class LocalJobRunner:
         self._log_file = None  # type: ignore[assignment]
         self._wandb_run_url: str | None = None
 
-    def start(
-        self,
-        job_id: str,
-        config: TrainingRequest,
-        output_dir: str,
-    ) -> None:
-        if self._process is not None:
-            raise RuntimeError("LocalJobRunner already started")
-
-        # Build the command via the helper that lives in train.py.
-        from .train import build_training_command  # avoid import cycle at module load
-
-        cmd = build_training_command(config, output_dir, sys.executable)
-        logger.info("Starting job %s: %s", job_id, " ".join(cmd))
-
-        # Open the persistent log sink (one JSON line per stdout line). Held
-        # open for the subprocess's lifetime so we don't reopen per write.
+    def _open_log_file(self) -> None:
+        """Open the persistent log sink (one JSON line per consumed line).
+        Held open for the consumer thread's lifetime so we don't reopen per
+        write; _consume_lines closes it when its iterator is exhausted."""
         if self._log_file_path is not None:
             self._log_file_path.parent.mkdir(parents=True, exist_ok=True)
             self._log_file = self._log_file_path.open("a", buffering=1)
+
+    def _spawn(self, cmd: list[str], thread_name: str) -> None:
+        """Open the log sink, launch `cmd`, and start the stdout pump thread."""
+        if self._process is not None:
+            raise RuntimeError(f"{type(self).__name__} already started")
+
+        self._open_log_file()
 
         # PYTHONUNBUFFERED makes the child's stdout flush per line. Without it
         # block-buffering hides log lines from our parser for many seconds.
@@ -259,7 +256,7 @@ class LocalJobRunner:
         # group. Without it, signals sent to the uvicorn worker (e.g. when
         # --reload restarts it on a .py file change) cascade to the child
         # and kill the training. With it, the child survives reloads; the
-        # next worker re-attaches via TailingJobRunner using job.json's pid.
+        # next worker re-attaches via the reattach path.
         self._process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -270,9 +267,7 @@ class LocalJobRunner:
             start_new_session=True,
         )
 
-        self._monitor_thread = threading.Thread(
-            target=self._pump_stdout, name=f"job-{job_id}-stdout", daemon=True
-        )
+        self._monitor_thread = threading.Thread(target=self._pump_stdout, name=thread_name, daemon=True)
         self._monitor_thread.start()
 
     def pid(self) -> int | None:
@@ -316,10 +311,17 @@ class LocalJobRunner:
 
     # -- internals --
 
-    def _pump_stdout(self) -> None:
-        assert self._process is not None
+    def _on_line(self, line: str) -> None:
+        """Hook for subclasses to inspect each stdout line. Default: no-op."""
+
+    def _consume_lines(self, lines: Iterable[str]) -> None:
+        """Drive each text line through the metric/marker parse + log.jsonl
+        append + in-memory queue. Source-agnostic: a subprocess's stdout
+        (LocalJobRunner) or a remote log stream iterator (cloud reattach) feed
+        the same pipeline. Closes the log file when the iterator is exhausted.
+        """
         try:
-            for line in iter(self._process.stdout.readline, ""):
+            for line in lines:
                 if self._stop_event.is_set():
                     break
                 stripped = line.rstrip()
@@ -330,24 +332,50 @@ class LocalJobRunner:
                     url = extract_wandb_run_url(stripped)
                     if url is not None:
                         self._wandb_run_url = url
+                self._on_line(stripped)
                 log_line = LogLine(timestamp=time.time(), message=stripped)
                 if self._log_file is not None:
                     try:
                         self._log_file.write(log_line.model_dump_json() + "\n")
                     except Exception as exc:  # pragma: no cover — best-effort persist
                         logger.exception("Error writing to log file: %s", exc)
-                # Cap queue so a chatty subprocess can't grow memory unbounded.
+                # Cap queue so a chatty source can't grow memory unbounded.
                 if self._log_queue.qsize() >= 1000:
                     with contextlib.suppress(Empty):
                         self._log_queue.get_nowait()
                 self._log_queue.put(log_line)
         except Exception as exc:
-            logger.exception("Error reading subprocess stdout: %s", exc)
+            logger.exception("Error consuming log lines: %s", exc)
         finally:
             if self._log_file is not None:
                 with contextlib.suppress(Exception):
                     self._log_file.close()
                 self._log_file = None
+
+    def _pump_stdout(self) -> None:
+        assert self._process is not None
+        self._consume_lines(iter(self._process.stdout.readline, ""))
+
+
+class LocalJobRunner(SubprocessJobRunner):
+    """Run a training as a local subprocess.
+
+    The runner is single-shot: instantiate a fresh one per job. Lifetime of
+    the underlying subprocess is bounded by this object's existence in memory.
+    """
+
+    def start(
+        self,
+        job_id: str,
+        config: TrainingRequest,
+        output_dir: str,
+    ) -> None:
+        # Build the command via the helper that lives in train.py.
+        from .train import build_training_command  # avoid import cycle at module load
+
+        cmd = build_training_command(config, output_dir, sys.executable)
+        logger.info("Starting job %s: %s", job_id, " ".join(cmd))
+        self._spawn(cmd, thread_name=f"job-{job_id}-stdout")
 
 
 class TailingJobRunner:
@@ -549,17 +577,6 @@ def _list_imported_hub(api, repo_id: str) -> list[JobCheckpoint]:
     if "config.json" in files:
         return [JobCheckpoint(step=0, source="hub", ref=f"{repo_id}@root")]
     return []
-
-
-def _list_hub_checkpoints(api, repo_id: str) -> list[JobCheckpoint]:
-    """List checkpoints by introspecting the model repo file tree."""
-    try:
-        files = api.list_repo_files(repo_id, repo_type="model")
-    except Exception:
-        # Repo may not exist yet (training just started, sidecar hasn't
-        # uploaded anything). Treat as no checkpoints.
-        return []
-    return _hub_checkpoints_from_files(files, repo_id)
 
 
 _LANGUAGE_CONDITIONED_POLICY_TYPES = {"smolvla", "pi0", "pi0_fast", "pi05"}
@@ -829,15 +846,12 @@ class JobRegistry:
                 self._persist(record, force=True)
                 raise
 
-            # Capture runner-specific identifiers.
+            # Capture runner-specific identifiers. For cloud jobs the HF job id
+            # / page URL / model repo are printed by lerobot's submit_to_hf and
+            # only appear in stdout a few seconds after start, so they're None
+            # here; the watchdog (_tick) parses and persists them once they land.
             if target.runner == "local":
                 record.process_pid = runner.pid()
-            else:
-                record.hf_job_id = runner.hf_job_id()
-                record.hf_job_url = runner.hf_job_url()
-                # config was mutated by HfCloudJobRunner.start to set
-                # policy_repo_id; mirror it onto the record for the UI.
-                record.hf_repo_id = config.policy_repo_id
 
             self._persist(record, force=True)
             self._runners[job_id] = runner
@@ -1003,10 +1017,13 @@ class JobRegistry:
     def _checkpoints_for(self, record: JobRecord) -> builtins.list[JobCheckpoint]:
         if record.runner == "imported":
             if record.hf_repo_id:
-                return self._list_cloud_cached(record.hf_repo_id, _list_imported_hub)
+                return self._list_cloud_cached(record.hf_repo_id)
             return _list_imported_local(record.output_dir)
         if record.runner == "local":
             return _list_local_checkpoints(record.output_dir)
+        # Cloud: _list_imported_hub prefers the checkpoints/<step>/ tree (pushed when
+        # save_checkpoint_to_hub is on) and falls back to the final model at the repo
+        # root, so a finished run is always reachable even with no per-step tree.
         return self._list_cloud_cached(record.hf_repo_id)
 
     def list_checkpoints(self, job_id: str) -> builtins.list[JobCheckpoint]:
@@ -1021,12 +1038,10 @@ class JobRegistry:
             raise JobNotFoundError(job_id)
         return self._checkpoints_for(record)
 
-    def _list_cloud_cached(
-        self, repo_id: str | None, fetch=_list_hub_checkpoints
-    ) -> builtins.list[JobCheckpoint]:
-        """30s-TTL cache over a hub checkpoint listing. `fetch(api, repo_id)`
-        defaults to the training-job tree scan; imported hub models pass
-        `_list_imported_hub` so they share the same cache + rate-limit budget."""
+    def _list_cloud_cached(self, repo_id: str | None) -> builtins.list[JobCheckpoint]:
+        """30s-TTL cache over the hub checkpoint listing (`_list_imported_hub`:
+        the checkpoints/<step>/ tree, else the root model). All hub listings —
+        cloud-trained and imported alike — share this cache + rate-limit budget."""
         if not repo_id:
             return []
         now = time.time()
@@ -1035,7 +1050,7 @@ class JobRegistry:
             return cached[1]
         from .utils.hf_auth import shared_hf_api  # lazy: keeps unit-test imports cheap
 
-        result = fetch(shared_hf_api(), repo_id)
+        result = _list_imported_hub(shared_hf_api(), repo_id)
         self._cloud_ckpt_cache[repo_id] = (now + _CLOUD_CKPT_TTL_SECONDS, result)
         return result
 
@@ -1188,6 +1203,10 @@ class JobRegistry:
                         with self._lock:
                             record.wandb_run_url = url
                         self._persist(record, force=True)
+                # Cloud jobs print their HF job id / page URL / model repo a few
+                # seconds after start; capture them onto the record once parsed.
+                if record.runner == "hf_cloud":
+                    self._sync_cloud_ids(record, runner)
                 # Persist metric snapshot at most once per second.
                 self._persist(record, force=False)
                 progress_snapshots.append(
@@ -1202,6 +1221,10 @@ class JobRegistry:
                 continue
 
             # Subprocess exited since the last tick. Finalise.
+            # Capture any cloud ids printed right before exit (e.g. a job that
+            # submitted then failed fast) so checkpoint listing has the repo id.
+            if record.runner == "hf_cloud":
+                self._sync_cloud_ids(record, runner)
             rc = runner.returncode()
             with self._lock:
                 if record.wandb_run_url is None:
@@ -1210,21 +1233,30 @@ class JobRegistry:
                 record.ended_at = time.time()
                 record.exit_code = rc
                 if rc != 0 and record.error_message is None:
-                    # Prefer a runner-supplied reason (e.g. HF Jobs'
-                    # 'Job timeout') over the synthetic exit-code message.
-                    reason = None
-                    get_message = getattr(runner, "terminal_message", None)
-                    if callable(get_message):
-                        try:
-                            reason = get_message()
-                        except Exception:
-                            reason = None
-                    record.error_message = reason or f"Subprocess exited with code {rc}"
+                    record.error_message = f"Job exited with code {rc}"
                 self._runners.pop(jid, None)
             self._persist(record, force=True)
             self._notify_change()
 
         self._notify_progress(progress_snapshots)
+
+    def _sync_cloud_ids(self, record: JobRecord, runner: JobRunner) -> None:
+        """Copy HF job id / page URL / model repo from a cloud runner onto the
+        record once lerobot's submit_to_hf has printed them. Persists on first
+        appearance so the ids survive a uvicorn --reload (which drives reattach).
+        """
+        changed = False
+        for attr in ("hf_job_id", "hf_job_url", "hf_repo_id"):
+            if getattr(record, attr) is not None:
+                continue
+            getter = getattr(runner, attr, None)
+            value = getter() if callable(getter) else None
+            if value is not None:
+                with self._lock:
+                    setattr(record, attr, value)
+                changed = True
+        if changed:
+            self._persist(record, force=True)
 
     def _persist(self, record: JobRecord, force: bool) -> None:
         now = time.time()
@@ -1262,6 +1294,7 @@ __all__ = [
     "JobCheckpoint",
     "MetricsHistoryPoint",
     "JobRunner",
+    "SubprocessJobRunner",
     "LocalJobRunner",
     "JobRegistry",
     "JobAlreadyRunningError",
