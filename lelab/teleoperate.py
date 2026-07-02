@@ -24,6 +24,7 @@ from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
 from lerobot.teleoperators.so_leader import SO101Leader, SO101LeaderConfig
 
 from .utils.config import setup_calibration_files
+from .utils.devices import safe_disconnect_device
 
 logger = logging.getLogger(__name__)
 
@@ -128,12 +129,7 @@ def _safe_disconnect(device) -> None:
     Used on the connection-failure cleanup path so one device's failure can't
     leave the other holding its serial port open.
     """
-    if device is None:
-        return
-    try:
-        device.disconnect()
-    except Exception as e:
-        logger.warning(f"Error disconnecting device during cleanup: {e}")
+    safe_disconnect_device(device, logger)
 
 
 def handle_start_teleoperation(request: TeleoperateRequest, websocket_manager=None) -> dict[str, Any]:
