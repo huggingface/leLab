@@ -275,6 +275,9 @@ def test_classify_outcome_ok_warns_and_fails() -> None:
     # Never started, or an unrelated error => a real failure.
     assert _classify_outcome(1, False, "overload") == "failed"
     assert _classify_outcome(1, True, "could not connect to the arm") == "failed"
+    # A connection lost mid-run (cable bumped while the policy is driving)
+    # is a real failure, not a shutdown/cleanup warning.
+    assert _classify_outcome(1, True, "DeviceNotConnectedError: follower is not connected") == "failed"
 
 
 def test_friendly_hint_maps_common_failures() -> None:

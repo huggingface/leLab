@@ -164,11 +164,14 @@ def _extract_error_from_log(log_path: str | None) -> str | None:
     if not log_path:
         return None
     try:
-        with open(log_path, encoding="utf-8", errors="replace") as fh:
-            lines = fh.readlines()
+        # Only the tail matters; avoid materializing a multi-MB verbose log.
+        with open(log_path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - 64 * 1024))
+            data = fh.read()
     except OSError:
         return None
-    tail = [ln.rstrip("\n") for ln in lines[-50:]]
+    tail = data.decode("utf-8", errors="replace").splitlines()[-50:]
     # Prefer the last exception line + everything after it (the message body).
     exc_idx = next((i for i in range(len(tail) - 1, -1, -1) if _EXC_LINE_RE.match(tail[i])), None)
     if exc_idx is not None:
@@ -212,8 +215,9 @@ def _friendly_hint(error_text: str | None) -> str | None:
 
 
 # Errors that mean the policy actually ran and only shutdown/cleanup tripped —
-# e.g. disabling torque on a gripper still holding an object.
-_CLEANUP_MARKERS = ("overload", "torque_enable", "disconnect", "not connected")
+# e.g. disabling torque on a gripper still holding an object. Connection-loss
+# errors are deliberately excluded: a mid-run disconnect is a real failure.
+_CLEANUP_MARKERS = ("overload", "torque_enable")
 
 
 def _classify_outcome(rc: int | None, rollout_started: bool, error_text: str | None) -> str:
