@@ -28,7 +28,11 @@ import {
   Circle,
   Camera,
   ShieldQuestion,
+<<<<<<< HEAD
   ChevronRight,
+=======
+  Save,
+>>>>>>> f04f9b9 (fix(calibration): add explicit "Save port" button (#53))
 } from "lucide-react";
 import {
   Collapsible,
@@ -455,11 +459,13 @@ const Calibration = () => {
   // re-detected USB port (which shuffles on reboot/reconnect) sticks without
   // needing a full re-calibration. Mirrors the camera write-back above.
   const persistPort = useCallback(
-    async (nextPort: string) => {
-      if (!robotName || !nextPort) return;
+    async (
+      nextPort: string
+    ): Promise<"saved" | "unchanged" | "skipped" | "error"> => {
+      if (!robotName || !nextPort) return "skipped";
       const field = deviceType === "robot" ? "follower_port" : "leader_port";
       // Skip redundant writes when the value already matches the record.
-      if (robot && robot[field] === nextPort) return;
+      if (robot && robot[field] === nextPort) return "unchanged";
       try {
         const res = await fetchWithHeaders(
           `${baseUrl}/robots/${encodeURIComponent(robotName)}`,
@@ -469,10 +475,16 @@ const Calibration = () => {
             body: JSON.stringify({ [field]: nextPort }),
           }
         );
+        if (!res.ok) {
+          console.error("Failed to save port to robot record: HTTP", res.status);
+          return "error";
+        }
         const data = await res.json();
         if (data.robot) setRobot(data.robot);
+        return "saved";
       } catch (e) {
         console.error("Failed to save port to robot record:", e);
+        return "error";
       }
     },
     [robotName, deviceType, robot, baseUrl, fetchWithHeaders]
@@ -536,6 +548,45 @@ const Calibration = () => {
     setPort(detectedPort);
     persistPort(detectedPort);
   };
+
+  // Explicit "Save port" affordance. The port also autosaves on blur, but users
+  // expect a visible button + confirmation (issue #53) — especially when a
+  // reconnect shuffles the serial port and they want to update it WITHOUT
+  // redoing the whole calibration.
+  const handleSavePort = useCallback(async () => {
+    if (!robotName) {
+      toast({
+        title: "No robot selected",
+        description:
+          "Open Calibration from a robot's gear icon on the Landing page.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!port) {
+      toast({
+        title: "Missing port",
+        description: "Enter or detect a serial port first.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const result = await persistPort(port);
+    const side = deviceType === "robot" ? "follower" : "leader";
+    if (result === "saved" || result === "unchanged") {
+      toast({
+        title: "Port saved",
+        description: `Saved ${port} for the ${side} — no recalibration needed.`,
+      });
+    } else if (result === "error") {
+      toast({
+        title: "Failed to save port",
+        description:
+          "Could not save the port to this robot. Check the backend and try again.",
+        variant: "destructive",
+      });
+    }
+  }, [robotName, port, deviceType, persistPort, toast]);
 
   const getStatusDisplay = () => {
     switch (calibrationStatus.status) {
@@ -672,7 +723,22 @@ const Calibration = () => {
                     robotType={deviceType === "robot" ? "follower" : "leader"}
                     className="border-slate-600 hover:border-blue-500 text-slate-400 hover:text-blue-400 bg-slate-700 hover:bg-slate-600"
                   />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleSavePort}
+                    disabled={!robotName || !port}
+                    title="Save this port to the robot without recalibrating"
+                    className="border-slate-600 hover:border-green-500 text-slate-400 hover:text-green-400 bg-slate-700 hover:bg-slate-600"
+                  >
+                    <Save className="w-4 h-4 mr-2" />
+                    Save
+                  </Button>
                 </div>
+                <p className="text-xs text-slate-500">
+                  Serial ports can change when the arm reconnects. Update the port
+                  and click Save — no need to recalibrate.
+                </p>
               </div>
 
               <Separator className="bg-slate-700" />
