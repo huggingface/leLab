@@ -278,7 +278,7 @@ def test_dev_launcher_builds_expected_subprocess_commands(
     monkeypatch.setattr(launcher, "_ensure_frontend_deps", lambda: None)
     monkeypatch.setattr(launcher, "_wait_for_port", lambda _port, timeout=30: True)
     monkeypatch.setattr(launcher, "_start_process", fake_start_process)
-    monkeypatch.setattr(launcher, "_install_signal_handlers", lambda _processes: None)
+    monkeypatch.setattr(launcher, "_install_signal_handlers", lambda: None)
     monkeypatch.setattr(launcher, "_monitor_processes", stop_after_start)
     monkeypatch.setattr(launcher.webbrowser, "open", browser_open)
 

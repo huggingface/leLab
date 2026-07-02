@@ -36,6 +36,7 @@ import time
 import webbrowser
 from collections.abc import Sequence
 from pathlib import Path
+from typing import NoReturn
 
 import psutil
 import uvicorn
@@ -52,7 +53,7 @@ BACKEND_PORT = 8000
 FRONTEND_DEV_PORT = 8080
 
 
-def _fail(message: str) -> None:
+def _fail(message: str) -> NoReturn:
     logger.error(message)
     raise SystemExit(1)
 
@@ -148,7 +149,6 @@ def _require_command(command: str) -> str:
         f"`{command}` was not found on PATH. Install Node.js LTS from https://nodejs.org/, "
         "restart your terminal, then run LeLab again."
     )
-    raise AssertionError("unreachable")
 
 
 def _resolve_command(command: str) -> str | None:
@@ -163,7 +163,9 @@ def _resolve_command(command: str) -> str | None:
 def _ensure_frontend_path() -> None:
     if FRONTEND_PATH.exists():
         return
-    _fail(f"Frontend source not found at {FRONTEND_PATH}. Run LeLab from a complete checkout or reinstall it.")
+    _fail(
+        f"Frontend source not found at {FRONTEND_PATH}. Run LeLab from a complete checkout or reinstall it."
+    )
 
 
 def _ensure_frontend_dist() -> None:
@@ -243,7 +245,6 @@ def _start_process(
         return subprocess.Popen(resolved_command, **_child_process_kwargs(cwd, env))
     except FileNotFoundError as exc:
         _fail(f"Could not start {name}: {exc}. Check that `{command[0]}` is installed and on PATH.")
-    raise AssertionError("unreachable")
 
 
 def _terminate_tree(pid: int, timeout: int = 5) -> None:
@@ -308,10 +309,11 @@ def _open_browser_when_ready(port: int, no_open: bool) -> None:
         time.sleep(0.5)
 
 
-def _install_signal_handlers(processes: Sequence[tuple[str, subprocess.Popen]]) -> None:
+def _install_signal_handlers() -> None:
+    # Teardown of the child processes is owned by _run_dev's
+    # `except BaseException` — the handler only needs to unwind.
     def shutdown(_signum, _frame) -> None:
         logger.info("Shutting down LeLab...")
-        _shutdown_processes(processes)
         raise SystemExit(0)
 
     signal.signal(signal.SIGINT, shutdown)
@@ -325,8 +327,7 @@ def _monitor_processes(processes: Sequence[tuple[str, subprocess.Popen]]) -> Non
             returncode = process.poll()
             if returncode is not None:
                 logger.error("%s stopped with exit code %s.", name, returncode)
-                _shutdown_processes(processes)
-                raise SystemExit(returncode or 1)
+                raise SystemExit(returncode)
 
 
 def _run_prod(*, no_open: bool = False, rebuild: bool = False) -> None:
@@ -345,30 +346,35 @@ def _run_prod(*, no_open: bool = False, rebuild: bool = False) -> None:
         port=BACKEND_PORT,
         log_level="info",
         reload=False,
+        timeout_graceful_shutdown=2,
     )
     server = uvicorn.Server(config)
-    # On Windows, uvicorn's graceful shutdown frequently hangs on Ctrl+C (the
-    # asyncio Proactor loop doesn't wind down cleanly), leaving the terminal
-    # stuck. Take over signal handling: stop hard and reap any child
-    # subprocesses (training/recording/inference) so the prompt always returns.
-    server.install_signal_handlers = lambda: None
 
-    def _shutdown(_signum, _frame) -> None:
-        logger.info("Shutting down LeLab...")
-        try:
-            for child in psutil.Process().children(recursive=True):
-                with contextlib.suppress(psutil.NoSuchProcess):
-                    child.terminate()
-        except Exception:
-            pass
-        os._exit(0)
+    if os.name == "nt":
+        # On Windows, uvicorn's graceful shutdown frequently hangs on Ctrl+C
+        # (the asyncio Proactor loop doesn't wind down cleanly), leaving the
+        # terminal stuck. Take over signal handling: stop hard and reap any
+        # child subprocesses (training/recording/inference) so the prompt
+        # always returns. On other platforms uvicorn's native handlers give
+        # us the graceful shutdown above, so leave them in place.
+        server.install_signal_handlers = lambda: None
 
-    signal.signal(signal.SIGINT, _shutdown)
-    for _name in ("SIGTERM", "SIGBREAK"):
-        _sig = getattr(signal, _name, None)
-        if _sig is not None:
-            with contextlib.suppress(ValueError, OSError):
-                signal.signal(_sig, _shutdown)
+        def _shutdown(_signum, _frame) -> None:
+            logger.info("Shutting down LeLab...")
+            try:
+                for child in psutil.Process().children(recursive=True):
+                    with contextlib.suppress(psutil.NoSuchProcess):
+                        child.terminate()
+            except Exception:
+                pass
+            os._exit(0)
+
+        signal.signal(signal.SIGINT, _shutdown)
+        for _name in ("SIGTERM", "SIGBREAK"):
+            _sig = getattr(signal, _name, None)
+            if _sig is not None:
+                with contextlib.suppress(ValueError, OSError):
+                    signal.signal(_sig, _shutdown)
 
     server.run()
 
@@ -394,7 +400,9 @@ def _run_dev(*, no_open: bool = False) -> None:
         processes.append(("frontend", frontend_process))
         if not _wait_for_port(FRONTEND_DEV_PORT):
             if frontend_process.poll() is not None:
-                _fail(f"Frontend exited early with code {frontend_process.returncode}. Check the Vite output above.")
+                _fail(
+                    f"Frontend exited early with code {frontend_process.returncode}. Check the Vite output above."
+                )
             _fail(f"Frontend never became ready on http://localhost:{FRONTEND_DEV_PORT}.")
 
         backend_process = _start_process(
@@ -416,14 +424,16 @@ def _run_dev(*, no_open: bool = False) -> None:
         processes.append(("backend", backend_process))
         if not _wait_for_port(BACKEND_PORT, timeout=15):
             if backend_process.poll() is not None:
-                _fail(f"Backend exited early with code {backend_process.returncode}. Check the uvicorn output above.")
+                _fail(
+                    f"Backend exited early with code {backend_process.returncode}. Check the uvicorn output above."
+                )
             _fail(f"Backend never became ready on http://localhost:{BACKEND_PORT}.")
 
         _open_browser_url(frontend_url, no_open=no_open)
         logger.info("Dev mode running. Press Ctrl+C to stop.")
         logger.info("Frontend: http://localhost:%d", FRONTEND_DEV_PORT)
         logger.info("Backend:  http://localhost:%d", BACKEND_PORT)
-        _install_signal_handlers(processes)
+        _install_signal_handlers()
         _monitor_processes(processes)
     except BaseException:
         if processes:
