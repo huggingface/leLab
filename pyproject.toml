@@ -15,7 +15,7 @@ dependencies = [
     "websockets>=15.0.1",
     "uvicorn>=0.24.0",
     "psutil>=5.9.0",
-    "lerobot[core_scripts,feetech,training] @ git+https://github.com/huggingface/lerobot.git@5ac3b49a5fd25d9e570ea1de4e6a81c77d603bd3",
+    "lerobot[core_scripts,feetech,training] @ git+https://github.com/huggingface/lerobot.git@v0.6.0",
     # Windows-only: real DirectShow camera names for /available-cameras so the
     # frontend can match a camera to its browser deviceId (issues #12, #16).
     # Guarded by try/except at the call site, so its absence degrades gracefully.

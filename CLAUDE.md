@@ -16,7 +16,7 @@ Install (editable, requires Python ≥3.10):
 pip install -e .
 ```
 
-`lerobot` is pinned to a specific commit on `huggingface/lerobot` `main` (see [pyproject.toml](pyproject.toml)) — no PyPI release yet exposes the `lerobot-rollout` script that [lelab/rollout.py](lelab/rollout.py) shells out to. Bump the SHA when you want newer upstream changes; expect import-path drift (e.g. `lerobot.configs.dataset`, `lerobot.utils.feature_utils`, `lerobot.common.control_utils`) and adjust call sites accordingly.
+`lerobot` is pinned to a release tag on `huggingface/lerobot` (currently `v0.6.0`, see [pyproject.toml](pyproject.toml)) — installed from git rather than PyPI because the published wheels don't expose the `lerobot-rollout` script that [lelab/rollout.py](lelab/rollout.py) shells out to. Bump the tag when you want a newer upstream release; expect import-path drift (e.g. `lerobot.configs.dataset`, `lerobot.utils.feature_utils`, `lerobot.common.control_utils`) and adjust call sites accordingly.
 
 Run servers (entry point defined in [pyproject.toml](pyproject.toml)):
 
