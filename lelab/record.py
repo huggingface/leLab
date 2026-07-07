@@ -18,8 +18,10 @@ import shutil
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
+from huggingface_hub.errors import RepositoryNotFoundError
 from pydantic import BaseModel
 
 from lerobot.configs.dataset import DatasetRecordConfig
@@ -29,8 +31,10 @@ from lerobot.robots.so_follower import SO101FollowerConfig
 # Import the main record functionality to reuse it
 from lerobot.scripts.lerobot_record import RecordConfig
 from lerobot.teleoperators.so_leader import SO101LeaderConfig
+from lerobot.utils.constants import HF_LEROBOT_HOME
 
 from .utils.config import setup_calibration_files, with_lelab_tag
+from .utils.hf_auth import shared_hf_api
 
 logger = logging.getLogger(__name__)
 
@@ -308,7 +312,7 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
                     "robot_type": getattr(dataset.meta, "robot_type", "Unknown robot"),
                 }
             except Exception as e:
-                logger.exception("Recording session failed")
+                logger.exception(f"Recording session failed: {e}")
                 current_phase = "error"
                 if recording_start_time:
                     session_end_elapsed_seconds = int(time.time() - recording_start_time)
@@ -518,6 +522,47 @@ def handle_delete_dataset(request: DatasetInfoRequest) -> dict[str, Any]:
     return {"success": True, "message": f"Deleted {repo_id}"}
 
 
+_SYNC_PREFIXES = ("data/", "videos/", "meta/")
+
+
+def _local_manifest(root: Path) -> dict[str, int]:
+    manifest: dict[str, int] = {}
+    for prefix in _SYNC_PREFIXES:
+        base = root / prefix.rstrip("/")
+        if not base.is_dir():
+            continue
+        for path in base.rglob("*"):
+            if path.is_file():
+                manifest[path.relative_to(root).as_posix()] = path.stat().st_size
+    return manifest
+
+
+def handle_dataset_sync_status(request: DatasetInfoRequest) -> dict[str, Any]:
+    """Detect unsynced local changes by diffing the local file manifest against the Hub's."""
+    repo_id = request.dataset_repo_id
+    local_root = Path(HF_LEROBOT_HOME).resolve() / repo_id
+
+    if not local_root.exists():
+        return {"on_hub": False, "needs_sync": False, "local_files": 0, "hub_files": 0}
+
+    local = _local_manifest(local_root)
+
+    api = shared_hf_api()
+    try:
+        info = api.dataset_info(repo_id, files_metadata=True)
+    except RepositoryNotFoundError:
+        return {"on_hub": False, "needs_sync": True, "local_files": len(local), "hub_files": 0}
+
+    hub = {s.rfilename: s.size for s in info.siblings if s.rfilename.startswith(_SYNC_PREFIXES)}
+
+    return {
+        "on_hub": True,
+        "needs_sync": local != hub,
+        "local_files": len(local),
+        "hub_files": len(hub),
+    }
+
+
 def handle_upload_dataset(request: UploadRequest) -> dict[str, Any]:
     """Handle dataset upload to HuggingFace Hub"""
     try:
@@ -570,6 +615,7 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
     Implement recording with phase tracking - exactly mirrors original record() function behavior
     """
     import time
+    from pathlib import Path
 
     from lerobot.common.control_utils import (
         sanity_check_dataset_name,
@@ -580,6 +626,7 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
     from lerobot.robots import make_robot_from_config
     from lerobot.scripts.lerobot_record import record_loop
     from lerobot.teleoperators import make_teleoperator_from_config
+    from lerobot.utils.constants import HF_LEROBOT_HOME
     from lerobot.utils.feature_utils import hw_to_dataset_features
     from lerobot.utils.utils import log_say
 
@@ -596,9 +643,10 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
 
     if cfg.resume:
         num_cameras = len(robot.cameras) if hasattr(robot, "cameras") else 0
+        resume_root = Path(HF_LEROBOT_HOME) / cfg.dataset.repo_id
         dataset = LeRobotDataset.resume(
             cfg.dataset.repo_id,
-            root=cfg.dataset.root,
+            root=resume_root,
             batch_encoding_size=cfg.dataset.video_encoding_batch_size,
             rgb_encoder=cfg.dataset.rgb_encoder,
             depth_encoder=cfg.dataset.depth_encoder,

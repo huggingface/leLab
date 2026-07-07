@@ -53,6 +53,7 @@ from .record import (
     DatasetInfoRequest,
     RecordingRequest,
     UploadRequest,
+    handle_dataset_sync_status,
     handle_delete_dataset,
     handle_exit_early,
     handle_get_dataset_info,
@@ -471,6 +472,11 @@ def get_dataset_info(request: DatasetInfoRequest):
 def delete_dataset(request: DatasetInfoRequest):
     """Remove a recorded dataset directory from local disk."""
     return handle_delete_dataset(request)
+
+
+@app.post("/dataset-sync-status")
+def dataset_sync_status(request: DatasetInfoRequest):
+    return handle_dataset_sync_status(request)
 
 
 # ============================================================================
