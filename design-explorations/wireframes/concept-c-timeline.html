@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WIREFRAME Concept C - Mission timeline</title>
+<style>
+:root{--text:#333;--line:#999;--fill:#eee;--bg:#fff}
+*{box-sizing:border-box}
+body{margin:0;color:var(--text);background:var(--bg);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;line-height:1.35}
+button,input,select{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);min-height:34px;padding:6px 10px}
+button{cursor:pointer}.primary{background:var(--text);color:var(--bg);border-color:var(--text)}button:disabled{color:var(--line);background:var(--fill);cursor:default}
+.wire-nav{position:fixed;z-index:40;top:0;left:0;right:0;min-height:44px;display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--bg);border-bottom:1px solid var(--line);overflow-x:auto;white-space:nowrap}
+.wire-nav strong{margin-right:6px}.wire-nav button{min-height:28px;padding:3px 8px;background:var(--fill)}.wire-nav button.active{background:var(--text);color:var(--bg)}
+.app{min-height:100vh;padding-top:44px}.header{position:sticky;top:44px;z-index:20;display:flex;align-items:center;justify-content:space-between;gap:20px;height:58px;padding:0 28px;background:var(--bg);border-bottom:1px solid var(--line)}
+.brand{font-weight:700}.header-right{position:relative;display:flex;align-items:center;gap:8px}.robot-chip{display:inline-flex;align-items:center;gap:7px;min-width:150px;justify-content:center}
+.dot{display:inline-block;width:9px;height:9px;border:1px solid var(--text);border-radius:50%;background:var(--text);vertical-align:middle}.dot.open{background:var(--bg)}
+.panel,.card,.section-panel,.history{border:1px solid var(--line);background:var(--bg)}.robot-menu{position:absolute;top:42px;right:42px;width:320px;z-index:30;display:none}.show-dropdown .robot-menu,body[data-screen="robot-dropdown"] .robot-menu{display:block}
+.tabs{display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid var(--line)}.tab{padding:10px;text-align:center;background:var(--fill);border:0;border-right:1px solid var(--line);min-height:0}.tab:last-child{border-right:0}.tab.active{background:var(--bg);font-weight:700}
+.robot-row,.list-row{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line)}.robot-row:last-child,.list-row:last-child{border-bottom:0}.robot-menu-footer{padding:10px;border-top:1px solid var(--line)}
+.first-run,.main,.settings,.overlay,.dimmed{display:none}.first-run{min-height:calc(100vh - 44px);align-items:stretch}.first-run-card{width:min(760px,calc(100vw - 48px));margin:56px auto;padding:28px;border:1px solid var(--line);background:var(--bg)}
+h1{margin:0 0 10px;font-size:24px;letter-spacing:0}h2{margin:0;font-size:16px;letter-spacing:0}h3{margin:0 0 8px;font-size:15px;letter-spacing:0}.muted{color:var(--line)}
+.setup-grid,.grid-2,.settings-layout,.camera-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.field{display:grid;gap:6px;margin-bottom:12px}.field label{font-weight:700}
+.main,.settings{max-width:1120px;margin:0 auto;padding:28px 28px 80px}.page-title{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:22px}.page-title h1{font-size:26px}.page-title p{margin:6px 0 0;max-width:560px}
+.timeline{position:relative;display:grid;gap:14px;margin-left:18px}.timeline:before{content:"";position:absolute;top:28px;bottom:28px;left:16px;border-left:1px solid var(--line)}
+.section{position:relative;display:grid;grid-template-columns:34px 1fr;gap:14px}.number{z-index:1;width:34px;height:34px;display:grid;place-items:center;border:1px solid var(--line);background:var(--bg);font-weight:700}
+.section-head{display:grid;grid-template-columns:110px 1fr auto;align-items:center;gap:14px;padding:12px 14px;min-height:52px;cursor:pointer}.section-body{display:none;padding:14px;border-top:1px solid var(--line)}.section.expanded .section-body{display:block}.section.expanded .section-head{background:var(--fill)}
+.card{min-height:130px;padding:14px}.placeholder{min-height:120px;display:grid;place-items:center;border:1px dashed var(--line);background:var(--fill);text-align:center;padding:12px}.note{margin-top:14px;padding:10px 12px;border:1px dashed var(--line);background:var(--bg)}
+.history{margin-top:14px}.history-title{padding:9px 12px;background:var(--fill);border-bottom:1px solid var(--line);font-weight:700}.inline-log{margin-top:12px;display:grid;grid-template-columns:120px 1fr auto;gap:10px;align-items:center;padding:10px;border:1px solid var(--line);background:var(--fill)}.log-strip{height:20px;border:1px dashed var(--line);background:var(--bg)}
+.handoff{margin-bottom:14px;padding:14px;border:1px solid var(--line);background:var(--fill);display:flex;align-items:center;justify-content:space-between;gap:18px}.settings-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+.dimmed{position:fixed;z-index:45;top:44px;left:0;right:0;bottom:0;background:var(--fill);opacity:.85}.overlay{position:fixed;z-index:50;top:44px;left:0;right:0;bottom:0;background:var(--bg)}.overlay-card{min-height:calc(100vh - 44px);padding:28px;display:grid;grid-template-rows:auto 1fr auto;gap:18px}
+.live-grid{display:grid;grid-template-columns:2fr 1fr;gap:18px;min-height:0}.camera-grid .placeholder{min-height:280px}.live-sidebar{display:grid;gap:14px;align-content:start}.big-counter{padding:22px;border:1px solid var(--line);background:var(--fill);font-size:32px;text-align:center}.overlay-actions{display:flex;justify-content:space-between;gap:12px;border-top:1px solid var(--line);padding-top:14px}
+body[data-screen="first-run"] .first-run{display:flex}body[data-screen="first-run"] .header,body[data-screen="first-run"] .main,body[data-screen="first-run"] .settings{display:none}body:not([data-screen="first-run"]) .header{display:flex}
+body[data-screen="home"] .main,body[data-screen="robot-dropdown"] .main,body[data-screen="post-record"] .main,body[data-screen="train"] .main,body[data-screen="inference"] .main,body[data-screen="live-record"] .main,body[data-screen="live-inference"] .main{display:block}
+body[data-screen="robot-settings"] .settings{display:block}body[data-screen="robot-settings"] .main{display:none}body[data-screen="live-record"] .dimmed,body[data-screen="live-inference"] .dimmed,body[data-screen="live-record"] .overlay.record,body[data-screen="live-inference"] .overlay.infer-live{display:block}
+@media(max-width:780px){.header,.main,.settings,.overlay-card{padding-left:14px;padding-right:14px}.page-title,.setup-grid,.grid-2,.grid-3,.settings-layout,.live-grid,.camera-grid{grid-template-columns:1fr}.section-head{grid-template-columns:1fr}.robot-menu{right:0;width:min(320px,calc(100vw - 28px))}}
+</style>
+</head>
+<body data-screen="home">
+<nav class="wire-nav" aria-label="Wireframe screen switcher">
+  <strong>WIREFRAME Mission timeline — screen:</strong>
+  <button data-screen-button="first-run">first-run</button><button data-screen-button="home">home</button><button data-screen-button="robot-dropdown">robot-dropdown</button><button data-screen-button="robot-settings">robot-settings</button><button data-screen-button="live-record">live-record</button><button data-screen-button="post-record">post-record</button><button data-screen-button="train">train</button><button data-screen-button="inference">inference</button><button data-screen-button="live-inference">live-inference</button>
+</nav>
+<div class="app">
+  <section class="first-run" aria-label="First run robot setup">
+    <div class="first-run-card">
+      <h1>Robot setup required</h1>
+      <p>No robot config exists yet. Configure one robot before Collect, Train, or Deploy is reachable.</p>
+      <div class="setup-grid">
+        <div class="card"><h3>1. Choose mode</h3><div class="field"><label for="new-mode">Robot mode</label><select id="new-mode"><option>Single</option><option>Bimanual</option></select></div><div class="field"><label for="new-name">Config name</label><input id="new-name" value="arm-01"></div></div>
+        <div class="card"><h3>2. Identify hardware</h3><div class="grid-2"><button>Detect leader port</button><button>Detect follower port</button></div><p class="muted">Physical identify uses Detect (wiggle), then saves ports to RobotRecord.</p></div>
+        <div class="card"><h3>3. Calibration</h3><div class="field"><label for="new-cal">Calibration file</label><select id="new-cal"><option>arm-01-calibration.json</option><option>Calibrate now...</option></select></div></div>
+        <div class="card"><h3>4. Cameras and motor power</h3><div class="field"><label for="new-cams">Canonical camera config</label><select id="new-cams"><option>front + wrist</option></select></div><label><input type="checkbox" checked> Motor power enabled</label></div>
+      </div>
+      <p class="note">NOTE: This first-run state gates the product because robot config is the prerequisite.</p>
+      <button class="primary" data-go="home">Save robot config</button>
+    </div>
+  </section>
+
+  <header class="header">
+    <div class="brand">MakerLab</div>
+    <div class="header-right" id="robotControls">
+      <button class="robot-chip" id="robotChip"><span class="dot"></span> arm-01 ▾</button>
+      <button aria-label="Robot settings" data-go="robot-settings">⚙</button>
+      <div class="robot-menu panel">
+        <div class="tabs"><button class="tab active" data-mode-tab="single">Single</button><button class="tab" data-mode-tab="bimanual">Bimanual</button></div>
+        <div data-mode-panel="single">
+          <div class="robot-row"><span class="dot"></span><div><strong>arm-01</strong><br><span class="muted">ready · calibrated · active</span></div><button data-go="home">use</button></div>
+          <div class="robot-row"><span class="dot open"></span><div><strong>bench-arm</strong><br><span class="muted">needs setup</span></div><button disabled>needs setup</button></div>
+          <div class="robot-row"><span class="dot"></span><div><strong>mobile-arm</strong><br><span class="muted">ready · no camera</span></div><button data-go="home">use</button></div>
+        </div>
+        <div data-mode-panel="bimanual" hidden>
+          <div class="robot-row"><span class="dot"></span><div><strong>dual-station</strong><br><span class="muted">ready · calibrated</span></div><button data-go="home">use</button></div>
+          <div class="robot-row"><span class="dot open"></span><div><strong>bi-bench</strong><br><span class="muted">needs setup</span></div><button disabled>needs setup</button></div>
+        </div>
+        <div class="robot-menu-footer"><button>+ New config</button></div>
+      </div>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="page-title">
+      <div><h1>Mission timeline</h1><p>A living project checklist. The furthest incomplete section stays expanded; completed sections collapse into status lines.</p></div>
+      <button data-go="live-record">Start live record</button>
+    </div>
+    <div class="handoff" data-for-screen="post-record"><div><strong>Dataset pick-cube updated · +8 episodes · 32 total</strong><br>Handoff moment: collect just created enough new material for training.</div><button class="primary" data-go="train">Train on this dataset</button></div>
+    <section class="timeline" aria-label="Mission sections">
+      <article class="section" data-section="robot">
+        <div class="number">1</div><div class="section-panel">
+          <div class="section-head" data-toggle-section><h2>Robot</h2><div class="summary">● arm-01 · single · calibrated</div><button data-go="robot-settings">change</button></div>
+          <div class="section-body"><div class="grid-3"><div class="card"><h3>Mode</h3><p>Single arm</p></div><div class="card"><h3>Ports</h3><p>leader: tty.usbmodem14101<br>follower: tty.usbmodem14201</p></div><div class="card"><h3>Calibration</h3><p>arm-01-calibration.json</p></div></div><p class="note">NOTE: The header chip is for global hardware switching; this section repeats the same data as project status.</p></div>
+        </div>
+      </article>
+      <article class="section" data-section="collect">
+        <div class="number">2</div><div class="section-panel">
+          <div class="section-head" data-toggle-section><h2>Collect</h2><div class="summary">teleop ready · latest session added +8 episodes</div><button data-go="live-record">record</button></div>
+          <div class="section-body">
+            <div class="grid-2">
+              <div class="card"><h3>Teleoperate</h3><p>Practice on active robot. Nothing saved.</p><button data-go="live-record">Start teleop</button></div>
+              <div class="card"><h3>Record dataset</h3><div class="field"><label for="dataset-picker">Dataset</label><select id="dataset-picker"><option>pick-cube</option><option>+ New dataset</option></select></div><p>Episode target: 8 · cameras: front + wrist</p><button class="primary" data-go="live-record">Record episodes</button></div>
+            </div>
+            <div class="history"><div class="history-title">Session history</div><div class="list-row"><span>Jul 8</span><span>pick-cube · +8 episodes</span><button data-go="live-record">record more like this</button></div><div class="list-row"><span>Jul 7</span><span>pick-cube · +12 episodes</span><button data-go="live-record">record more like this</button></div><div class="list-row"><span>Jul 6</span><span>stack-blocks · +6 episodes</span><button data-go="live-record">record more like this</button></div></div>
+          </div>
+        </div>
+      </article>
+      <article class="section" data-section="dataset">
+        <div class="number">3</div><div class="section-panel">
+          <div class="section-head" data-toggle-section><h2>Dataset</h2><div class="summary" data-dataset-summary>pick-cube · 24 episodes</div><button>browse</button></div>
+          <div class="section-body"><div class="grid-2"><div class="card"><h3>pick-cube</h3><p data-dataset-count>24 episodes · front + wrist cameras · 2 sessions</p><button data-go="train">Train on this →</button></div><div class="card"><h3>Dataset rows</h3><p>⋯ menu includes replay, rename, export, delete.</p><div class="placeholder">Dataset browser placeholder</div></div></div></div>
+        </div>
+      </article>
+      <article class="section" data-section="train">
+        <div class="number">4</div><div class="section-panel">
+          <div class="section-head" data-toggle-section><h2>Train</h2><div class="summary">ACT · pick-cube · running epoch 14/40</div><button data-go="train">open</button></div>
+          <div class="section-body"><div class="grid-2"><div class="card"><h3>Training config</h3><div class="field"><label for="policy">Policy</label><select id="policy"><option>ACT</option><option>Diffusion Policy</option><option>TDMPC</option></select></div><div class="field"><label for="train-dataset">Dataset</label><select id="train-dataset"><option>pick-cube</option></select></div><button class="primary">Start training</button></div><div class="card"><h3>Running job</h3><div class="inline-log"><strong>job-1842</strong><div class="log-strip" aria-label="Inline training log strip"></div><span>epoch 14/40</span></div><p class="muted">Completed row will show: Model ready → Run it on arm-01.</p></div></div></div>
+        </div>
+      </article>
+      <article class="section" data-section="deploy">
+        <div class="number">5</div><div class="section-panel">
+          <div class="section-head" data-toggle-section><h2>Deploy</h2><div class="summary" data-deploy-summary>no model yet — finish a training run</div><button data-go="inference">open</button></div>
+          <div class="section-body"><div class="grid-2"><div class="card"><h3>Model picker</h3><div class="field"><label for="model-picker">Model</label><select id="model-picker"><option>pick-cube-act-1842</option><option>imported-stack-blocks</option></select></div><p>Target hardware: ● arm-01 from header chip.</p><button class="primary" data-go="live-inference">Run on active robot</button></div><div class="card"><h3>Inference monitor</h3><div class="placeholder">Run status, confidence, stop reason</div></div></div><p class="note">NOTE: Switching robot from the chip here re-targets inference to that hardware.</p></div>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <section class="settings" aria-label="Robot Settings">
+    <h1>Robot Settings</h1><p>Full settings surface. Save returns to the screen where the user opened settings.</p>
+    <div class="settings-layout">
+      <div class="card"><h3>Ports per arm</h3><div class="field"><label>Leader port</label><input value="tty.usbmodem14101"></div><div class="field"><label>Follower port</label><input value="tty.usbmodem14201"></div><button>Detect (wiggle)</button></div>
+      <div class="card"><h3>Calibration per arm</h3><div class="field"><label>Calibration file</label><select><option>arm-01-calibration.json</option><option>library/cal-2026-07-07.json</option></select></div><button>Calibrate now</button></div>
+      <div class="card"><h3>Cameras</h3><p>Single canonical camera config, reused by Collect, Train, and Deploy.</p><div class="placeholder">front camera · wrist camera</div></div>
+      <div class="card"><h3>Motor power</h3><label><input type="checkbox" checked> Enable motor power on connect</label><p class="muted">Power controls are not shown on live screens.</p></div>
+    </div>
+    <div class="settings-actions"><button data-go="home">Cancel</button><button class="primary" data-go="home">Save settings</button></div>
+  </section>
+
+  <div class="dimmed" aria-hidden="true"></div>
+  <section class="overlay record" aria-label="Live recording session">
+    <div class="overlay-card">
+      <div><h1>Live record · pick-cube on arm-01</h1><p>Timeline is dimmed behind this immersive session. Config is not available here.</p></div>
+      <div class="live-grid"><div class="camera-grid"><div class="placeholder">front camera feed placeholder</div><div class="placeholder">wrist camera feed placeholder</div></div><aside class="live-sidebar"><div class="big-counter">Episode 07 / 08</div><div class="card"><h3>Current controls</h3><p>Record · teleop active · dataset pick-cube</p></div><button>Re-record episode</button></aside></div>
+      <div class="overlay-actions"><button data-go="home">Exit without saving</button><button class="primary" data-go="post-record">Stop and save session</button></div>
+    </div>
+  </section>
+  <section class="overlay infer-live" aria-label="Live inference session">
+    <div class="overlay-card">
+      <div><h1>Live inference · pick-cube-act-1842</h1><p>Model: pick-cube-act-1842 · Robot: arm-01 · Target can be changed before launching from Deploy.</p></div>
+      <div class="live-grid"><div class="camera-grid"><div class="placeholder">front camera feed placeholder</div><div class="placeholder">wrist camera feed placeholder</div></div><aside class="live-sidebar"><div class="big-counter">RUNNING</div><div class="card"><h3>Policy monitor</h3><p>Action rate · safety checks · last stop reason</p></div><div class="placeholder">live inference log strip</div></aside></div>
+      <div class="overlay-actions"><span>One obvious exit from the immersive phase-2 overlay.</span><button class="primary" data-go="inference">Stop inference</button></div>
+    </div>
+  </section>
+</div>
+<script>
+(function(){
+  var body=document.body,buttons=document.querySelectorAll("[data-screen-button]"),go=document.querySelectorAll("[data-go]"),last="home";
+  function setScreen(screen){
+    if(screen==="robot-settings"&&body.dataset.screen!=="robot-settings")last=body.dataset.screen||"home";
+    if(screen==="home"&&body.dataset.screen==="robot-settings")screen=last==="first-run"?"home":last;
+    body.dataset.screen=screen;
+    document.getElementById("robotControls").classList.toggle("show-dropdown",screen==="robot-dropdown");
+    buttons.forEach(function(b){b.classList.toggle("active",b.dataset.screenButton===screen)});
+    setTimeline(screen);
+  }
+  function setTimeline(screen){
+    var expanded="collect";
+    if(screen==="post-record")expanded="dataset";
+    if(screen==="train")expanded="train";
+    if(screen==="inference"||screen==="live-inference")expanded="deploy";
+    ["robot","collect","dataset","train","deploy"].forEach(function(name){
+      document.querySelector('[data-section="'+name+'"]').classList.toggle("expanded",name===expanded);
+    });
+    document.querySelectorAll("[data-for-screen]").forEach(function(n){n.style.display=n.dataset.forScreen===screen?"flex":"none"});
+    var post=screen==="post-record";
+    document.querySelector("[data-dataset-summary]").textContent=post?"pick-cube · 32 episodes":"pick-cube · 24 episodes";
+    document.querySelector("[data-dataset-count]").textContent=post?"32 episodes · front + wrist cameras · 3 sessions":"24 episodes · front + wrist cameras · 2 sessions";
+    document.querySelector("[data-deploy-summary]").textContent=(screen==="inference"||screen==="live-inference")?"pick-cube-act-1842 · ready to run on arm-01":"no model yet — finish a training run";
+  }
+  buttons.forEach(function(b){b.addEventListener("click",function(){setScreen(b.dataset.screenButton)})});
+  go.forEach(function(b){b.addEventListener("click",function(e){e.stopPropagation();setScreen(b.dataset.go)})});
+  document.getElementById("robotChip").addEventListener("click",function(){setScreen(body.dataset.screen==="robot-dropdown"?"home":"robot-dropdown")});
+  document.querySelectorAll("[data-mode-tab]").forEach(function(tab){tab.addEventListener("click",function(e){
+    e.stopPropagation();
+    document.querySelectorAll("[data-mode-tab]").forEach(function(t){t.classList.toggle("active",t===tab)});
+    document.querySelectorAll("[data-mode-panel]").forEach(function(p){p.hidden=p.dataset.modePanel!==tab.dataset.modeTab});
+  })});
+  document.querySelectorAll("[data-toggle-section]").forEach(function(h){h.addEventListener("click",function(){var s=h.closest(".section");document.querySelectorAll(".section").forEach(function(n){n.classList.toggle("expanded",n===s)})})});
+  setScreen("home");
+}());
+</script>
+</body>
+</html>

@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WIREFRAME Concept B - Two studios</title>
+  <style>*{box-sizing:border-box}body{margin:0;background:#fff;color:#333;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;line-height:1.35}button,input,select{font:inherit;color:#333;background:#fff;border:1px solid #999;min-height:34px;padding:6px 10px}button{cursor:pointer}button.primary{background:#eee;font-weight:700}button.icon{width:36px;padding:0}button:disabled{background:#eee;cursor:default}.wire-nav{position:fixed;top:0;left:0;right:0;z-index:20;display:flex;align-items:center;gap:6px;min-height:42px;padding:6px 8px;background:#eee;border-bottom:1px solid #999;overflow-x:auto;white-space:nowrap}.wire-nav strong{margin-right:4px}.wire-nav button{min-height:28px;padding:3px 8px;background:#fff}.wire-nav button.active{background:#333;color:#fff}.app{min-height:100vh;padding-top:42px}.app-header{position:relative;display:flex;align-items:center;gap:16px;min-height:62px;padding:12px 24px;border-bottom:1px solid #999;background:#fff}.logo{font-weight:700;letter-spacing:0;min-width:82px}.studio-toggle{display:flex;border:1px solid #999}.studio-toggle button{border:0;border-right:1px solid #999;min-width:132px}.studio-toggle button:last-child{border-right:0}.studio-toggle .active{background:#eee;font-weight:700}.robot-tools{display:flex;align-items:center;gap:8px;margin-left:auto}.chip{border-radius:999px;min-width:116px}.screen{display:none}.screen.active{display:block}.page{padding:24px}.studio{display:grid;grid-template-columns:minmax(0,2fr) minmax(280px,1fr);min-height:calc(100vh - 104px)}.canvas{padding:24px;border-right:1px solid #999}.rail{padding:20px;background:#eee}.stack{display:grid;gap:16px}.two-col{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.card,.row,.panel,.banner,.placeholder,.note{border:1px solid #999;background:#fff}.card,.panel{padding:18px}.row{display:flex;align-items:center;gap:10px;min-height:48px;padding:10px 12px}.row-main{flex:1;min-width:0}.row-title{font-weight:700}.meta,.reason{margin-top:4px}.reason{border-top:1px solid #999;padding-top:8px}.section-title{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:0 0 14px;font-size:18px;font-weight:700}.card h2,.card h3,.panel h2,.panel h3{margin:0 0 10px;font-size:18px}.card p,.panel p{margin:0 0 14px}.form-grid{display:grid;grid-template-columns:160px 1fr auto;gap:10px;align-items:center}.form-grid label{font-weight:700}.placeholder{display:grid;place-items:center;min-height:180px;border-style:dashed;background:#eee;text-align:center;padding:18px;font-weight:700}.note{border-style:dashed;padding:12px;background:#fff}.banner{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px;padding:14px 16px;background:#eee;font-weight:700}.search{width:100%;margin-bottom:12px}.dot{width:10px;height:10px;border:1px solid #999;border-radius:50%;background:#333;flex:0 0 auto}.dot.empty{background:#fff}.status{display:inline-block;border:1px solid #999;background:#eee;padding:2px 8px;font-size:12px;font-weight:700}.robot-dropdown{position:absolute;top:54px;right:72px;z-index:10;width:340px;border:1px solid #999;background:#fff}.tabbar{display:flex;border-bottom:1px solid #999}.tabbar button{flex:1;border:0;border-right:1px solid #999}.tabbar button:last-child{border-right:0}.tabbar button.active{background:#eee;font-weight:700}.tab-panel{display:none;padding:12px}.tab-panel.active{display:grid;gap:8px}.dropdown-footer{padding:12px;border-top:1px solid #999}.settings-shell{max-width:980px;margin:0 auto}.settings-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}.live{min-height:calc(100vh - 42px);display:grid;grid-template-rows:auto 1fr auto;background:#333;color:#fff}.live button{color:#333}.live-bar,.live-controls{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 24px;border-bottom:1px solid #999;background:#fff;color:#333}.live-controls{border-top:1px solid #999;border-bottom:0}.live-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;padding:24px}.live .placeholder{min-height:420px;background:#eee;color:#333}.hero-setup{max-width:980px;margin:0 auto;min-height:calc(100vh - 42px);display:grid;align-content:center;gap:18px;padding:32px}.setup-grid{display:grid;grid-template-columns:1.2fr .8fr;gap:18px}</style>
+</head>
+<body data-current-screen="first-run">
+  <nav class="wire-nav" aria-label="Wireframe screen switcher">
+    <strong>WIREFRAME Concept B — Two studios — screen:</strong>
+    <button type="button" data-screen-target="first-run">first-run</button>
+    <button type="button" data-screen-target="home">home</button>
+    <button type="button" data-screen-target="robot-dropdown">robot-dropdown</button>
+    <button type="button" data-screen-target="robot-settings">robot-settings</button>
+    <button type="button" data-screen-target="live-record">live-record</button>
+    <button type="button" data-screen-target="post-record">post-record</button>
+    <button type="button" data-screen-target="train">train</button>
+    <button type="button" data-screen-target="inference">inference</button>
+  </nav>
+  <main class="app">
+    <section class="screen active" data-screen="first-run">
+      <div class="hero-setup">
+        <div>
+          <h1>Robot setup required</h1>
+          <p>No saved robot exists. Collect, train, and inference controls stay unavailable until one robot config is ready.</p>
+        </div>
+        <div class="setup-grid">
+          <div class="panel stack">
+            <h2>Create robot config</h2>
+            <div class="form-grid">
+              <label for="robot-name">Name</label>
+              <input id="robot-name" value="arm-01">
+              <span></span>
+              <label for="robot-mode">Mode</label>
+              <select id="robot-mode">
+                <option>Single</option>
+                <option>Bimanual</option>
+              </select>
+              <span></span>
+              <label for="leader-port">Leader port</label>
+              <select id="leader-port"><option>/dev/cu.usbmodem101</option></select>
+              <button type="button">Detect (wiggle)</button>
+              <label for="follower-port">Follower port</label>
+              <select id="follower-port"><option>/dev/cu.usbmodem102</option></select>
+              <button type="button">Detect (wiggle)</button>
+              <label for="setup-calibration">Calibration</label>
+              <select id="setup-calibration"><option>arm-01-calibration.json</option></select>
+              <button type="button">Calibrate now</button>
+              <label for="setup-camera">Camera config</label>
+              <select id="setup-camera"><option>front + wrist</option></select>
+              <span></span>
+            </div>
+            <button type="button" class="primary" data-screen-target="home">Save robot and enter Collect</button>
+          </div>
+          <div class="note">
+            <strong>NOTE:</strong> This first-run state is intentionally a setup screen, not a dashboard. The only path forward is making one ready robot config.
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="screen" data-screen="home">
+      <div data-include="header" data-studio="collect"></div>
+      <div data-include="collect-studio"></div>
+    </section>
+    <section class="screen" data-screen="robot-dropdown">
+      <div data-include="header" data-studio="collect" data-dropdown="true"></div>
+      <div data-include="collect-studio"></div>
+    </section>
+    <section class="screen" data-screen="robot-settings">
+      <div data-include="header" data-studio="collect"></div>
+      <div class="page">
+        <div class="settings-shell stack">
+          <div class="panel">
+            <h1>Robot Settings</h1>
+            <p>Settings are available outside live sessions and return to the previous workspace after save.</p>
+          </div>
+          <div class="panel stack">
+            <h2>Ports per arm</h2>
+            <div class="form-grid">
+              <label for="settings-leader">Leader arm</label>
+              <select id="settings-leader"><option>/dev/cu.usbmodem101</option></select>
+              <button type="button">Detect (wiggle)</button>
+              <label for="settings-follower">Follower arm</label>
+              <select id="settings-follower"><option>/dev/cu.usbmodem102</option></select>
+              <button type="button">Detect (wiggle)</button>
+              <label for="settings-left-leader">Left leader</label>
+              <select id="settings-left-leader"><option>Not used in single mode</option></select>
+              <button type="button" disabled>Detect (wiggle)</button>
+              <label for="settings-right-follower">Right follower</label>
+              <select id="settings-right-follower"><option>Not used in single mode</option></select>
+              <button type="button" disabled>Detect (wiggle)</button>
+            </div>
+          </div>
+          <div class="two-col">
+            <div class="panel stack">
+              <h2>Calibration files</h2>
+              <div class="form-grid">
+                <label for="cal-leader">Leader</label>
+                <select id="cal-leader"><option>leader-arm-01.json</option></select>
+                <button type="button">Calibrate now</button>
+                <label for="cal-follower">Follower</label>
+                <select id="cal-follower"><option>follower-arm-01.json</option></select>
+                <button type="button">Calibrate now</button>
+              </div>
+            </div>
+            <div class="panel stack">
+              <h2>Cameras and power</h2>
+              <label for="camera-config">Canonical camera config</label>
+              <select id="camera-config"><option>front table + wrist closeup</option></select>
+              <label for="motor-power">Motor power</label>
+              <select id="motor-power"><option>On during live sessions</option><option>Off</option></select>
+              <div class="note"><strong>NOTE:</strong> One camera config is shared by collect, train monitoring, and inference.</div>
+            </div>
+          </div>
+          <div class="settings-actions">
+            <button type="button" data-screen-target="home">Cancel</button>
+            <button type="button" class="primary" data-screen-target="home">Save settings</button>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="screen" data-screen="live-record">
+      <div class="live">
+        <div class="live-bar">
+          <strong>Recording pick-cube on arm-01</strong>
+          <span>Episode 8 recording now</span>
+        </div>
+        <div class="live-grid">
+          <div class="placeholder">Camera feed A<br>front table</div>
+          <div class="placeholder">Camera feed B<br>wrist closeup</div>
+        </div>
+        <div class="live-controls">
+          <div><strong>Episode counter:</strong> 8 captured · target 10</div>
+          <div>
+            <button type="button">Re-record episode</button>
+            <button type="button" class="primary" data-screen-target="post-record">Stop and review</button>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="screen" data-screen="post-record">
+      <div data-include="header" data-studio="collect"></div>
+      <div class="studio">
+        <div class="canvas stack">
+          <div class="banner">
+            <span>pick-cube +8 episodes → Train</span>
+            <button type="button" class="primary" data-screen-target="train">Train</button>
+          </div>
+          <div class="two-col">
+            <div class="card">
+              <h2>Teleoperate</h2>
+              <p>Practice with arm-01. Nothing is saved.</p>
+              <button type="button" class="primary" data-screen-target="live-record">Start practice</button>
+            </div>
+            <div class="card">
+              <h2>Record dataset</h2>
+              <p>Dataset pick-cube now has 32 episodes. Continue collecting with the same settings.</p>
+              <button type="button" class="primary" data-screen-target="live-record">Record more</button>
+            </div>
+          </div>
+          <div class="note"><strong>NOTE:</strong> The handoff crosses the studio boundary and opens Train & Deploy with pick-cube pre-selected.</div>
+        </div>
+        <aside data-include="dataset-rail"></aside>
+      </div>
+    </section>
+    <section class="screen" data-screen="train">
+      <div data-include="header" data-studio="train"></div>
+      <div data-include="train-studio" data-mode="train"></div>
+    </section>
+    <section class="screen" data-screen="inference">
+      <div data-include="header" data-studio="train"></div>
+      <div data-include="train-studio" data-mode="inference"></div>
+    </section>
+  </main>
+  <template id="header-template">
+    <header class="app-header">
+      <div class="logo">MakerLab</div>
+      <div class="studio-toggle" aria-label="Studios">
+        <button type="button" data-screen-target="home" data-toggle="collect">COLLECT</button>
+        <button type="button" data-screen-target="train" data-toggle="train">TRAIN &amp; DEPLOY</button>
+      </div>
+      <div class="robot-tools">
+        <button type="button" class="chip" data-action="open-robot-dropdown">● arm-01 ▾</button>
+        <button type="button" class="icon" data-screen-target="robot-settings" aria-label="Robot settings">⚙</button>
+      </div>
+      <div class="robot-dropdown" hidden>
+        <div class="tabbar">
+          <button type="button" class="active" data-tab-target="single">Single</button>
+          <button type="button" data-tab-target="bimanual">Bimanual</button>
+        </div>
+        <div class="tab-panel active" data-tab="single">
+          <div class="row"><span class="dot"></span><div class="row-main"><div class="row-title">arm-01</div><div class="meta">ready · active</div></div></div>
+          <div class="row"><span class="dot empty"></span><div class="row-main"><div class="row-title">bench-arm</div><div class="meta">needs setup</div></div></div>
+        </div>
+        <div class="tab-panel" data-tab="bimanual">
+          <div class="row"><span class="dot"></span><div class="row-main"><div class="row-title">dual-lift</div><div class="meta">ready</div></div></div>
+          <div class="row"><span class="dot empty"></span><div class="row-main"><div class="row-title">two-arm-test</div><div class="meta">needs setup</div></div></div>
+        </div>
+        <div class="dropdown-footer">
+          <button type="button" class="primary">+ New config</button>
+        </div>
+      </div>
+    </header>
+  </template>
+  <template id="collect-studio-template">
+    <div class="studio">
+      <div class="canvas stack">
+        <div class="section-title">
+          <span>Collect studio</span>
+          <span>Phase 1 — Collect</span>
+        </div>
+        <div class="two-col">
+          <div class="card">
+            <h2>Teleoperate</h2>
+            <p>Practice the active robot with live camera feedback. Nothing is saved.</p>
+            <button type="button" class="primary" data-screen-target="live-record">Start practice</button>
+            <div class="reason">Ready because robot arm-01 is configured.</div>
+          </div>
+          <div class="card">
+            <h2>Record dataset</h2>
+            <p>Dataset: pick-cube · target 10 episodes · front + wrist cameras.</p>
+            <button type="button" class="primary" data-screen-target="live-record">Start recording</button>
+            <div class="reason">Other actions live in the ⋯ menu to keep this card calm.</div>
+          </div>
+        </div>
+        <div class="placeholder">Action canvas<br>live session takes over this 2/3 workspace area</div>
+        <div class="note"><strong>NOTE:</strong> Collect and Train &amp; Deploy are free navigation studios. Only real prerequisites disable controls.</div>
+      </div>
+      <aside data-include="dataset-rail"></aside>
+    </div>
+  </template>
+  <template id="dataset-rail-template">
+    <aside class="rail stack">
+      <div class="section-title"><span>Datasets</span><button type="button" class="icon" aria-label="New dataset">+</button></div>
+      <input class="search" value="Search datasets">
+      <div class="row"><span class="dot"></span><div class="row-main"><div class="row-title">pick-cube</div><div class="meta">32 episodes · last updated now</div></div><button type="button" class="icon" aria-label="Dataset menu">⋯</button></div>
+      <div class="row"><span class="dot"></span><div class="row-main"><div class="row-title">stack-block</div><div class="meta">18 episodes</div></div><button type="button" class="icon" aria-label="Dataset menu">⋯</button></div>
+      <div class="row"><span class="dot empty"></span><div class="row-main"><div class="row-title">pour-cup</div><div class="meta">0 episodes · needs recording</div></div><button type="button" class="icon" aria-label="Dataset menu">⋯</button></div>
+      <div class="note"><strong>NOTE:</strong> Dataset row ⋯ menu contains replay, rename, duplicate, archive.</div>
+    </aside>
+  </template>
+  <template id="train-studio-template">
+    <div class="studio">
+      <div class="canvas stack" data-train-canvas></div>
+      <aside class="rail stack">
+        <div>
+          <div class="section-title"><span>Jobs</span><button type="button" class="icon" aria-label="Jobs menu">⋯</button></div>
+          <div class="stack">
+            <div class="row"><div class="row-main"><div class="row-title">pick-cube ACT</div><div class="meta">epoch 14 / 50</div></div><span class="status">running</span></div>
+            <div class="row"><div class="row-main"><div class="row-title">stack-block Diffusion</div><div class="meta">waiting for GPU</div></div><span class="status">queued</span></div>
+          </div>
+        </div>
+        <div>
+          <div class="section-title"><span>Models</span><button type="button" class="icon" aria-label="Import model">+</button></div>
+          <div class="stack">
+            <div class="row"><div class="row-main"><div class="row-title">pick-cube-act-v3</div><div class="meta">finished · 32 episodes</div><button type="button" data-screen-target="inference">Run on arm-01</button></div><button type="button" class="icon" aria-label="Model menu">⋯</button></div>
+            <div class="row"><div class="row-main"><div class="row-title">stack-block-v1</div><div class="meta">imported</div><button type="button" data-screen-target="inference">Run on arm-01</button></div><button type="button" class="icon" aria-label="Model menu">⋯</button></div>
+          </div>
+          <div class="note"><strong>NOTE:</strong> Model ⋯ menu contains fine-tune, rename, delete. Switching robot in the header re-targets Run on arm-01 instantly.</div>
+        </div>
+      </aside>
+    </div>
+  </template>
+  <template id="train-canvas-template">
+    <div class="section-title">
+      <span>Train &amp; Deploy studio</span>
+      <span>Phase 2 — Improve</span>
+    </div>
+    <div class="banner">
+      <span>Dataset pick-cube pre-selected from Collect handoff</span>
+      <button type="button" class="primary">Start training</button>
+    </div>
+    <div class="two-col">
+      <div class="card stack">
+        <h2>Training config</h2>
+        <label for="train-dataset">Dataset</label>
+        <select id="train-dataset"><option>pick-cube · 32 episodes</option></select>
+        <label for="policy-type">Policy type</label>
+        <select id="policy-type"><option>ACT</option><option>Diffusion</option><option>VQ-BeT</option></select>
+        <label for="train-epochs">Essentials</label>
+        <select id="train-epochs"><option>50 epochs · default batch · GPU auto</option></select>
+      </div>
+      <div class="card stack">
+        <h2>Running job monitor</h2>
+        <div class="placeholder">loss chart placeholder<br>job log strip</div>
+        <div class="row"><div class="row-main"><div class="row-title">Model ready</div><div class="meta">When complete, this row becomes Run it on arm-01.</div></div><button type="button" data-screen-target="inference">Run</button></div>
+      </div>
+    </div>
+  </template>
+  <template id="inference-canvas-template">
+    <div class="section-title">
+      <span>Inference monitor</span>
+      <span>Target: ● arm-01</span>
+    </div>
+    <div class="two-col">
+      <div class="card stack">
+        <h2>Pick model</h2>
+        <label for="model-picker">Model</label>
+        <select id="model-picker"><option>pick-cube-act-v3</option><option>stack-block-v1</option></select>
+        <button type="button" class="primary">Run on arm-01</button>
+        <div class="reason">Disabled if no ready robot; visible with one-line reason.</div>
+      </div>
+      <div class="card stack">
+        <h2>Live monitor</h2>
+        <div class="placeholder">camera feed + policy telemetry<br>model pick-cube-act-v3 running on arm-01</div>
+        <button type="button" data-screen-target="train">Stop run</button>
+      </div>
+    </div>
+    <div class="note"><strong>NOTE:</strong> The robot chip remains available here so inference can be re-targeted to another saved hardware config.</div>
+  </template>
+  <script>
+    (function () {
+      var screens = Array.prototype.slice.call(document.querySelectorAll(".screen"));
+      var navButtons = Array.prototype.slice.call(document.querySelectorAll("[data-screen-target]"));
+      function cloneTemplate(target, templateId) {
+        var template = document.getElementById(templateId);
+        target.replaceChildren(template.content.cloneNode(true));
+      }
+      function hydrateIncludes(root) {
+        Array.prototype.slice.call(root.querySelectorAll("[data-include]")).forEach(function (node) {
+          var type = node.getAttribute("data-include");
+          if (type === "header") {
+            cloneTemplate(node, "header-template");
+            var header = node.firstElementChild;
+            var studio = node.getAttribute("data-studio");
+            header.querySelector('[data-toggle="' + studio + '"]').classList.add("active");
+            if (node.getAttribute("data-dropdown") === "true") {
+              header.querySelector(".robot-dropdown").hidden = false;
+            }
+          }
+          if (type === "collect-studio") {
+            cloneTemplate(node, "collect-studio-template");
+            hydrateIncludes(node);
+          }
+          if (type === "dataset-rail") {
+            cloneTemplate(node, "dataset-rail-template");
+          }
+          if (type === "train-studio") {
+            cloneTemplate(node, "train-studio-template");
+            var mode = node.getAttribute("data-mode");
+            var canvas = node.querySelector("[data-train-canvas]");
+            cloneTemplate(canvas, mode === "inference" ? "inference-canvas-template" : "train-canvas-template");
+          }
+        });
+      }
+      function showScreen(name) {
+        screens.forEach(function (screen) {
+          screen.classList.toggle("active", screen.getAttribute("data-screen") === name);
+        });
+        navButtons.forEach(function (button) {
+          button.classList.toggle("active", button.getAttribute("data-screen-target") === name);
+        });
+        document.body.setAttribute("data-current-screen", name);
+      }
+      function activateTab(button) {
+        var panel = button.closest(".robot-dropdown");
+        var tabName = button.getAttribute("data-tab-target");
+        panel.querySelectorAll("[data-tab-target]").forEach(function (tabButton) {
+          tabButton.classList.toggle("active", tabButton === button);
+        });
+        panel.querySelectorAll("[data-tab]").forEach(function (tabPanel) {
+          tabPanel.classList.toggle("active", tabPanel.getAttribute("data-tab") === tabName);
+        });
+      }
+      screens.forEach(hydrateIncludes);
+      document.addEventListener("click", function (event) {
+        var tabButton = event.target.closest("[data-tab-target]");
+        if (tabButton) {
+          activateTab(tabButton);
+          return;
+        }
+        var robotButton = event.target.closest("[data-action='open-robot-dropdown']");
+        if (robotButton) {
+          showScreen("robot-dropdown");
+          return;
+        }
+        var screenButton = event.target.closest("[data-screen-target]");
+        if (screenButton) {
+          showScreen(screenButton.getAttribute("data-screen-target"));
+        }
+      });
+      showScreen("first-run");
+    }());
+  </script>
+</body>
+</html>
