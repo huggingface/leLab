@@ -93,6 +93,21 @@ function configToRequest(c: TrainingConfig): TrainingRequest {
     optimizer_weight_decay: c.optimizer_weight_decay,
     optimizer_grad_clip_norm: c.optimizer_grad_clip_norm,
     use_policy_training_preset: c.use_policy_training_preset,
+    // GR00T-specific. Only forward the policy_* fields for groot so other
+    // policies never receive flags their config doesn't define.
+    dataset_image_transforms_enable: c.dataset_image_transforms_enable,
+    eval_steps: c.eval_steps,
+    ...(c.policy_type === "groot"
+      ? {
+          policy_base_model_path: c.policy_base_model_path,
+          policy_embodiment_tag: c.policy_embodiment_tag,
+          policy_chunk_size: c.policy_chunk_size,
+          policy_n_action_steps: c.policy_n_action_steps,
+          policy_use_relative_actions: c.policy_use_relative_actions,
+          policy_relative_exclude_joints: c.policy_relative_exclude_joints,
+          policy_use_bf16: c.policy_use_bf16,
+        }
+      : {}),
   };
 }
 

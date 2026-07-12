@@ -92,6 +92,7 @@ const EssentialsCard: React.FC<EssentialsCardProps> = ({ config, updateConfig, d
                 <SelectItem value="diffusion">Diffusion Policy</SelectItem>
                 <SelectItem value="pi0">PI0</SelectItem>
                 <SelectItem value="smolvla">SmolVLA</SelectItem>
+                <SelectItem value="groot">GR00T N1.7</SelectItem>
                 <SelectItem value="tdmpc">TD-MPC</SelectItem>
                 <SelectItem value="vqbet">VQ-BeT</SelectItem>
                 <SelectItem value="pi0_fast">PI0 Fast</SelectItem>
