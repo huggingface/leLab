@@ -24,6 +24,7 @@ via huggingface_hub.snapshot_download before we spawn the subprocess.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import re
@@ -139,6 +140,53 @@ def _resolve_policy_path(policy_ref: str) -> str:
     raise ValueError(f"Unrecognised policy ref: {policy_ref!r}")
 
 
+def _read_policy_config(policy_path: str) -> dict[str, Any]:
+    """Load pretrained_model/config.json if present."""
+    config_path = Path(policy_path) / "config.json"
+    if not config_path.is_file():
+        return {}
+    try:
+        with open(config_path) as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:
+        logger.warning("Failed to read policy config at %s: %s", config_path, exc)
+        return {}
+
+
+def _rollout_inference_args(policy_path: str) -> list[str]:
+    """Return extra lerobot-rollout flags for policies that reject sync inference.
+
+    GR00T and other relative-action policies decode action chunks against the
+    observation state at inference time. The default sync backend calls
+    ``select_action`` per tick and can re-decode cached relative actions
+    against newer states, so lerobot requires the RTC/chunked rollout path
+    instead.
+
+    GR00T also needs tuned RTC queue settings: the lerobot default
+    ``queue_threshold=30`` makes the background thread replan while a 16-step
+    chunk is still playing, which replaces the queue mid-motion and feels
+    like one action then a full recalculation."""
+    cfg = _read_policy_config(policy_path)
+    policy_type = cfg.get("type")
+    needs_rtc = bool(cfg.get("use_relative_actions")) or policy_type == "groot"
+    if not needs_rtc:
+        return []
+
+    args = ["--inference.type=rtc"]
+
+    n_action_steps = cfg.get("n_action_steps")
+    if isinstance(n_action_steps, int) and n_action_steps > 0:
+        args.append(f"--inference.rtc.execution_horizon={n_action_steps}")
+    elif policy_type == "groot":
+        args.append("--inference.rtc.execution_horizon=8")
+
+    # Wait until the current chunk is consumed before replanning. GROOT docs
+    # recommend keeping this at 0 (never > 5) for stable real-robot rollout.
+    args.append("--inference.queue_threshold=0")
+    return args
+
+
 def _format_cameras_arg(cameras: dict[str, dict[str, Any]]) -> str:
     """Convert {name: {type, camera_index, width, height, fps}} into
     lerobot's CLI dict syntax. The frontend key `camera_index` is
@@ -211,6 +259,11 @@ def _friendly_hint(error_text: str | None) -> str | None:
         return "A camera doesn't support the configured resolution — open camera settings and click Auto."
     if "permission" in low and ("port" in low or "com" in low):
         return "Couldn't open the serial port — close anything else using it, or run `lelab --stop`."
+    if "relative-action" in low or "relative chunk actions" in low:
+        return (
+            "This policy was trained with relative actions and needs RTC (chunked) inference. "
+            "Update lelab and try again — recent versions enable that automatically."
+        )
     return None
 
 
@@ -291,6 +344,7 @@ def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
             f"--robot.id={follower_id}",
             f"--task={request.task}",
             f"--duration={request.duration_s}",
+            *_rollout_inference_args(policy_path),
         ]
         if request.cameras:
             cmd.append(f"--robot.cameras={_format_cameras_arg(request.cameras)}")
