@@ -72,3 +72,32 @@ def test_calibration_manager_rejects_double_start_via_message() -> None:
     )
     assert result.get("success") is False
     assert "already" in result.get("message", "").lower()
+
+
+def test_cleanup_device_force_releases_and_clears_when_disconnect_fails() -> None:
+    """A failed device.disconnect() must still force-close the port and clear the
+    device handle — otherwise the COM port stays busy and blocks the next run."""
+    from lelab.calibrate import CalibrationManager
+
+    class PortHandler:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def closePort(self) -> None:  # noqa: N802 - mirrors LeRobot port handler API
+            self.closed = True
+
+    class Device:
+        def __init__(self) -> None:
+            self.bus = type("Bus", (), {"port_handler": PortHandler()})()
+
+        def disconnect(self) -> None:
+            raise RuntimeError("Failed to write 'Torque_Enable' on id_=6")
+
+    mgr = CalibrationManager()
+    device = Device()
+    mgr.device = device
+
+    mgr._cleanup_device()
+
+    assert device.bus.port_handler.closed is True  # force-released despite failure
+    assert mgr.device is None  # handle cleared so a new calibration can start
