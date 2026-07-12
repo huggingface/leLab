@@ -18,6 +18,7 @@ The actual job lifecycle (subprocess management, registry, log streaming)
 lives in app/jobs.py.
 """
 
+import json
 import re
 from typing import TYPE_CHECKING
 
@@ -35,6 +36,7 @@ class TrainingRequest(BaseModel):
     dataset_revision: str | None = None
     dataset_root: str | None = None
     dataset_episodes: list[int] | None = None
+    dataset_image_transforms_enable: bool = False
 
     # Policy configuration
     policy_type: str = "act"
@@ -49,6 +51,7 @@ class TrainingRequest(BaseModel):
     log_freq: int = 250
     save_freq: int = 1000
     env_eval_freq: int = 0
+    eval_steps: int = 0
     save_checkpoint: bool = True
 
     # Output configuration
@@ -78,6 +81,17 @@ class TrainingRequest(BaseModel):
     # Hub upload (set by HfCloudJobRunner; not exposed in the form)
     policy_push_to_hub: bool = False
     policy_repo_id: str | None = None
+
+    # GR00T-specific policy options (only emitted when policy_type == "groot";
+    # these flags don't exist on other policy configs, so draccus would reject
+    # them). All optional — unset fields fall back to the groot config defaults.
+    policy_base_model_path: str | None = None
+    policy_embodiment_tag: str | None = None
+    policy_chunk_size: int | None = None
+    policy_n_action_steps: int | None = None
+    policy_use_relative_actions: bool | None = None
+    policy_relative_exclude_joints: list[str] | None = None
+    policy_use_bf16: bool | None = None
 
     # Optimizer
     optimizer_type: str | None = "adam"
@@ -118,6 +132,8 @@ def build_training_command(
         cmd.extend(["--dataset.root", request.dataset_root])
     if request.dataset_episodes:
         cmd.extend(["--dataset.episodes"] + [str(ep) for ep in request.dataset_episodes])
+    if request.dataset_image_transforms_enable:
+        cmd.extend(["--dataset.image_transforms.enable", "true"])
 
     # Policy
     cmd.extend(["--policy.type", request.policy_type])
@@ -143,10 +159,34 @@ def build_training_command(
         if request.policy_push_to_hub and request.policy_repo_id:
             cmd.extend(["--policy.repo_id", request.policy_repo_id])
 
+    # GR00T-specific policy flags. These options only exist on the groot config,
+    # so emit them only for --policy.type=groot; sending them to another policy
+    # would make draccus abort the run. Each is skipped when unset so the groot
+    # config's own defaults apply.
+    if request.policy_type == "groot":
+        if request.policy_base_model_path:
+            cmd.extend(["--policy.base_model_path", request.policy_base_model_path])
+        if request.policy_embodiment_tag:
+            cmd.extend(["--policy.embodiment_tag", request.policy_embodiment_tag])
+        if request.policy_chunk_size is not None:
+            cmd.extend(["--policy.chunk_size", str(request.policy_chunk_size)])
+        if request.policy_n_action_steps is not None:
+            cmd.extend(["--policy.n_action_steps", str(request.policy_n_action_steps)])
+        if request.policy_use_relative_actions is not None:
+            cmd.extend(
+                ["--policy.use_relative_actions", "true" if request.policy_use_relative_actions else "false"]
+            )
+        if request.policy_relative_exclude_joints is not None:
+            # draccus parses list values from a single JSON token, e.g. '["gripper"]'.
+            cmd.extend(["--policy.relative_exclude_joints", json.dumps(request.policy_relative_exclude_joints)])
+        if request.policy_use_bf16 is not None:
+            cmd.extend(["--policy.use_bf16", "true" if request.policy_use_bf16 else "false"])
+
     # Logging / checkpointing
     cmd.extend(["--log_freq", str(request.log_freq)])
     cmd.extend(["--save_freq", str(request.save_freq)])
     cmd.extend(["--env_eval_freq", str(request.env_eval_freq)])
+    cmd.extend(["--eval_steps", str(request.eval_steps)])
     cmd.extend(["--save_checkpoint", "true" if request.save_checkpoint else "false"])
 
     # Output. On HF Cloud the pod, not this host, runs the trainer: an absolute host

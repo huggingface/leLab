@@ -200,6 +200,9 @@ POLICY_EXTRAS: dict[str, tuple[str, str]] = {
     "pi0": ("transformers", "lerobot[pi]"),
     "pi0_fast": ("transformers", "lerobot[pi]"),
     "diffusion": ("diffusers", "lerobot[diffusion]"),
+    # groot pulls in peft (LoRA), diffusers, timm, dm-tree and decord; peft is a
+    # reliable, cross-platform stand-in for "the lerobot[groot] extra is present".
+    "groot": ("peft", "lerobot[groot]"),
 }
 
 # One install manager per install target (lerobot[smolvla] / lerobot[pi] / …),
