@@ -234,12 +234,17 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
               </div>
             </div>
 
-            <div className="space-y-4">
+            <div className="space-y-3">
               <CameraConfiguration
                 cameras={cameras}
                 onCamerasChange={setCameras}
                 releaseStreamsRef={releaseStreamsRef}
+                readOnly
               />
+              <p className="text-xs text-gray-500">
+                These are the cameras set up for this robot. To add or change a
+                camera, configure it on the Calibration page.
+              </p>
             </div>
 
             <Collapsible className="space-y-4 group">

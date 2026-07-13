@@ -54,12 +54,17 @@ interface CameraConfigurationProps {
   cameras: CameraConfig[];
   onCamerasChange: (cameras: CameraConfig[]) => void;
   releaseStreamsRef?: React.MutableRefObject<(() => void) | null>; // Ref to expose stream release function
+  // When true, hide the add/remove/edit controls and show the configured
+  // cameras as read-only live previews. Used in the recording dialog, where
+  // cameras are managed on the Calibration page rather than added ad hoc.
+  readOnly?: boolean;
 }
 
 const CameraConfiguration: React.FC<CameraConfigurationProps> = ({
   cameras,
   onCamerasChange,
   releaseStreamsRef,
+  readOnly = false,
 }) => {
   const { toast } = useToast();
 
@@ -192,10 +197,12 @@ const CameraConfiguration: React.FC<CameraConfigurationProps> = ({
   return (
     <div className="space-y-4">
       <h3 className="text-lg font-semibold text-white border-b border-gray-700 pb-2">
-        Camera Configuration
+        {readOnly ? "Cameras" : "Camera Configuration"}
       </h3>
 
-      {/* Add Camera Section */}
+      {/* Add Camera Section — hidden in read-only mode (cameras are managed on
+          the Calibration page, not added here). */}
+      {!readOnly && (
       <div className="bg-gray-800/50 rounded-lg p-4 space-y-4">
         <h4 className="text-md font-medium text-gray-300">Add Camera</h4>
 
@@ -284,13 +291,16 @@ const CameraConfiguration: React.FC<CameraConfigurationProps> = ({
           </div>
         </div>
       </div>
+      )}
 
       {/* Configured Cameras */}
       {cameras.length > 0 && (
         <div className="space-y-4">
-          <h4 className="text-md font-medium text-gray-300">
-            Configured Cameras ({cameras.length})
-          </h4>
+          {!readOnly && (
+            <h4 className="text-md font-medium text-gray-300">
+              Configured Cameras ({cameras.length})
+            </h4>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-4">
             {cameras.map((camera) => (
@@ -298,6 +308,7 @@ const CameraConfiguration: React.FC<CameraConfigurationProps> = ({
                 key={camera.id}
                 camera={camera}
                 paused={streamsPaused}
+                readOnly={readOnly}
                 onRemove={() => removeCamera(camera.id)}
                 onUpdate={(updates) => updateCamera(camera.id, updates)}
               />
@@ -309,7 +320,11 @@ const CameraConfiguration: React.FC<CameraConfigurationProps> = ({
       {cameras.length === 0 && (
         <div className="text-center py-8 text-gray-500">
           <Camera className="w-12 h-12 mx-auto mb-4 text-gray-600" />
-          <p>No cameras configured. Add a camera to get started.</p>
+          <p>
+            {readOnly
+              ? "No cameras are configured for this robot."
+              : "No cameras configured. Add a camera to get started."}
+          </p>
         </div>
       )}
     </div>
@@ -319,6 +334,7 @@ const CameraConfiguration: React.FC<CameraConfigurationProps> = ({
 interface CameraPreviewProps {
   camera: CameraConfig;
   paused: boolean;
+  readOnly: boolean;
   onRemove: () => void;
   onUpdate: (updates: Partial<CameraConfig>) => void;
 }
@@ -326,6 +342,7 @@ interface CameraPreviewProps {
 const CameraPreview: React.FC<CameraPreviewProps> = ({
   camera,
   paused,
+  readOnly,
   onRemove,
   onUpdate,
 }) => {
@@ -363,16 +380,24 @@ const CameraPreview: React.FC<CameraPreviewProps> = ({
       <div className="p-3 space-y-2">
         <div className="flex items-center justify-between">
           <h5 className="font-medium text-white truncate">{camera.name}</h5>
-          <Button
-            onClick={onRemove}
-            size="sm"
-            variant="ghost"
-            className="text-red-400 hover:text-red-300 hover:bg-red-900/20 p-1"
-          >
-            <X className="w-4 h-4" />
-          </Button>
+          {!readOnly && (
+            <Button
+              onClick={onRemove}
+              size="sm"
+              variant="ghost"
+              className="text-red-400 hover:text-red-300 hover:bg-red-900/20 p-1"
+            >
+              <X className="w-4 h-4" />
+            </Button>
+          )}
         </div>
 
+        {readOnly ? (
+          <p className="text-xs text-gray-400">
+            {camera.width}×{camera.height}
+            {camera.fps ? ` · ${camera.fps} fps` : ""}
+          </p>
+        ) : (
         <Collapsible>
           <CollapsibleTrigger className="group flex items-center gap-1.5 text-xs font-medium text-gray-300 hover:text-white transition-colors">
             <ChevronRight className="w-3.5 h-3.5 transition-transform group-data-[state=open]:rotate-90" />
@@ -486,6 +511,7 @@ const CameraPreview: React.FC<CameraPreviewProps> = ({
             </div>
           </CollapsibleContent>
         </Collapsible>
+        )}
       </div>
     </div>
   );
