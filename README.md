@@ -41,6 +41,10 @@ A page will automatically open in your browser and you are ready to go.
       <td>Capture episodes into a LeRobotDataset, with cameras.</td>
     </tr>
     <tr>
+      <td>🔎 <b>Browse</b></td>
+      <td>Watch the episodes of a dataset on disk — every camera, frame by frame, with a joint-motion trace. No upload required.</td>
+    </tr>
+    <tr>
       <td>🧠 <b>Train</b></td>
       <td>Kick off a LeRobot training job, watch logs live.</td>
     </tr>

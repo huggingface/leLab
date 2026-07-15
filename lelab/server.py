@@ -28,7 +28,7 @@ from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.datastructures import Headers
@@ -40,6 +40,7 @@ from . import datasets as dataset_browser
 
 # Import our custom calibration functionality
 from .calibrate import CalibrationRequest, calibration_manager
+from .episode_media import DatasetNotFoundError, EpisodeNotFoundError
 from .jobs import (
     JobAlreadyRunningError,
     JobNotFoundError,
@@ -385,6 +386,76 @@ def datasets_list():
     Each entry carries a `source` field: "local", "hub", or "both".
     """
     return dataset_browser.list_all_datasets()
+
+
+@app.get("/dataset-episodes")
+def dataset_episodes(repo_id: str):
+    """List the episodes of a local dataset."""
+    return dataset_browser.handle_list_episodes(repo_id)
+
+
+@app.get("/dataset-episode")
+def dataset_episode(repo_id: str, episode_index: int):
+    """One episode's metadata and per-camera video windows."""
+    return dataset_browser.handle_episode_detail(repo_id, episode_index)
+
+
+@app.get("/dataset-motion")
+def dataset_motion(repo_id: str, episode_index: int):
+    """Per-frame aggregate joint motion (sum of absolute joint deltas)."""
+    return dataset_browser.handle_episode_motion(repo_id, episode_index)
+
+
+@app.get("/dataset-thumbnails")
+def dataset_thumbnails(repo_id: str, episode_index: int, camera: str | None = None, count: int = 12):
+    """Evenly-spaced film-strip thumbnails, decoded in a single pass over the mp4."""
+    return dataset_browser.handle_episode_thumbnails(repo_id, episode_index, camera, count)
+
+
+@app.get("/dataset-frame")
+def dataset_frame(
+    repo_id: str,
+    episode_index: int,
+    camera: str | None = None,
+    frame_index: int = 0,
+    max_width: int | None = None,
+):
+    """A single decoded frame as a PNG."""
+    try:
+        png = dataset_browser.load_episode_frame_png(repo_id, episode_index, camera, frame_index, max_width)
+    except (DatasetNotFoundError, EpisodeNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    # A frame is immutable for a given (dataset, episode, camera, index), and the
+    # scrubber re-requests the same ones constantly, so let the browser cache it.
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
+@app.get("/dataset-video")
+def dataset_video(repo_id: str, camera: str, chunk: int = 0, file: int = 0):
+    """One camera's mp4, served whole for in-page playback.
+
+    Addressed by chunk/file rather than by episode: several episodes share a
+    file, so this URL stays stable as the viewer pages between them and the
+    browser reuses what it already buffered. Callers get the episode's window
+    from /dataset-episode and seek to it. FileResponse answers Range requests,
+    so the browser does its own seeking rather than us transcoding a cut.
+    """
+    try:
+        path = dataset_browser.locate_video_file(repo_id, camera, chunk, file)
+    except (DatasetNotFoundError, EpisodeNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    # content_disposition_type="inline" is load-bearing: the default is
+    # "attachment", which makes the browser download the file rather than play it.
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        filename=path.name,
+        content_disposition_type="inline",
+    )
 
 
 @app.get("/ws-test")
@@ -784,7 +855,9 @@ def run_update():
     return handle_run_update()
 
 
-# Replay is rendered by the embedded lerobot/visualize_dataset Space; no backend routes needed.
+# Datasets with files on disk are browsed locally (see the /dataset-* routes above).
+# Hub-only datasets have nothing here to decode, so the frontend still hands those
+# off to the lerobot/visualize_dataset Space.
 
 
 # ============================================================================
