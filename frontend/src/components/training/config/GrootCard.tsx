@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { NumberInput } from '@/components/ui/number-input';
@@ -21,11 +21,13 @@ const GROOT_DEFAULTS = {
 
 const GrootCard: React.FC<ConfigComponentProps> = ({ config, updateConfig }) => {
   const isGroot = config.policy_type === 'groot';
+  const seededDefaults = useRef(false);
 
   // Seed defaults once when groot is selected. Each key is only written when
   // still undefined, so the effect can't loop and never clobbers user edits.
   useEffect(() => {
-    if (!isGroot) return;
+    if (!isGroot || seededDefaults.current) return;
+    seededDefaults.current = true;
     (Object.keys(GROOT_DEFAULTS) as (keyof typeof GROOT_DEFAULTS)[]).forEach((key) => {
       if (config[key] === undefined) {
         updateConfig(key, GROOT_DEFAULTS[key] as never);
