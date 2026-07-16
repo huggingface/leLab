@@ -23,6 +23,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from lerobot.configs.dataset import DatasetRecordConfig
+from lerobot.configs.video import RGBEncoderConfig
 from lerobot.datasets import LeRobotDataset
 from lerobot.robots.so_follower import SO101FollowerConfig
 
@@ -182,6 +183,10 @@ def create_record_config(request: RecordingRequest) -> RecordConfig:
         tags=with_lelab_tag(request.tags) if request.push_to_hub else None,
         private=request.private,
         streaming_encoding=request.streaming_encoding,
+        # libsvtav1 (lerobot's default) is CPU-heavy enough on this machine to starve
+        # the motor bus read loop mid-recording ("no status packet" ConnectionError,
+        # see 2026-07-15 crashes). h264/ultrafast measured ~11x faster to encode here.
+        rgb_encoder=RGBEncoderConfig(vcodec="h264", preset="ultrafast"),
     )
 
     # Create the main record config
@@ -308,11 +313,15 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
                     "robot_type": getattr(dataset.meta, "robot_type", "Unknown robot"),
                 }
             except Exception as e:
-                logger.exception("Recording session failed")
+                logger.exception("Recording session failed: %r", e)
                 current_phase = "error"
                 if recording_start_time:
                     session_end_elapsed_seconds = int(time.time() - recording_start_time)
-                last_recording_info = {"success": False, "error": str(e)}
+                last_recording_info = {
+                    "success": False,
+                    "error": str(e) or repr(e),
+                    "dataset_repo_id": request.dataset_repo_id,
+                }
             finally:
                 if current_phase != "error":
                     current_phase = "completed"
@@ -418,7 +427,11 @@ def handle_recording_status() -> dict[str, Any]:
             "rerecord_episode": recording_active
             and current_phase == "recording",  # Only during recording phase
         },
-        "message": "Recording session failed with error - check logs"
+        "message": (
+            f"Recording failed: {last_recording_info['error']}"
+            if last_recording_info and last_recording_info.get("error")
+            else "Recording session failed with error - check logs"
+        )
         if current_phase == "error"
         else (
             "Recording session has ended - stop polling"
@@ -469,11 +482,16 @@ def handle_get_dataset_info(request: DatasetInfoRequest) -> dict[str, Any]:
         from lerobot.datasets import LeRobotDataset
 
         dataset = LeRobotDataset(request.dataset_repo_id)
+        try:
+            tasks = [str(t) for t in dataset.meta.tasks.index]
+        except Exception:
+            tasks = []
         return {
             "success": True,
             "dataset_repo_id": request.dataset_repo_id,
             "num_episodes": dataset.num_episodes,
             "single_task": getattr(dataset.meta, "single_task", "Unknown task"),
+            "tasks": tasks,
             "fps": dataset.fps,
             "features": list(dataset.features.keys()),
             "total_frames": dataset.num_frames,
@@ -596,9 +614,17 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
 
     if cfg.resume:
         num_cameras = len(robot.cameras) if hasattr(robot, "cameras") else 0
+        # LeRobotDataset.resume() refuses root=None (it would write into the
+        # revision-safe Hub snapshot cache), so resolve the same default local
+        # directory that LeRobotDataset.create() uses.
+        resume_root = cfg.dataset.root
+        if resume_root is None:
+            from lerobot.utils.constants import HF_LEROBOT_HOME
+
+            resume_root = HF_LEROBOT_HOME / cfg.dataset.repo_id
         dataset = LeRobotDataset.resume(
             cfg.dataset.repo_id,
-            root=cfg.dataset.root,
+            root=resume_root,
             batch_encoding_size=cfg.dataset.video_encoding_batch_size,
             rgb_encoder=cfg.dataset.rgb_encoder,
             depth_encoder=cfg.dataset.depth_encoder,

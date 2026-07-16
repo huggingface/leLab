@@ -36,6 +36,15 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
 from starlette.types import Scope
 
+# Windows consoles often use a legacy code page (cp1252) that can't encode the
+# emoji used in log/print output; an unhandled UnicodeEncodeError inside an
+# endpoint then turns into a 500 and hides the real error from the frontend.
+# Replace unencodable characters instead of crashing.
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        with contextlib.suppress(Exception):
+            _stream.reconfigure(errors="replace")
+
 from . import datasets as dataset_browser
 
 # Import our custom calibration functionality
@@ -164,6 +173,11 @@ class ConnectionManager:
     def __init__(self):
         self.active_connections: list[WebSocket] = []
         self.broadcast_queue = queue.Queue()
+        # Latest-wins slot for live joint frames. Joint updates supersede one
+        # another, so a slow consumer must never make them pile up in the
+        # queue — otherwise the 3D view drifts further and further behind the
+        # real robot as the backlog grows.
+        self._latest_joint_frame: dict[str, Any] | None = None
         self.broadcast_thread = None
         self.is_running = False
         # Guards `active_connections` since the broadcast worker thread also
@@ -220,8 +234,18 @@ class ConnectionManager:
         try:
             while self.is_running:
                 try:
-                    # Get data from queue with timeout
-                    data = self.broadcast_queue.get(timeout=0.1)
+                    # Send the freshest joint frame first (latest-wins slot).
+                    # A frame published between the read and the reset below is
+                    # simply picked up on the next iteration.
+                    frame = self._latest_joint_frame
+                    if frame is not None:
+                        self._latest_joint_frame = None
+                        if self.active_connections:
+                            loop.run_until_complete(self._send_to_all_connections(frame))
+
+                    # Get data from queue with a short timeout so joint frames
+                    # are polled frequently enough to stay real-time.
+                    data = self.broadcast_queue.get(timeout=0.02)
                     if data is None:  # Poison pill to stop
                         break
 
@@ -258,6 +282,11 @@ class ConnectionManager:
     def broadcast_joint_data_sync(self, data: dict[str, Any]):
         """Thread-safe method to queue data for broadcasting"""
         if self.is_running and self.active_connections:
+            if isinstance(data, dict) and data.get("type") == "joint_update":
+                # Replace any unsent frame instead of queueing: only the most
+                # recent robot pose is worth sending.
+                self._latest_joint_frame = data
+                return
             try:
                 self.broadcast_queue.put_nowait(data)
             except queue.Full:
@@ -351,6 +380,21 @@ def stop_inference():
 @app.get("/inference-status")
 def inference_status():
     return handle_inference_status()
+
+
+@app.get("/demo-camera/{cam_id}")
+def demo_camera_frame(cam_id: str):
+    """Latest camera frame teed by the inference subprocess (demo preview)."""
+    from fastapi.responses import FileResponse
+
+    from .rollout import demo_frames_dir
+
+    if not cam_id.replace("_", "").isalnum():
+        raise HTTPException(status_code=400, detail="Invalid camera id")
+    path = demo_frames_dir() / f"cam{cam_id}.jpg"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="No frame available")
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/health")
@@ -998,6 +1042,18 @@ def _windows_cameras() -> list[dict[str, Any]]:
     frontend match each index to the browser's ``MediaDeviceInfo.label`` for the
     live preview. Falls back to generic names if pygrabber is unavailable.
     """
+    # pygrabber uses COM, which must be initialized per-thread. FastAPI serves
+    # sync endpoints from a thread pool whose threads never call CoInitialize,
+    # so enumeration fails intermittently depending on which thread handles the
+    # request. Initialize COM here and balance with CoUninitialize.
+    import ctypes
+
+    com_initialized = False
+    try:
+        hr = ctypes.windll.ole32.CoInitialize(None)
+        com_initialized = hr in (0, 1)  # S_OK or S_FALSE (already initialized)
+    except Exception:
+        pass
     try:
         from pygrabber.dshow_graph import FilterGraph
 
@@ -1007,6 +1063,9 @@ def _windows_cameras() -> list[dict[str, Any]]:
         import cv2
 
         return _generic_cv2_cameras(cv2.CAP_DSHOW)
+    finally:
+        if com_initialized:
+            ctypes.windll.ole32.CoUninitialize()
     return [{"index": i, "name": name, "available": True} for i, name in enumerate(names)]
 
 
