@@ -44,7 +44,6 @@ export interface TrainingConfig {
 
   // GR00T-specific configuration (only used when policy_type === "groot").
   dataset_image_transforms_enable?: boolean;
-  eval_steps?: number;
   policy_base_model_path?: string;
   policy_embodiment_tag?: string;
   policy_chunk_size?: number;

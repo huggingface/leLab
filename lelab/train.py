@@ -51,7 +51,6 @@ class TrainingRequest(BaseModel):
     log_freq: int = 250
     save_freq: int = 1000
     env_eval_freq: int = 0
-    eval_steps: int = 0
     save_checkpoint: bool = True
 
     # Output configuration
@@ -186,7 +185,6 @@ def build_training_command(
     cmd.extend(["--log_freq", str(request.log_freq)])
     cmd.extend(["--save_freq", str(request.save_freq)])
     cmd.extend(["--env_eval_freq", str(request.env_eval_freq)])
-    cmd.extend(["--eval_steps", str(request.eval_steps)])
     cmd.extend(["--save_checkpoint", "true" if request.save_checkpoint else "false"])
 
     # Output. On HF Cloud the pod, not this host, runs the trainer: an absolute host

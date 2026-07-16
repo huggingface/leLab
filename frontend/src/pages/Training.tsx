@@ -96,7 +96,6 @@ function configToRequest(c: TrainingConfig): TrainingRequest {
     // GR00T-specific. Only forward the policy_* fields for groot so other
     // policies never receive flags their config doesn't define.
     dataset_image_transforms_enable: c.dataset_image_transforms_enable,
-    eval_steps: c.eval_steps,
     ...(c.policy_type === "groot"
       ? {
           policy_base_model_path: c.policy_base_model_path,

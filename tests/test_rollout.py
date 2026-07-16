@@ -342,6 +342,22 @@ def test_rollout_inference_args_omits_rtc_for_absolute_policies(tmp_path) -> Non
     assert _rollout_inference_args(str(policy_dir)) == []
 
 
+def test_rollout_inference_args_uses_groot_chunk_default_when_missing(tmp_path) -> None:
+    from lelab.rollout import _rollout_inference_args
+
+    policy_dir = tmp_path / "pretrained_model"
+    policy_dir.mkdir()
+    (policy_dir / "config.json").write_text(
+        json.dumps({"type": "groot", "use_relative_actions": True}),
+        encoding="utf-8",
+    )
+    assert _rollout_inference_args(str(policy_dir)) == [
+        "--inference.type=rtc",
+        "--inference.rtc.execution_horizon=16",
+        "--inference.queue_threshold=0",
+    ]
+
+
 def test_friendly_hint_maps_common_failures() -> None:
     from lelab.rollout import _friendly_hint
 

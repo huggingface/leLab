@@ -52,7 +52,6 @@ export interface TrainingRequest {
   // GR00T-specific (only sent when policy_type === "groot"); backend ignores
   // the policy_* ones for other policies.
   dataset_image_transforms_enable?: boolean;
-  eval_steps?: number;
   policy_base_model_path?: string;
   policy_embodiment_tag?: string;
   policy_chunk_size?: number;

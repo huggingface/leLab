@@ -175,3 +175,50 @@ def test_local_target_keeps_push_to_hub() -> None:
     assert _arg_value(cmd, "--policy.push_to_hub") == "true"
     assert _arg_value(cmd, "--policy.repo_id") == "me/x"
     assert "--job.target" not in cmd
+
+
+def test_groot_policy_flags_are_emitted_only_for_groot() -> None:
+    from lelab.train import TrainingRequest, build_training_command
+
+    req = TrainingRequest(
+        dataset_repo_id="x",
+        policy_type="groot",
+        policy_base_model_path="nvidia/GR00T-N1.7-3B",
+        policy_embodiment_tag="new_embodiment",
+        policy_chunk_size=16,
+        policy_n_action_steps=16,
+        policy_use_relative_actions=True,
+        policy_relative_exclude_joints=["gripper"],
+        policy_use_bf16=True,
+    )
+    cmd = build_training_command(req, "/tmp/out")
+
+    assert _arg_value(cmd, "--policy.base_model_path") == "nvidia/GR00T-N1.7-3B"
+    assert _arg_value(cmd, "--policy.embodiment_tag") == "new_embodiment"
+    assert _arg_value(cmd, "--policy.chunk_size") == "16"
+    assert _arg_value(cmd, "--policy.n_action_steps") == "16"
+    assert _arg_value(cmd, "--policy.use_relative_actions") == "true"
+    assert _arg_value(cmd, "--policy.relative_exclude_joints") == '["gripper"]'
+    assert _arg_value(cmd, "--policy.use_bf16") == "true"
+
+    non_groot = build_training_command(
+        TrainingRequest(
+            dataset_repo_id="x",
+            policy_type="act",
+            policy_base_model_path="nvidia/GR00T-N1.7-3B",
+            policy_embodiment_tag="new_embodiment",
+            policy_chunk_size=16,
+            policy_n_action_steps=16,
+            policy_use_relative_actions=True,
+            policy_relative_exclude_joints=["gripper"],
+            policy_use_bf16=True,
+        ),
+        "/tmp/out",
+    )
+    assert "--policy.base_model_path" not in non_groot
+    assert "--policy.embodiment_tag" not in non_groot
+    assert "--policy.chunk_size" not in non_groot
+    assert "--policy.n_action_steps" not in non_groot
+    assert "--policy.use_relative_actions" not in non_groot
+    assert "--policy.relative_exclude_joints" not in non_groot
+    assert "--policy.use_bf16" not in non_groot

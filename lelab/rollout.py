@@ -179,7 +179,7 @@ def _rollout_inference_args(policy_path: str) -> list[str]:
     if isinstance(n_action_steps, int) and n_action_steps > 0:
         args.append(f"--inference.rtc.execution_horizon={n_action_steps}")
     elif policy_type == "groot":
-        args.append("--inference.rtc.execution_horizon=8")
+        args.append("--inference.rtc.execution_horizon=16")
 
     # Wait until the current chunk is consumed before replanning. GROOT docs
     # recommend keeping this at 0 (never > 5) for stable real-robot rollout.
