@@ -35,6 +35,9 @@ class TrainingRequest(BaseModel):
     dataset_revision: str | None = None
     dataset_root: str | None = None
     dataset_episodes: list[int] | None = None
+    # Fraction of episodes held out for validation (0 disables). lerobot
+    # requires eval_split > 0 whenever eval_steps > 0.
+    dataset_eval_split: float = 0.0
 
     # Policy configuration
     policy_type: str = "act"
@@ -71,6 +74,10 @@ class TrainingRequest(BaseModel):
     eval_n_episodes: int = 10
     eval_batch_size: int = 50
     eval_use_async_envs: bool = False
+    # Compute eval loss on the held-out split every N steps (0 disables).
+    eval_steps: int = 0
+    # Cap on total eval samples (0 = use all held-out data).
+    max_eval_samples: int = 0
 
     # Policy-specific
     policy_device: str | None = "cuda"
@@ -118,6 +125,8 @@ def build_training_command(
         cmd.extend(["--dataset.root", request.dataset_root])
     if request.dataset_episodes:
         cmd.extend(["--dataset.episodes"] + [str(ep) for ep in request.dataset_episodes])
+    if request.dataset_eval_split > 0:
+        cmd.extend(["--dataset.eval_split", str(request.dataset_eval_split)])
 
     # Policy
     cmd.extend(["--policy.type", request.policy_type])
@@ -184,6 +193,10 @@ def build_training_command(
     cmd.extend(["--eval.n_episodes", str(request.eval_n_episodes)])
     cmd.extend(["--eval.batch_size", str(request.eval_batch_size)])
     cmd.extend(["--eval.use_async_envs", "true" if request.eval_use_async_envs else "false"])
+    if request.eval_steps > 0:
+        cmd.extend(["--eval_steps", str(request.eval_steps)])
+        if request.max_eval_samples > 0:
+            cmd.extend(["--max_eval_samples", str(request.max_eval_samples)])
 
     # Optimizer
     if request.optimizer_type:

@@ -9,6 +9,7 @@ export interface TrainingMetrics {
   current_lr: number | null;
   grad_norm: number | null;
   eta_seconds: number | null;
+  eval_loss: number | null;
 }
 
 export interface LogLine {
@@ -21,6 +22,7 @@ export type MetricsHistoryPoint = {
   loss: number | null;
   lr: number | null;
   grad_norm: number | null;
+  eval_loss: number | null;
 };
 
 // Mirror of the backend TrainingRequest. The frontend doesn't send all of
@@ -32,6 +34,8 @@ export interface TrainingRequest {
   batch_size: number;
   seed?: number;
   num_workers: number;
+  dataset_eval_split?: number;
+  eval_steps?: number;
   log_freq: number;
   save_freq: number;
   save_checkpoint: boolean;

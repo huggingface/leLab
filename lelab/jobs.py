@@ -61,6 +61,9 @@ class TrainingMetrics(BaseModel):
     current_lr: float | None = None
     grad_norm: float | None = None
     eta_seconds: float | None = None
+    # Latest held-out validation loss (only present when the job was started
+    # with eval_steps > 0 and a dataset eval_split).
+    eval_loss: float | None = None
 
 
 class LogLine(BaseModel):
@@ -119,6 +122,7 @@ class MetricsHistoryPoint(BaseModel):
     loss: float | None = None
     lr: float | None = None
     grad_norm: float | None = None
+    eval_loss: float | None = None
 
 
 def _pid_alive(pid: int) -> bool:
@@ -146,6 +150,10 @@ class JobRunner(Protocol):
 
 # tqdm progress: "Training:   1%|▏         | 125/10000 [02:02<2:36:10,  1.05step/s]"
 _TQDM_RE = re.compile(r"Training:\s*\d+%[^|]*\|[^|]*\|\s*(\d+)/(\d+)\s*\[(?:[\d:]+)<([\d:]+)")
+
+# Held-out validation loss: "step 40000: eval_loss=1.2345" (lerobot_train,
+# emitted every eval_steps when dataset.eval_split > 0).
+_EVAL_LOSS_RE = re.compile(r"step\s+(\d+):\s*eval_loss=([-+eE\d.]+)")
 
 # Wandb prints something like "wandb: 🚀 View run at https://wandb.ai/<entity>/<project>/runs/<id>"
 # when it boots. We capture the first URL of that shape we see.
@@ -203,6 +211,11 @@ def parse_metrics_into(line: str, metrics: TrainingMetrics) -> None:
             if "grdn:" in line:
                 with contextlib.suppress(ValueError):
                     metrics.grad_norm = float(line.split("grdn:")[1].split()[0])
+
+        eval_match = _EVAL_LOSS_RE.search(line)
+        if eval_match:
+            with contextlib.suppress(ValueError):
+                metrics.eval_loss = float(eval_match.group(2))
 
     except Exception as exc:
         logger.debug("Error parsing log line %r: %s", line, exc)
@@ -991,6 +1004,18 @@ class JobRegistry:
                 except Exception:
                     continue  # skip malformed line, same as read_persisted_logs
                 msg = log_line.message
+                # Eval lines ("step N: eval_loss=X") use their own format and
+                # cadence; emit them as eval-only points keyed by their step.
+                eval_match = _EVAL_LOSS_RE.search(msg)
+                if eval_match:
+                    with contextlib.suppress(ValueError):
+                        step = int(eval_match.group(1))
+                        eval_loss = float(eval_match.group(2))
+                        if points and points[-1].step == step:
+                            points[-1].eval_loss = eval_loss
+                        else:
+                            points.append(MetricsHistoryPoint(step=step, eval_loss=eval_loss))
+                    continue
                 # Only the log-freq lines carry per-step metric values.
                 # Tqdm lines have a step but no loss/lr — skip them so we
                 # don't emit a flat-line point per tqdm tick.
@@ -1006,8 +1031,10 @@ class JobRegistry:
                     lr=fresh.current_lr,
                     grad_norm=fresh.grad_norm,
                 )
-                # Dedupe by step: overwrite on consecutive same-step lines.
+                # Dedupe by step: overwrite on consecutive same-step lines,
+                # carrying forward an eval_loss captured for the same step.
                 if points and points[-1].step == point.step:
+                    point.eval_loss = points[-1].eval_loss
                     points[-1] = point
                 else:
                     points.append(point)

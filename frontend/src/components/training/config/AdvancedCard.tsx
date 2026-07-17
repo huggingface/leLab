@@ -122,6 +122,67 @@ const AdvancedCard: React.FC<ConfigComponentProps> = ({ config, updateConfig }) 
 
           <Separator className="bg-slate-700" />
 
+          {/* Validation */}
+          <section className="space-y-4">
+            <SectionHeading>Validation</SectionHeading>
+            <div className="flex items-center space-x-3">
+              <Switch
+                id="validation_enable"
+                checked={config.dataset_eval_split > 0}
+                onCheckedChange={(checked) => {
+                  // lerobot requires eval_split > 0 whenever eval_steps > 0,
+                  // so the toggle drives both fields together.
+                  updateConfig('dataset_eval_split', checked ? 0.1 : 0);
+                  updateConfig('eval_steps', checked ? 1000 : 0);
+                }}
+              />
+              <Label htmlFor="validation_enable" className="text-slate-300">
+                Hold out a validation split
+              </Label>
+            </div>
+            {config.dataset_eval_split > 0 && (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="dataset_eval_split" className="text-slate-300">
+                      Validation Split (fraction)
+                    </Label>
+                    <NumberInput
+                      id="dataset_eval_split"
+                      integer={false}
+                      step="0.05"
+                      value={config.dataset_eval_split}
+                      onChange={(v) => {
+                        if (v !== undefined) updateConfig('dataset_eval_split', v);
+                      }}
+                      className="bg-slate-900 border-slate-600 text-white rounded-lg"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="eval_steps" className="text-slate-300">
+                      Evaluate Every N Steps
+                    </Label>
+                    <NumberInput
+                      id="eval_steps"
+                      value={config.eval_steps}
+                      onChange={(v) => {
+                        if (v !== undefined) updateConfig('eval_steps', v);
+                      }}
+                      className="bg-slate-900 border-slate-600 text-white rounded-lg"
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-slate-500">
+                  Holds out this fraction of episodes from training and computes a
+                  validation loss on them at the given cadence — the eval curve shows
+                  up next to the training loss on the monitoring page.
+                </p>
+              </>
+            )}
+          </section>
+
+          <Separator className="bg-slate-700" />
+
           {/* Optimizer */}
           <section className="space-y-4">
             <SectionHeading>Optimizer</SectionHeading>
