@@ -43,7 +43,9 @@ jobs:
           if [[ -n "$(git status --porcelain frontend/dist)" ]]; then
             git add frontend/dist
             git commit -m "ci: rebuild frontend/dist [skip ci]"
-            git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${GITHUB_REF_NAME}"
+            echo "${GH_TOKEN}" | gh auth login --with-token
+            gh auth setup-git
+            git push origin "HEAD:${GITHUB_REF_NAME}"
           else
             echo "frontend/dist already up to date"
           fi
