@@ -47,6 +47,27 @@ _SO101_URDF_CORRECTIONS = {
     "elbow_flex": (+1, 1029),
 }
 
+
+def _load_urdf_view_zero() -> dict[str, dict[str, float]] | None:
+    """Per-arm 3D-view zero captured by the user at the URDF sleep pose.
+
+    The hardcoded tick corrections above assume a canonical calibration; real
+    calibrations vary enough that the 3D view can be wildly offset. If
+    ``calibration/urdf_view_zero.json`` exists (mapping motor name to
+    ``{"zero_deg": float, "sign": ±1}``), it takes priority:
+    URDF angle = sign * (raw_normalized_deg - zero_deg).
+    """
+    import json
+    from pathlib import Path
+
+    path = Path.home() / ".cache" / "huggingface" / "lerobot" / "calibration" / "urdf_view_zero.json"
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return {k: v for k, v in data.items() if isinstance(v, dict) and "zero_deg" in v}
+    except (OSError, ValueError):
+        return None
+
 # Global variables for teleoperation state
 teleoperation_active = False
 teleoperation_thread: threading.Thread | None = None
@@ -85,6 +106,12 @@ def get_joint_positions_from_robot(robot) -> dict[str, float]:
     try:
         observation = robot.get_observation()
         calibration = robot.calibration or {}
+        view_zero = getattr(get_joint_positions_from_robot, "_view_zero_cache", "unset")
+        if view_zero == "unset":
+            view_zero = _load_urdf_view_zero()
+            get_joint_positions_from_robot._view_zero_cache = view_zero
+            if view_zero:
+                logger.info("Using user-captured urdf_view_zero.json for the 3D view")
 
         joint_positions: dict[str, float] = {}
         debug_rows = []
@@ -97,13 +124,17 @@ def get_joint_positions_from_robot(robot) -> dict[str, float]:
 
             raw_deg = observation[motor_key]
             angle_degrees = raw_deg
-            correction = _SO101_URDF_CORRECTIONS.get(motor_name)
-            if correction is not None and motor_name in calibration:
-                sign, urdf_zero_ticks = correction
-                cal = calibration[motor_name]
-                mid = (cal.range_min + cal.range_max) / 2
-                motor_at_urdf_zero = (urdf_zero_ticks - mid) * 360 / _STS3215_MAX_RES
-                angle_degrees = sign * (raw_deg - motor_at_urdf_zero)
+            if view_zero and motor_name in view_zero:
+                entry = view_zero[motor_name]
+                angle_degrees = float(entry.get("sign", 1)) * (raw_deg - float(entry["zero_deg"]))
+            else:
+                correction = _SO101_URDF_CORRECTIONS.get(motor_name)
+                if correction is not None and motor_name in calibration:
+                    sign, urdf_zero_ticks = correction
+                    cal = calibration[motor_name]
+                    mid = (cal.range_min + cal.range_max) / 2
+                    motor_at_urdf_zero = (urdf_zero_ticks - mid) * 360 / _STS3215_MAX_RES
+                    angle_degrees = sign * (raw_deg - motor_at_urdf_zero)
 
             joint_positions[urdf_joint_name] = angle_degrees * math.pi / 180.0
             debug_rows.append(
@@ -227,7 +258,7 @@ def handle_start_teleoperation(request: TeleoperateRequest, websocket_manager=No
             logger.info("Starting teleoperation loop...")
             try:
                 last_broadcast_time = 0
-                broadcast_interval = 0.05  # 20 FPS
+                broadcast_interval = 1 / 30  # 30 FPS
 
                 while teleoperation_active:
                     action = teleop_device.get_action()
