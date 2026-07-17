@@ -36,6 +36,15 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
 from starlette.types import Scope
 
+# Windows consoles often use a legacy code page (cp1252) that can't encode the
+# emoji used in log/print output; an unhandled UnicodeEncodeError inside an
+# endpoint then turns into a 500 and hides the real error from the frontend.
+# Replace unencodable characters instead of crashing.
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        with contextlib.suppress(Exception):
+            _stream.reconfigure(errors="replace")
+
 from . import datasets as dataset_browser
 
 # Import our custom calibration functionality
@@ -998,6 +1007,18 @@ def _windows_cameras() -> list[dict[str, Any]]:
     frontend match each index to the browser's ``MediaDeviceInfo.label`` for the
     live preview. Falls back to generic names if pygrabber is unavailable.
     """
+    # pygrabber uses COM, which must be initialized per-thread. FastAPI serves
+    # sync endpoints from a thread pool whose threads never call CoInitialize,
+    # so enumeration fails intermittently depending on which thread handles the
+    # request. Initialize COM here and balance with CoUninitialize.
+    import ctypes
+
+    com_initialized = False
+    try:
+        hr = ctypes.windll.ole32.CoInitialize(None)
+        com_initialized = hr in (0, 1)  # S_OK or S_FALSE (already initialized)
+    except Exception:
+        pass
     try:
         from pygrabber.dshow_graph import FilterGraph
 
@@ -1007,6 +1028,9 @@ def _windows_cameras() -> list[dict[str, Any]]:
         import cv2
 
         return _generic_cv2_cameras(cv2.CAP_DSHOW)
+    finally:
+        if com_initialized:
+            ctypes.windll.ole32.CoUninitialize()
     return [{"index": i, "name": name, "available": True} for i, name in enumerate(names)]
 
 
