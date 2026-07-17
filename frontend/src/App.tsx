@@ -10,6 +10,7 @@ import Calibration from "@/pages/Calibration";
 import Recording from "@/pages/Recording";
 import Training from "@/pages/Training";
 import Inference from "@/pages/Inference";
+import Demo from "@/pages/Demo";
 import EditDataset from "@/pages/EditDataset";
 import Upload from "@/pages/Upload";
 
@@ -44,6 +45,7 @@ function App() {
                         <Route path="/training" element={<Training />} />
                         <Route path="/training/:jobId" element={<Training />} />
                         <Route path="/inference" element={<Inference />} />
+                        <Route path="/demo" element={<Demo />} />
                         <Route path="/calibration" element={<Calibration />} />
                         <Route path="/edit-dataset" element={<EditDataset />} />
 
