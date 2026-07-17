@@ -7,6 +7,7 @@ export interface DatasetItem {
   last_modified: string | null;
   private: boolean;
   source: DatasetSource;
+  num_episodes?: number | null;
 }
 
 export async function listDatasets(

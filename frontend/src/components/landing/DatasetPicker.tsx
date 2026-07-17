@@ -14,11 +14,24 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { DatasetItem } from "@/lib/replayApi";
+import { getEpisodeTarget } from "@/lib/episodeTargets";
+
+function relativeDate(iso: string | null): string | null {
+  if (!iso) return null;
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const days = Math.floor(diffMs / 86_400_000);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  return months < 12 ? `${months}mo ago` : `${Math.floor(months / 12)}y ago`;
+}
 
 interface DatasetPickerProps {
   datasets: DatasetItem[];
   loading: boolean;
   onPickExisting: (item: DatasetItem) => void;
+  onResumeExisting?: (item: DatasetItem) => void;
   onCreateNew: (name: string) => void;
   onOpenCustom: (repoId: string) => void;
   children: React.ReactNode;
@@ -31,6 +44,7 @@ const DatasetPicker: React.FC<DatasetPickerProps> = ({
   datasets,
   loading,
   onPickExisting,
+  onResumeExisting,
   onCreateNew,
   onOpenCustom,
   children,
@@ -87,22 +101,69 @@ const DatasetPicker: React.FC<DatasetPickerProps> = ({
     reset();
   };
 
-  const renderItem = (d: DatasetItem) => (
+  const renderItem = (d: DatasetItem) => {
+    const target = getEpisodeTarget(d.repo_id);
+    const detailParts: string[] = [];
+    if (d.num_episodes != null) {
+      detailParts.push(
+        target
+          ? `${d.num_episodes}/${target} episodes`
+          : `${d.num_episodes} episodes`,
+      );
+    }
+    const rel = relativeDate(d.last_modified);
+    if (rel) detailParts.push(rel);
+    const progress =
+      target && d.num_episodes != null
+        ? Math.min(100, Math.round((d.num_episodes / target) * 100))
+        : null;
+    return (
     <CommandItem
       key={d.repo_id}
       value={d.repo_id}
       onSelect={() => handlePick(d)}
       className="text-white aria-selected:bg-gray-700"
     >
-      <span className="flex-1 truncate">{d.repo_id}</span>
+      <div className="flex-1 min-w-0">
+        <span className="block truncate">{d.repo_id}</span>
+        {detailParts.length > 0 && (
+          <span className="block text-xs text-gray-400">
+            {detailParts.join(" · ")}
+          </span>
+        )}
+        {progress !== null && (
+          <span className="mt-1 block h-1 w-full rounded bg-gray-700">
+            <span
+              className={`block h-1 rounded ${progress >= 100 ? "bg-green-500" : "bg-red-400"}`}
+              style={{ width: `${progress}%` }}
+            />
+          </span>
+        )}
+      </div>
       {d.source === "both" && (
         <span className="text-xs text-gray-400 mr-2">on Hub</span>
       )}
       {d.private && (
         <span className="text-xs text-amber-400">private</span>
       )}
+      {(d.source === "local" || d.source === "both") && onResumeExisting && (
+        <button
+          type="button"
+          title="Continue recording: append new episodes to this dataset"
+          onClick={(e) => {
+            e.stopPropagation();
+            onResumeExisting(d);
+            reset();
+          }}
+          className="ml-2 flex shrink-0 items-center gap-1 rounded-full border border-gray-600 px-2 py-0.5 text-xs text-gray-300 hover:border-red-400 hover:text-red-400 hover:bg-gray-700"
+        >
+          <Plus className="h-3 w-3" />
+          episodes
+        </button>
+      )}
     </CommandItem>
-  );
+    );
+  };
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
