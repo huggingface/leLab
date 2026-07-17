@@ -17,7 +17,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { AlertTriangle, CheckCircle, ChevronDown } from "lucide-react";
+import { AlertTriangle, CheckCircle, ChevronDown, Disc } from "lucide-react";
 import CameraConfiguration, {
   CameraConfig,
 } from "@/components/recording/CameraConfiguration";
@@ -28,6 +28,7 @@ interface RecordingModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   robot: RobotRecord | null;
+  resumeRepoId: string | null;
   datasetName: string;
   setDatasetName: (value: string) => void;
   singleTask: string;
@@ -50,6 +51,7 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
   open,
   onOpenChange,
   robot,
+  resumeRepoId,
   datasetName,
   setDatasetName,
   singleTask,
@@ -69,6 +71,8 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
 }) => {
   const { auth } = useHfAuth();
 
+  const resumeMode = resumeRepoId !== null;
+
   const canStart = !!robot && robot.is_clean;
 
   return (
@@ -81,7 +85,7 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
             </div>
           </div>
           <DialogTitle className="text-white text-center text-2xl font-bold">
-            Configure Recording
+            {resumeMode ? "Continue Recording" : "Configure Recording"}
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-6 py-4">
@@ -124,6 +128,16 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
               <h3 className="text-lg font-semibold text-white border-b border-gray-700 pb-2">
                 Dataset Configuration
               </h3>
+              {resumeMode && (
+                <Alert className="bg-blue-900/40 border-blue-700 text-blue-100">
+                  <Disc className="h-4 w-4" />
+                  <AlertDescription>
+                    New episodes will be appended to{" "}
+                    <strong className="font-mono">{resumeRepoId}</strong>. The
+                    setup must match the original recording exactly.
+                  </AlertDescription>
+                </Alert>
+              )}
               <div className="grid grid-cols-1 gap-4">
                 <div className="space-y-2">
                   <Label
@@ -135,20 +149,24 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
                   <Input
                     id="datasetName"
                     value={datasetName}
+                    disabled={resumeMode}
                     onChange={(e) =>
                       setDatasetName(
                         e.target.value.replace(/[^A-Za-z0-9._-]/g, "_")
                       )
                     }
                     placeholder="my_dataset"
-                    className="bg-gray-800 border-gray-700 text-white"
+                    className="bg-gray-800 border-gray-700 text-white disabled:opacity-60"
                   />
-                  <p className="text-xs text-gray-500">
-                    Letters, numbers, <code>.</code> <code>_</code>{" "}
-                    <code>-</code> only — other characters become{" "}
-                    <code>_</code>.
-                  </p>
+                  {!resumeMode && (
+                    <p className="text-xs text-gray-500">
+                      Letters, numbers, <code>.</code> <code>_</code>{" "}
+                      <code>-</code> only — other characters become{" "}
+                      <code>_</code>.
+                    </p>
+                  )}
                   {datasetName &&
+                    !resumeMode &&
                     (auth.status === "authenticated" ? (
                       <p className="text-xs text-gray-500">
                         Will be saved as{" "}
@@ -182,7 +200,7 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
                     htmlFor="numEpisodes"
                     className="text-sm font-medium text-gray-300"
                   >
-                    Number of Episodes
+                    {resumeMode ? "Episodes to add" : "Number of Episodes"}
                   </Label>
                   <NumberInput
                     id="numEpisodes"

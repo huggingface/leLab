@@ -157,6 +157,7 @@ const Landing = () => {
         open={rec.showModal}
         onOpenChange={rec.onOpenChange}
         robot={selectedRecord}
+        resumeRepoId={rec.resumeRepoId}
         datasetName={rec.datasetName}
         setDatasetName={rec.setDatasetName}
         singleTask={rec.singleTask}
