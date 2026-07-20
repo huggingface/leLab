@@ -72,6 +72,8 @@ interface BackendStatus {
     exit_early: boolean;
     rerecord_episode: boolean;
   };
+  error?: string | null;
+  hint?: string | null;
 }
 
 const Recording = () => {
@@ -88,6 +90,7 @@ const Recording = () => {
     null
   );
   const [recordingSessionStarted, setRecordingSessionStarted] = useState(false);
+  const [sessionError, setSessionError] = useState<{ error: string; hint: string | null } | null>(null);
 
   const [optimisticPhase, setOptimisticPhase] = useState<Phase | null>(null);
   const [showStopConfirm, setShowStopConfirm] = useState(false);
@@ -141,7 +144,7 @@ const Recording = () => {
 
   // Poll backend status continuously to stay in sync
   useEffect(() => {
-    if (!recordingSessionStarted) return;
+    if (!recordingSessionStarted || sessionError !== null) return;
 
     const pollStatus = async () => {
       try {
@@ -150,6 +153,15 @@ const Recording = () => {
         );
         if (!response.ok) return;
         const status = await response.json();
+        
+        if (status.current_phase === "error") {
+          setSessionError({
+            error: status.error || "Recording session failed.",
+            hint: status.hint || null,
+          });
+          return;
+        }
+
         setBackendStatus(status);
 
         const currentOptimistic = optimisticPhaseRef.current;
@@ -205,7 +217,7 @@ const Recording = () => {
     pollStatus();
     const statusInterval = setInterval(pollStatus, 1000);
     return () => clearInterval(statusInterval);
-  }, [recordingSessionStarted, recordingConfig, navigate, baseUrl, fetchWithHeaders]);
+  }, [recordingSessionStarted, recordingConfig, navigate, baseUrl, fetchWithHeaders, sessionError]);
 
   const formatTime = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
@@ -593,6 +605,39 @@ const Recording = () => {
               className="bg-red-500 hover:bg-red-600 text-white"
             >
               Stop
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={sessionError !== null}>
+        <AlertDialogContent className="bg-gray-900 border-gray-700 text-white max-w-lg">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-red-500 flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping" />
+              Recording Session Failed
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-gray-300 space-y-4 mt-2">
+              <p>The recording session encountered an error and had to stop.</p>
+              
+              <div className="bg-black/50 p-4 rounded border border-red-900/50 font-mono text-xs text-red-400 max-h-40 overflow-y-auto break-all whitespace-pre-wrap">
+                {sessionError?.error}
+              </div>
+
+              {sessionError?.hint && (
+                <div className="bg-blue-950/40 p-4 rounded border border-blue-800/40 text-sm text-slate-200">
+                  <strong className="text-blue-400 block mb-1">Hardware Hint:</strong>
+                  {sessionError.hint}
+                </div>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction
+              onClick={() => navigate("/")}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              Return to Home
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

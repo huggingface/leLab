@@ -422,7 +422,9 @@ def _run_dev(*, no_open: bool = False) -> None:
             env=os.environ.copy(),
         )
         processes.append(("backend", backend_process))
-        if not _wait_for_port(BACKEND_PORT, timeout=15):
+        # Importing lelab.server pulls in torch via lerobot, which can take
+        # 20-30s cold on Windows; 15s made dev mode die on slower machines.
+        if not _wait_for_port(BACKEND_PORT, timeout=90):
             if backend_process.poll() is not None:
                 _fail(
                     f"Backend exited early with code {backend_process.returncode}. Check the uvicorn output above."

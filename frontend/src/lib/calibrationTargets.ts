@@ -19,9 +19,23 @@ const SO101_FOLLOWER_TARGETS: Record<string, number> = {
   gripper: 1400,
 };
 
-const TARGETS_BY_DEVICE_TYPE: Record<string, Record<string, number>> = {
-  teleop: SO101_LEADER_TARGETS,
-  robot: SO101_FOLLOWER_TARGETS,
+// Target joint ranges for OMX-AI.
+const OMXAI_LEADER_TARGETS: Record<string, number> = {
+  shoulder_pan: 2000,
+  shoulder_lift: 2000,
+  elbow_flex: 2000,
+  wrist_flex: 2000,
+  wrist_roll: 3000,
+  gripper: 1000,
+};
+
+const OMXAI_FOLLOWER_TARGETS: Record<string, number> = {
+  shoulder_pan: 2000,
+  shoulder_lift: 2000,
+  elbow_flex: 2000,
+  wrist_flex: 2000,
+  wrist_roll: 3000,
+  gripper: 1000,
 };
 
 const RANGE_TOLERANCE = 0.98;
@@ -29,10 +43,16 @@ const RANGE_TOLERANCE = 0.98;
 export function isMotorRangeComplete(
   deviceType: string | null | undefined,
   motor: string,
-  rangeAchieved: number
+  rangeAchieved: number,
+  robotType?: string | null
 ): boolean {
   if (!deviceType) return false;
-  const target = TARGETS_BY_DEVICE_TYPE[deviceType]?.[motor];
+  const isOmx = robotType && robotType.toLowerCase().includes("omx");
+  const targetMap = isOmx
+    ? (deviceType === "teleop" ? OMXAI_LEADER_TARGETS : OMXAI_FOLLOWER_TARGETS)
+    : (deviceType === "teleop" ? SO101_LEADER_TARGETS : SO101_FOLLOWER_TARGETS);
+
+  const target = targetMap[motor];
   if (!target) return false;
   return rangeAchieved >= target * RANGE_TOLERANCE;
 }

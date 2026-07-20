@@ -233,6 +233,7 @@ const InferenceModal: React.FC<Props> = ({
         task,
         cameras: cameraDict,
         duration_s: durationS,
+        robot_type: robot.robot_type || "so101",
       });
       onOpenChange(false);
       navigate("/inference");

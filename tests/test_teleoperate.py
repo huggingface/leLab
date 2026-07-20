@@ -62,7 +62,7 @@ def test_start_teleoperation_reports_connection_failure(
     import lelab.teleoperate as teleop
 
     monkeypatch.setattr(teleop, "teleoperation_active", False)
-    monkeypatch.setattr(teleop, "setup_calibration_files", lambda leader, follower: ("leader", "follower"))
+    monkeypatch.setattr(teleop, "setup_calibration_files", lambda leader, follower, *args: ("leader", "follower"))
 
     class _Bus:
         def connect(self) -> None:
@@ -77,8 +77,7 @@ def test_start_teleoperation_reports_connection_failure(
         def disconnect(self) -> None:
             self.disconnected = True
 
-    monkeypatch.setattr(teleop, "SO101Follower", _Device)
-    monkeypatch.setattr(teleop, "SO101Leader", _Device)
+    monkeypatch.setattr(teleop, "make_device", lambda robot_type, side, config: _Device(config))
 
     request = teleop.TeleoperateRequest(
         leader_port="COM_LEADER",
@@ -105,7 +104,7 @@ def test_start_teleoperation_disconnects_follower_when_leader_fails(
     import lelab.teleoperate as teleop
 
     monkeypatch.setattr(teleop, "teleoperation_active", False)
-    monkeypatch.setattr(teleop, "setup_calibration_files", lambda leader, follower: ("leader", "follower"))
+    monkeypatch.setattr(teleop, "setup_calibration_files", lambda leader, follower, *args: ("leader", "follower"))
 
     class _OkBus:
         def connect(self) -> None:
@@ -133,10 +132,12 @@ def test_start_teleoperation_disconnects_follower_when_leader_fails(
             self.disconnected = True
 
     created: dict = {}
-    monkeypatch.setattr(
-        teleop, "SO101Follower", lambda config: created.setdefault("follower", _Follower(config))
-    )
-    monkeypatch.setattr(teleop, "SO101Leader", lambda config: created.setdefault("leader", _Leader(config)))
+
+    def _fake_make_device(robot_type, side, config):
+        cls = _Follower if side == "follower" else _Leader
+        return created.setdefault(side, cls(config))
+
+    monkeypatch.setattr(teleop, "make_device", _fake_make_device)
 
     request = teleop.TeleoperateRequest(
         leader_port="COM_LEADER",

@@ -37,6 +37,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from .utils.config import setup_follower_calibration_file
+from .utils.devices import friendly_hint
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ class InferenceRequest(BaseModel):
     task: str = ""
     cameras: dict[str, dict[str, Any]] = {}
     duration_s: int = 60
+    robot_type: str = "so101"
 
 
 inference_active: bool = False
@@ -185,34 +187,6 @@ def _extract_error_from_log(log_path: str | None) -> str | None:
     return snippet or None
 
 
-def _friendly_hint(error_text: str | None) -> str | None:
-    """A plain-language, actionable headline for the common SO-101 failures."""
-    if not error_text:
-        return None
-    low = error_text.lower()
-    if "overload" in low or "torque_enable" in low:
-        return (
-            "A motor overloaded — usually the gripper holding an object too hard. Release the object / "
-            "open the gripper and power-cycle the arm before trying again."
-        )
-    if "missing motor ids" in low or "motor check failed" in low:
-        return (
-            "A follower motor isn't responding (often the gripper, id 6). If a skill was holding an object "
-            "it likely overloaded — remove it, power-cycle the arm, then try teleoperation first."
-        )
-    if "could not connect" in low or "failed to connect" in low or "not connected" in low:
-        return "Couldn't connect to the arm — make sure it's plugged in, powered on, and on the right port."
-    if "frame is too old" in low or "no frame" in low or "frame timeout" in low:
-        return (
-            "A camera can't keep up — frames are arriving too slowly. Lower its resolution/FPS, "
-            "set FOURCC=MJPG, and close other heavy apps, then try again."
-        )
-    if "failed to set capture_" in low or "actual_width" in low or "actual_height" in low:
-        return "A camera doesn't support the configured resolution — open camera settings and click Auto."
-    if "permission" in low and ("port" in low or "com" in low):
-        return "Couldn't open the serial port — close anything else using it, or run `lelab --stop`."
-    return None
-
 
 # Errors that mean the policy actually ran and only shutdown/cleanup tripped —
 # e.g. disabling torque on a gripper still holding an object. Connection-loss
@@ -271,8 +245,17 @@ def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
         # .json extension. We need that stripped form for `--robot.id`,
         # because lerobot appends `.json` itself when constructing
         # `calibration_dir / f"{id}.json"`.
-        follower_id = setup_follower_calibration_file(request.follower_config)
+        follower_id = setup_follower_calibration_file(request.follower_config, request.robot_type)
         policy_path = _resolve_policy_path(request.policy_ref)
+
+        # Resolve robot type argument for lerobot CLI
+        model = request.robot_type.lower()
+        if "so" in model:
+            robot_type_arg = "--robot.type=so101_follower"
+        elif "omx" in model:
+            robot_type_arg = "--robot.type=omx_follower"
+        else:
+            robot_type_arg = "--robot.type=so101_follower"
 
         cmd = [
             sys.executable,
@@ -281,7 +264,7 @@ def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
             "--strategy.type=base",
             f"--policy.path={policy_path}",
             f"--policy.device={_detect_device()}",
-            "--robot.type=so101_follower",
+            robot_type_arg,
             f"--robot.port={request.follower_port}",
             f"--robot.id={follower_id}",
             f"--task={request.task}",
@@ -400,7 +383,7 @@ def handle_inference_status() -> dict[str, Any]:
                 "exit_code": rc,
                 "outcome": outcome,
                 "error": error,
-                "hint": _friendly_hint(error),
+                "hint": friendly_hint(error),
                 "policy_ref": finished_meta.get("policy_ref"),
                 "duration_s": finished_meta.get("duration_s"),
                 "log_path": finished_meta.get("log_path"),

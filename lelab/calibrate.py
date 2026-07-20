@@ -27,20 +27,26 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from lerobot.motors import MotorCalibration
-from lerobot.motors.feetech import OperatingMode
-from lerobot.robots import (
-    Robot,
-    make_robot_from_config,
-)
-from lerobot.teleoperators import (
-    Teleoperator,
-    make_teleoperator_from_config,
-)
+from lerobot.robots import Robot
+from lerobot.teleoperators import Teleoperator
 from lerobot.utils.utils import init_logging
 
 from .utils.devices import safe_disconnect_device
 
 logger = logging.getLogger(__name__)
+
+
+def _position_operating_mode(bus) -> int:
+    """POSITION operating-mode register value for the bus's motor protocol.
+
+    Feetech and Dynamixel disagree on the value (0 vs 3); writing the Feetech
+    value to a Dynamixel bus (OMX) would put the motors in CURRENT mode.
+    """
+    if "dynamixel" in type(bus).__module__:
+        from lerobot.motors.dynamixel import OperatingMode
+    else:
+        from lerobot.motors.feetech import OperatingMode
+    return OperatingMode.POSITION.value
 
 
 class CalibrationDiscontinuityError(Exception):
@@ -76,6 +82,7 @@ class CalibrationRequest:
     port: str
     config_file: str
     robot_name: str | None = None  # When set, write port + config back into the robot record on success
+    robot_type: str = "so101"
 
 
 class CalibrationManager:
@@ -252,24 +259,24 @@ class CalibrationManager:
             logger.info(f"Starting calibration worker for {request.device_type}")
 
             # Create device configuration
-            if request.device_type == "robot":
-                from lerobot.robots.so_follower import SO101FollowerConfig
-
-                config = SO101FollowerConfig(port=request.port, id=request.config_file)
-            elif request.device_type == "teleop":
-                from lerobot.teleoperators.so_leader import SO101LeaderConfig
-
-                config = SO101LeaderConfig(port=request.port, id=request.config_file)
-            else:
-                raise ValueError(f"Unknown device type: {request.device_type}")
+            from .utils.devices import make_device_config
+            side = "follower" if request.device_type == "robot" else "leader"
+            config = make_device_config(
+                robot_type=request.robot_type,
+                side=side,
+                port=request.port,
+                config_id=request.config_file,
+            )
 
             self._update_status(status="connecting", message="Connecting to device...")
 
             # Create and connect device
-            if request.device_type == "robot":
-                self.device = make_robot_from_config(config)
-            else:
-                self.device = make_teleoperator_from_config(config)
+            from .utils.devices import make_device
+            self.device = make_device(
+                robot_type=request.robot_type,
+                side=side,
+                config=config,
+            )
 
             logger.info("Connecting to device...")
             self.device.connect(calibrate=False)
@@ -325,8 +332,9 @@ class CalibrationManager:
 
         # Disable torque to allow manual movement during recording
         self.device.bus.disable_torque()
+        position_mode = _position_operating_mode(self.device.bus)
         for motor in self.device.bus.motors:
-            self.device.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
+            self.device.bus.write("Operating_Mode", motor, position_mode)
 
         self.device.bus.reset_calibration()
         actual_positions = self.device.bus.sync_read("Present_Position", normalize=False)

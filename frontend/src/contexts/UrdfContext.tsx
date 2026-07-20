@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { UrdfProcessor, readUrdfFileContent } from "@/lib/UrdfDragAndDrop";
 import { UrdfFileModel } from "@/lib/types";
 import { RobotAnimationConfig } from "@/lib/types";
+import { DEFAULT_URDF_PATHS, DefaultRobotType } from "@/lib/defaultUrdfModels";
 
 // Define the result interface for Urdf detection
 interface UrdfDetectionResult {
@@ -40,6 +41,12 @@ export type UrdfContextType = {
   setIsDefaultModel: (isDefault: boolean) => void;
   resetToDefaultModel: () => void;
   urdfContent: string | null;
+
+  // Which built-in model to show when isDefaultModel is true. "so101" (the
+  // historical default) or "omx" — set by the Teleoperation page based on the
+  // connected robot's robot_type.
+  defaultRobotType: "so101" | "omx";
+  setDefaultRobotType: (robotType: "so101" | "omx") => void;
 
   currentAnimationConfig: RobotAnimationConfig | null;
   setCurrentAnimationConfig: (config: RobotAnimationConfig | null) => void;
@@ -75,16 +82,21 @@ export const UrdfProvider: React.FC<UrdfProviderProps> = ({ children }) => {
 
   const [isDefaultModel, setIsDefaultModel] = useState(true);
   const [urdfContent, setUrdfContent] = useState<string | null>(null);
+  const [defaultRobotType, setDefaultRobotType] =
+    useState<DefaultRobotType>("so101");
 
   const [currentAnimationConfig, setCurrentAnimationConfig] =
     useState<RobotAnimationConfig | null>(null);
 
+  // Re-fetch whenever the default model is active and either the content
+  // hasn't been loaded yet or the robot type changed (switching arms).
   useEffect(() => {
-    if (!isDefaultModel || urdfContent) return;
+    if (!isDefaultModel) return;
     let cancelled = false;
+    setUrdfContent(null);
     (async () => {
       try {
-        const response = await fetch("/so-101-urdf/urdf/so101_new_calib.urdf");
+        const response = await fetch(DEFAULT_URDF_PATHS[defaultRobotType]);
         if (!response.ok) {
           throw new Error(`Failed to fetch default Urdf: ${response.statusText}`);
         }
@@ -99,7 +111,7 @@ export const UrdfProvider: React.FC<UrdfProviderProps> = ({ children }) => {
     return () => {
       cancelled = true;
     };
-  }, [isDefaultModel, urdfContent]);
+  }, [isDefaultModel, defaultRobotType]);
 
   // Reference for callbacks
   const urdfCallbacksRef = useRef<((result: UrdfDetectionResult) => void)[]>(
@@ -434,6 +446,8 @@ export const UrdfProvider: React.FC<UrdfProviderProps> = ({ children }) => {
       setIsDefaultModel,
       resetToDefaultModel,
       urdfContent,
+      defaultRobotType,
+      setDefaultRobotType,
 
       currentAnimationConfig,
       setCurrentAnimationConfig,
@@ -451,6 +465,7 @@ export const UrdfProvider: React.FC<UrdfProviderProps> = ({ children }) => {
       isDefaultModel,
       resetToDefaultModel,
       urdfContent,
+      defaultRobotType,
       currentAnimationConfig,
     ]
   );

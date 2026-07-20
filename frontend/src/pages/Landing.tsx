@@ -213,6 +213,7 @@ const Landing = () => {
       resume: false,
       streaming_encoding: streamingEncoding,
       cameras: cameraDict,
+      robot_type: robot.robot_type || "so101",
     };
 
     setShowRecordingModal(false);

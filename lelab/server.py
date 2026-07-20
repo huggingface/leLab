@@ -817,13 +817,15 @@ def complete_calibration_step():
 
 
 @app.get("/calibration-configs/{device_type}")
-def get_calibration_configs(device_type: str):
+def get_calibration_configs(device_type: str, robot_type: str = "so101"):
     """Get all calibration config files for a specific device type"""
     try:
+        from .utils.config import get_calibration_path
+
         if device_type == "robot":
-            config_path = FOLLOWER_CONFIG_PATH
+            config_path = get_calibration_path(robot_type, "follower")
         elif device_type == "teleop":
-            config_path = LEADER_CONFIG_PATH
+            config_path = get_calibration_path(robot_type, "leader")
         else:
             return {"success": False, "message": "Invalid device type"}
 
@@ -854,13 +856,15 @@ def get_calibration_configs(device_type: str):
 
 
 @app.delete("/calibration-configs/{device_type}/{config_name}")
-def delete_calibration_config(device_type: str, config_name: str):
+def delete_calibration_config(device_type: str, config_name: str, robot_type: str = "so101"):
     """Delete a calibration config file"""
     try:
+        from .utils.config import get_calibration_path
+
         if device_type == "robot":
-            config_path = FOLLOWER_CONFIG_PATH
+            config_path = get_calibration_path(robot_type, "follower")
         elif device_type == "teleop":
-            config_path = LEADER_CONFIG_PATH
+            config_path = get_calibration_path(robot_type, "leader")
         else:
             return {"success": False, "message": "Invalid device type"}
 
@@ -1019,8 +1023,53 @@ def _v4l2_camera_name(index: int) -> str | None:
         return None
 
 
-def _linux_cameras() -> list[dict[str, Any]]:
+def _chrome_camera_name(index: int) -> str | None:
+    import os
+    import re
+
+    # 기본 v4l2_name 불러오기
+    v4l2_name = _v4l2_camera_name(index)
+
+    try:
+        sys_path = f"/sys/class/video4linux/video{index}"
+        current_dir = os.path.join(sys_path, "device")
+
+        for _ in range(5):
+            vid_path = os.path.join(current_dir, "idVendor")
+            pid_path = os.path.join(current_dir, "idProduct")
+            product_path = os.path.join(current_dir, "product")
+
+            # vender id 와 product id가 있다면
+            if os.path.exists(vid_path) and os.path.exists(pid_path):
+                try:
+                    with open(vid_path, encoding="utf-8") as f:
+                        vid = f.read().strip()
+                    with open(pid_path, encoding="utf-8") as f:
+                        pid = f.read().strip()
+
+                    if os.path.exists(product_path):
+                        with open(product_path, encoding="utf-8") as f:
+                            base_name = f.read().strip()
+                    else:
+                        base_name = v4l2_name.split(":")[0].strip()
+
+                    # 크롬 브라우저 포맷으로 이름 조합
+                    base_name = base_name.replace("_", " ")
+                    base_name = re.sub(r'\s+HD$', '', base_name).strip()
+                    return f"{base_name} ({vid}:{pid})"
+                except Exception:
+                    return v4l2_name
+            # 찾는게 없으면 상위 폴더로 이동
+            current_dir = os.path.join(current_dir, "..")
+
+        # 5단계를 거슬러 올라가도 못 찾으면 원래 이름 반환
+        return v4l2_name
+    except OSError:
+        return None
+
+def _linux_cameras(is_chrome: bool = False) -> list[dict[str, Any]]:
     """Enumerate Linux cameras, naming each from sysfs (no extra deps)."""
+
     import cv2
 
     cameras: list[dict[str, Any]] = []
@@ -1030,12 +1079,16 @@ def _linux_cameras() -> list[dict[str, Any]]:
         cap.release()
         if not opened:
             continue
-        cameras.append({"index": i, "name": _v4l2_camera_name(i) or f"Camera {i}", "available": True})
+
+        if is_chrome:
+            cameras.append({"index": i, "name": _chrome_camera_name(i) or f"Camera {i}", "available": True})
+        else:
+            cameras.append({"index": i, "name": _v4l2_camera_name(i) or f"Camera {i}", "available": True})
     return cameras
 
 
 @app.get("/available-cameras")
-def get_available_cameras():
+def get_available_cameras(request: Request):
     """List cameras with the same index ordering cv2 will use to record.
 
     Each platform enumerates in the order its cv2 backend indexes devices, and
@@ -1052,6 +1105,10 @@ def get_available_cameras():
 
         system = platform.system()
 
+        # User-Agent를 확인하여 크롬(크로미움 기반) 브라우저인지 판별
+        user_agent = request.headers.get("user-agent", "").lower()
+        is_chrome = "chrome" in user_agent
+
         if system == "Darwin":
             cameras = _avfoundation_cameras_in_cv2_order()
             for cam in cameras:
@@ -1060,7 +1117,7 @@ def get_available_cameras():
         if system == "Windows":
             return {"status": "success", "cameras": _windows_cameras()}
         if system == "Linux":
-            return {"status": "success", "cameras": _linux_cameras()}
+            return {"status": "success", "cameras": _linux_cameras(is_chrome=is_chrome)}
 
         import cv2
 

@@ -18,6 +18,7 @@ import {
   setupModelLoading,
   URDFViewerElement,
 } from "@/lib/urdfViewerHelpers";
+import { DEFAULT_URDF_PATHS } from "@/lib/defaultUrdfModels";
 
 // Register the URDFManipulator as a custom element if it hasn't been already
 if (typeof window !== "undefined" && !customElements.get("urdf-viewer")) {
@@ -34,8 +35,12 @@ interface UrdfViewerElement extends HTMLElement {
 const UrdfViewer: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [highlightedJoint, setHighlightedJoint] = useState<string | null>(null);
-  const { registerUrdfProcessor, alternativeUrdfModels, isDefaultModel } =
-    useUrdf();
+  const {
+    registerUrdfProcessor,
+    alternativeUrdfModels,
+    isDefaultModel,
+    defaultRobotType,
+  } = useUrdf();
 
   const cleanupAnimationRef = useRef<(() => void) | null>(null);
   const viewerRef = useRef<URDFViewerElement | null>(null);
@@ -76,54 +81,65 @@ const UrdfViewer: React.FC = () => {
     registerUrdfProcessor(urdfProcessor);
   }, [registerUrdfProcessor, urdfProcessor]);
 
-  // Create URL modifier function for default model
-  const defaultUrlModifier = useCallback((url: string) => {
-    console.log(`🔗 defaultUrlModifier called with: ${url}`);
+  // Create URL modifier function for default model. Both built-in models use
+  // a `package://<ros_package_name>/meshes/...` URI in their URDF; only the
+  // package name and local mesh folder differ per robot.
+  const defaultUrlModifier = useCallback(
+    (url: string) => {
+      console.log(`🔗 defaultUrlModifier called with: ${url}`);
 
-    // Handle various package:// URL formats for the default SO-101 model
-    if (url.startsWith("package://so_arm_description/meshes/")) {
-      const modifiedUrl = url.replace(
-        "package://so_arm_description/meshes/",
-        "/so-101-urdf/meshes/"
-      );
-      console.log(`🔗 Modified URL (package): ${modifiedUrl}`);
-      return modifiedUrl;
-    }
+      const meshDir =
+        defaultRobotType === "omx" ? "/omx-urdf/meshes/" : "/so-101-urdf/meshes/";
+      const packageName =
+        defaultRobotType === "omx"
+          ? "open_manipulator_description"
+          : "so_arm_description";
 
-    // Handle case where package path might be partially resolved
-    if (url.includes("so_arm_description/meshes/")) {
-      const modifiedUrl = url.replace(
-        /.*so_arm_description\/meshes\//,
-        "/so-101-urdf/meshes/"
-      );
-      console.log(`🔗 Modified URL (partial): ${modifiedUrl}`);
-      return modifiedUrl;
-    }
+      if (url.startsWith(`package://${packageName}/meshes/`)) {
+        const modifiedUrl = url.replace(
+          `package://${packageName}/meshes/`,
+          meshDir
+        );
+        console.log(`🔗 Modified URL (package): ${modifiedUrl}`);
+        return modifiedUrl;
+      }
 
-    // Handle the specific problematic path pattern we're seeing in logs
-    if (url.includes("/so-101-urdf/so_arm_description/meshes/")) {
-      const modifiedUrl = url.replace(
-        "/so-101-urdf/so_arm_description/meshes/",
-        "/so-101-urdf/meshes/"
-      );
-      console.log(`🔗 Modified URL (problematic path): ${modifiedUrl}`);
-      return modifiedUrl;
-    }
+      // Handle case where package path might be partially resolved
+      if (url.includes(`${packageName}/meshes/`)) {
+        const modifiedUrl = url.replace(
+          new RegExp(`.*${packageName}\\/meshes\\/`),
+          meshDir
+        );
+        console.log(`🔗 Modified URL (partial): ${modifiedUrl}`);
+        return modifiedUrl;
+      }
 
-    // Handle relative paths that might need mesh folder prefix
-    if (
-      url.endsWith(".stl") &&
-      !url.startsWith("/") &&
-      !url.startsWith("http")
-    ) {
-      const modifiedUrl = `/so-101-urdf/meshes/${url}`;
-      console.log(`🔗 Modified URL (relative): ${modifiedUrl}`);
-      return modifiedUrl;
-    }
+      // Handle the specific problematic path pattern we're seeing in logs
+      if (url.includes(`${meshDir}${packageName}/meshes/`)) {
+        const modifiedUrl = url.replace(
+          `${meshDir}${packageName}/meshes/`,
+          meshDir
+        );
+        console.log(`🔗 Modified URL (problematic path): ${modifiedUrl}`);
+        return modifiedUrl;
+      }
 
-    console.log(`🔗 Unmodified URL: ${url}`);
-    return url;
-  }, []);
+      // Handle relative paths that might need mesh folder prefix
+      if (
+        url.endsWith(".stl") &&
+        !url.startsWith("/") &&
+        !url.startsWith("http")
+      ) {
+        const modifiedUrl = `${meshDir}${url}`;
+        console.log(`🔗 Modified URL (relative): ${modifiedUrl}`);
+        return modifiedUrl;
+      }
+
+      console.log(`🔗 Unmodified URL: ${url}`);
+      return url;
+    },
+    [defaultRobotType]
+  );
 
   // Main effect to create and setup the viewer only once
   useEffect(() => {
@@ -141,7 +157,7 @@ const UrdfViewer: React.FC = () => {
 
     // Determine which URDF to load - fixed path to match the actual available file
     const urdfPath = isDefaultModel
-      ? "/so-101-urdf/urdf/so101_new_calib.urdf"
+      ? DEFAULT_URDF_PATHS[defaultRobotType]
       : customUrdfPath || "";
 
     // Set the package path for the default model
@@ -256,6 +272,7 @@ const UrdfViewer: React.FC = () => {
     };
   }, [
     isDefaultModel,
+    defaultRobotType,
     customUrdfPath,
     urlModifierFunc,
     defaultUrlModifier,

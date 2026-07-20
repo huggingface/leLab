@@ -13,6 +13,7 @@ export interface StartInferenceRequest {
     fps?: number;
   }>;
   duration_s: number;
+  robot_type: string;
 }
 
 export interface InferenceStatus {

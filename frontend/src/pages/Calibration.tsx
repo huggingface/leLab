@@ -61,6 +61,7 @@ interface CalibrationRequest {
   port: string;
   config_file: string;
   robot_name: string | null;
+  robot_type: string;
 }
 
 interface RobotRecord {
@@ -71,6 +72,7 @@ interface RobotRecord {
   follower_config: string;
   cameras: CameraConfig[];
   is_clean: boolean;
+  robot_type?: string;
 }
 
 const Calibration = () => {
@@ -86,6 +88,7 @@ const Calibration = () => {
 
   const [deviceType, setDeviceType] = useState<string>("teleop");
   const [port, setPort] = useState<string>("");
+  const [robotType, setRobotType] = useState<string>("so101");
   const [robot, setRobot] = useState<RobotRecord | null>(null);
   const [cameras, setCameras] = useState<CameraConfig[]>([]);
   // Off by default so merely opening the calibration page never grabs a camera.
@@ -104,6 +107,9 @@ const Calibration = () => {
       const data = await res.json();
       const r = (data.robot as RobotRecord | null) ?? null;
       setRobot(r);
+      if (r && r.robot_type) {
+        setRobotType(r.robot_type);
+      }
       return r;
     } catch (e) {
       console.error("Failed to load robot record:", e);
@@ -130,6 +136,9 @@ const Calibration = () => {
           ? r.leader_port || ""
           : r.follower_port || ""
       );
+      if (r.robot_type) {
+        setRobotType(r.robot_type);
+      }
       setCameras(r.cameras ?? []);
     })();
     return () => {
@@ -253,6 +262,7 @@ const Calibration = () => {
       port: port,
       config_file: robotName,
       robot_name: robotName,
+      robot_type: robotType,
     };
 
     // Optimistically mark as active so the unmount cleanup will fire even if
@@ -472,6 +482,28 @@ const Calibration = () => {
     [robotName, deviceType, robot, baseUrl, fetchWithHeaders]
   );
 
+  const persistRobotType = useCallback(
+    async (nextType: string) => {
+      if (!robotName || !nextType) return;
+      if (robot && robot.robot_type === nextType) return;
+      try {
+        const res = await fetchWithHeaders(
+          `${baseUrl}/robots/${encodeURIComponent(robotName)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ robot_type: nextType }),
+          }
+        );
+        const data = await res.json();
+        if (data.robot) setRobot(data.robot);
+      } catch (e) {
+        console.error("Failed to save robot type to robot record:", e);
+      }
+    },
+    [robotName, robot, baseUrl, fetchWithHeaders]
+  );
+
   const handlePortDetected = (detectedPort: string) => {
     setPort(detectedPort);
     persistPort(detectedPort);
@@ -566,6 +598,34 @@ const Calibration = () => {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
+              <div className="space-y-2">
+                <Label
+                  htmlFor="robotType"
+                  className="text-sm font-medium text-slate-300"
+                >
+                  Robot Model *
+                </Label>
+                <Select
+                  value={robotType}
+                  onValueChange={(val) => {
+                    setRobotType(val);
+                    persistRobotType(val);
+                  }}
+                >
+                  <SelectTrigger className="bg-slate-700 border-slate-600 text-white rounded-md">
+                    <SelectValue placeholder="Select robot model" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-slate-800 border-slate-700 text-white">
+                    <SelectItem value="so101" className="hover:bg-slate-700">
+                      SO-101 (or SO-100 series)
+                    </SelectItem>
+                    <SelectItem value="omx_ai" className="hover:bg-slate-700">
+                      OMX-AI
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
               <div className="space-y-2">
                 <Label
                   htmlFor="deviceType"
@@ -719,7 +779,8 @@ const Calibration = () => {
                             const rangeComplete = isMotorRangeComplete(
                               calibrationStatus.device_type,
                               motor,
-                              totalRange
+                              totalRange,
+                              robotType
                             );
 
                             return (
@@ -794,7 +855,8 @@ const Calibration = () => {
                     isMotorRangeComplete(
                       calibrationStatus.device_type,
                       motor,
-                      range.max - range.min
+                      range.max - range.min,
+                      robotType
                     )
                   );
                 return (

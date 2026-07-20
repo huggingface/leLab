@@ -4,11 +4,46 @@ import VisualizerPanel from "@/components/control/VisualizerPanel";
 import TeleopCameraPanel from "@/components/control/TeleopCameraPanel";
 import { useToast } from "@/hooks/use-toast";
 import { useApi } from "@/contexts/ApiContext";
+import { useUrdf } from "@/hooks/useUrdf";
+import { resolveDefaultRobotType } from "@/lib/defaultUrdfModels";
+
+// Matches useRobots.ts's SELECTED_KEY - the last robot picked on Landing.
+const SELECTED_ROBOT_KEY = "lelab.selectedRobot";
 
 const TeleoperationPage = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { baseUrl, fetchWithHeaders } = useApi();
+  const { setDefaultRobotType } = useUrdf();
+
+  // Show the 3D model matching the arm that's actually connected (SO-101 vs
+  // OMX-AI) instead of always defaulting to SO-101.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      let name: string | null = null;
+      try {
+        name = localStorage.getItem(SELECTED_ROBOT_KEY);
+      } catch {
+        /* localStorage may be unavailable */
+      }
+      if (!name) return;
+      try {
+        const res = await fetchWithHeaders(
+          `${baseUrl}/robots/${encodeURIComponent(name)}`
+        );
+        const data = await res.json();
+        if (!cancelled && data?.robot?.robot_type) {
+          setDefaultRobotType(resolveDefaultRobotType(data.robot.robot_type));
+        }
+      } catch {
+        /* best-effort - falls back to the default SO-101 model */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [baseUrl, fetchWithHeaders, setDefaultRobotType]);
 
   // Stop teleoperation exactly once, however the user leaves, so the back
   // button, an in-app link, and the unmount safety net can't double-stop or

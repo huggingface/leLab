@@ -24,14 +24,10 @@ from pydantic import BaseModel
 
 from lerobot.configs.dataset import DatasetRecordConfig
 from lerobot.datasets import LeRobotDataset
-from lerobot.robots.so_follower import SO101FollowerConfig
-
-# Import the main record functionality to reuse it
 from lerobot.scripts.lerobot_record import RecordConfig
-from lerobot.teleoperators.so_leader import SO101LeaderConfig
 
 from .utils.config import setup_calibration_files, with_lelab_tag
-from .utils.devices import safe_disconnect_device
+from .utils.devices import friendly_hint, make_device_config, safe_disconnect_device
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +69,7 @@ class RecordingRequest(BaseModel):
     streaming_encoding: bool = True
     cameras: dict = {}
     test_mode: bool = False  # Skip robot connection for testing
+    robot_type: str = "so101"
 
 
 class UploadRequest(BaseModel):
@@ -148,7 +145,7 @@ def create_record_config(request: RecordingRequest) -> RecordConfig:
     """Create a RecordConfig from the recording request"""
     # Setup calibration files
     leader_config_name, follower_config_name = setup_calibration_files(
-        request.leader_config, request.follower_config
+        request.leader_config, request.follower_config, request.robot_type
     )
 
     # Convert the frontend camera dict into OpenCVCameraConfig objects. Backend
@@ -156,16 +153,20 @@ def create_record_config(request: RecordingRequest) -> RecordConfig:
     camera_configs = _build_camera_configs(request.cameras, _platform_backend())
 
     # Create robot config
-    robot_config = SO101FollowerConfig(
+    robot_config = make_device_config(
+        robot_type=request.robot_type,
+        side="follower",
         port=request.follower_port,
-        id=follower_config_name,
+        config_id=follower_config_name,
         cameras=camera_configs,
     )
 
     # Create teleop config
-    teleop_config = SO101LeaderConfig(
+    teleop_config = make_device_config(
+        robot_type=request.robot_type,
+        side="leader",
         port=request.leader_port,
-        id=leader_config_name,
+        config_id=leader_config_name,
     )
 
     # Create dataset config
@@ -409,10 +410,19 @@ def handle_recording_status() -> dict[str, Any]:
             logger.info("📡 RECORDING STATUS REQUEST: Session has ended - frontend should stop polling")
             print("📡 STATUS CHANGE: Frontend is still polling after session end - should stop now")
 
+    error = None
+    hint = None
+    if current_phase == "error" and last_recording_info is not None:
+        error = last_recording_info.get("error")
+        if error:
+            hint = friendly_hint(error)
+
     status = {
         "recording_active": recording_active,
         "current_phase": current_phase,  # "preparing", "recording", "resetting", "completed"
         "session_ended": session_ended,  # New field to indicate session completion
+        "error": error,
+        "hint": hint,
         "available_controls": {
             "stop_recording": recording_active,  # ESC key replacement
             "exit_early": recording_active,  # Right arrow key replacement

@@ -101,3 +101,23 @@ def test_cleanup_device_force_releases_and_clears_when_disconnect_fails() -> Non
 
     assert device.bus.port_handler.closed is True  # force-released despite failure
     assert mgr.device is None  # handle cleared so a new calibration can start
+
+
+def test_position_operating_mode_matches_bus_protocol() -> None:
+    # Feetech and Dynamixel use different POSITION register values (0 vs 3);
+    # the helper must pick the enum matching the bus's protocol, or OMX
+    # (Dynamixel) motors would be put in CURRENT mode during calibration.
+    from lelab.calibrate import _position_operating_mode
+
+    class FakeDynamixelBus:
+        pass
+
+    FakeDynamixelBus.__module__ = "lerobot.motors.dynamixel.dynamixel"
+
+    class FakeFeetechBus:
+        pass
+
+    FakeFeetechBus.__module__ = "lerobot.motors.feetech.feetech"
+
+    assert _position_operating_mode(FakeDynamixelBus()) == 3
+    assert _position_operating_mode(FakeFeetechBus()) == 0

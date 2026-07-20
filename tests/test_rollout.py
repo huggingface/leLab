@@ -281,12 +281,12 @@ def test_classify_outcome_ok_warns_and_fails() -> None:
 
 
 def test_friendly_hint_maps_common_failures() -> None:
-    from lelab.rollout import _friendly_hint
+    from lelab.utils.devices import friendly_hint
 
-    assert "gripper" in (_friendly_hint("Motor overload detected") or "").lower()
-    assert "connect" in (_friendly_hint("Failed to connect to the follower") or "").lower()
-    assert _friendly_hint("some unrecognised traceback") is None
-    assert _friendly_hint(None) is None
+    assert "gripper" in (friendly_hint("Motor overload detected") or "").lower()
+    assert "connect" in (friendly_hint("Failed to connect to the follower") or "").lower()
+    assert friendly_hint("some unrecognised traceback") is None
+    assert friendly_hint(None) is None
 
 
 def test_extract_error_from_log_pulls_exception_tail(tmp_path) -> None:
