@@ -1,4 +1,4 @@
-# Copyright 2026 VibeCuisine. All rights reserved.
+# Copyright 2026 Vibe Embodied AI Inc. and The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -298,8 +298,9 @@ def test_extract_thumbnails_one_pass(dataset: str) -> None:
 
     loc = locate_episode_video(resolve_dataset_dir(dataset), 0, camera="top")
     thumbs = extract_thumbnails(loc, [0, 4, 8], max_width=16)
-    assert len(thumbs) == 3
-    assert all(t[:4] == b"\x89PNG" for t in thumbs)
+    # (frame_index, png) pairs, each index bound to its own image.
+    assert [idx for idx, _ in thumbs] == [0, 4, 8]
+    assert all(png[:4] == b"\x89PNG" for _, png in thumbs)
 
 
 def test_extract_thumbnails_empty_request(dataset: str) -> None:
@@ -307,6 +308,39 @@ def test_extract_thumbnails_empty_request(dataset: str) -> None:
 
     loc = locate_episode_video(resolve_dataset_dir(dataset), 0, camera="top")
     assert extract_thumbnails(loc, []) == []
+
+
+def test_extract_thumbnails_keeps_index_when_a_frame_drops(
+    dataset: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mid-strip decode failure must not shift later tiles onto wrong frames.
+
+    Simulate a corrupt recording where one requested frame won't decode: the
+    surviving thumbnails have to keep their true frame indices, not slide up to
+    fill the gap. Because the index rides with the png, the dropped frame simply
+    goes missing instead of relabelling everything after it.
+    """
+    import lelab.episode_media as em
+
+    loc = em.locate_episode_video(em.resolve_dataset_dir(dataset), 0, camera="top")
+
+    real_decode = em._decode_at
+    calls = {"n": 0}
+
+    def flaky_decode(container, stream, target_s):
+        # Fail the second requested frame only.
+        calls["n"] += 1
+        if calls["n"] == 2:
+            return None
+        return real_decode(container, stream, target_s)
+
+    monkeypatch.setattr(em, "_decode_at", flaky_decode)
+
+    thumbs = em.extract_thumbnails(loc, [0, 4, 8], max_width=16)
+    # Frame 4 dropped; 0 and 8 survive with their real indices — 8 is NOT
+    # relabelled as 4.
+    assert [idx for idx, _ in thumbs] == [0, 8]
+    assert all(png[:4] == b"\x89PNG" for _, png in thumbs)
 
 
 # ── action stream / motion ──────────────────────────────────────────────────

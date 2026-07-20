@@ -294,7 +294,9 @@ def handle_episode_thumbnails(
     indices = [0] if count == 1 else sorted({round(i * last / (count - 1)) for i in range(count)})
 
     try:
-        pngs = episode_media.extract_thumbnails(location, indices)
+        # (frame_index, png) pairs — a frame that fails to decode is absent, not
+        # a positional gap, so the surviving tiles keep their true frame labels.
+        thumbnails = episode_media.extract_thumbnails(location, indices)
     except episode_media.EpisodeNotFoundError as e:
         return {"success": False, "message": str(e)}
 
@@ -307,7 +309,7 @@ def handle_episode_thumbnails(
                 "frame_index": idx,
                 "data_uri": "data:image/png;base64," + base64.b64encode(png).decode("ascii"),
             }
-            for idx, png in zip(indices, pngs, strict=False)
+            for idx, png in thumbnails
         ],
     }
 

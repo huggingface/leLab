@@ -1,4 +1,4 @@
-# Copyright 2026 VibeCuisine. All rights reserved.
+# Copyright 2026 Vibe Embodied AI Inc. and The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -483,12 +483,18 @@ def extract_thumbnails(
     frame_indices: list[int],
     *,
     max_width: int = 160,
-) -> list[bytes]:
+) -> list[tuple[int, bytes]]:
     """Decode several frames in a single pass over the file.
 
     The film strip wants N frames from one episode; opening, seeking and tearing
     down the container N times is the obvious way and the wasteful one. Frames
     are requested in ascending order, so one forward walk serves them all.
+
+    Returns ``(frame_index, png)`` pairs, only for frames that decoded — a frame
+    that fails on a corrupt recording is dropped, not substituted. The index
+    travels *with* its png so the caller can't misalign them: pairing a plain
+    list of pngs back to the requested indices positionally would, on a single
+    mid-strip decode failure, shift every later tile onto the wrong frame.
     """
     import av
     from PIL import Image
@@ -497,7 +503,7 @@ def extract_thumbnails(
     if not targets:
         return []
 
-    out: list[bytes] = []
+    out: list[tuple[int, bytes]] = []
     try:
         with av.open(str(location.path)) as container:
             stream = container.streams.video[0]
@@ -512,7 +518,7 @@ def extract_thumbnails(
                     img = img.resize((max_width, height), Image.BILINEAR)
                 buf = io.BytesIO()
                 img.save(buf, format="PNG")
-                out.append(buf.getvalue())
+                out.append((idx, buf.getvalue()))
     except Exception as e:
         raise EpisodeNotFoundError(f"Could not decode {location.path.name}: {e}") from e
     return out
