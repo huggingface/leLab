@@ -67,6 +67,7 @@ interface BackendStatus {
   session_elapsed_seconds?: number;
   session_ended?: boolean;
   dataset_repo_id?: string;
+  error?: string;
   available_controls: {
     stop_recording: boolean;
     exit_early: boolean;
@@ -187,6 +188,17 @@ const Recording = () => {
         }
 
         if (!status.recording_active && status.session_ended) {
+          // A failed session recorded nothing, so the upload page would offer
+          // an empty dataset. Show why it failed and go back instead.
+          if (status.current_phase === "error") {
+            toast({
+              title: "Recording Failed",
+              description: status.error || "The recording session failed to start.",
+              variant: "destructive",
+            });
+            navigate("/");
+            return;
+          }
           const datasetInfo = {
             dataset_repo_id:
               status.dataset_repo_id || recordingConfig.dataset_repo_id,
@@ -205,7 +217,7 @@ const Recording = () => {
     pollStatus();
     const statusInterval = setInterval(pollStatus, 1000);
     return () => clearInterval(statusInterval);
-  }, [recordingSessionStarted, recordingConfig, navigate, baseUrl, fetchWithHeaders]);
+  }, [recordingSessionStarted, recordingConfig, navigate, baseUrl, fetchWithHeaders, toast]);
 
   const formatTime = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);

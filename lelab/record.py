@@ -311,7 +311,10 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
                     "robot_type": getattr(dataset.meta, "robot_type", "Unknown robot"),
                 }
             except Exception as e:
-                logger.exception("Recording session failed")
+                # lerobot's init_logging() installs a root formatter that only
+                # renders the message, so logger.exception() would drop the
+                # traceback. Fold it into the message instead.
+                logger.error("Recording session failed: %s\n%s", e, traceback.format_exc())
                 current_phase = "error"
                 if recording_start_time:
                     session_end_elapsed_seconds = int(time.time() - recording_start_time)
@@ -434,6 +437,12 @@ def handle_recording_status() -> dict[str, Any]:
     # can read the actual on-disk repo_id (post stamp) for upload navigation.
     if recording_config:
         status["dataset_repo_id"] = recording_config.dataset_repo_id
+
+    # Carry the failure reason so the frontend can show what actually went
+    # wrong instead of sending the user to the upload page for a dataset that
+    # was never recorded.
+    if current_phase == "error" and last_recording_info:
+        status["error"] = last_recording_info.get("error", "Unknown error")
 
     # Add episode information if recording is active
     if recording_active and recording_config:
@@ -643,53 +652,53 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
             encoder_threads=cfg.dataset.encoder_threads,
         )
 
-    # 🔧 ROBOT CONNECTION: Connect with enhanced error handling for camera conflicts
+    # Bring the devices up in the same order as teleoperation: buses, then
+    # calibration, then cameras and motor configuration.
+    #
+    # `robot.connect()` can't be used here. It prompts on stdin when the motors
+    # disagree with the calibration file (EOFError under the server), and it
+    # ends with configure(), which leaves torque enabled — writing the
+    # calibration registers afterwards corrupts the bus a few seconds into the
+    # recording loop.
     try:
         logger.info("🔧 ROBOT CONNECTION: Attempting to connect robot...")
-        robot.connect()
-        logger.info("✅ ROBOT CONNECTION: Robot connected successfully")
+        robot.bus.connect()
+        logger.info("✅ ROBOT CONNECTION: Robot bus connected successfully")
     except Exception as e:
         logger.error(f"❌ ROBOT CONNECTION: Failed to connect robot: {e}")
-        # If robot connection fails due to camera conflict, provide clear error
-        if "camera" in str(e).lower() or "device" in str(e).lower() or "busy" in str(e).lower():
-            logger.error("💡 ROBOT CONNECTION: Camera connection failure - likely camera resource conflict")
-            logger.error(
-                "💡 ROBOT CONNECTION: Make sure frontend camera streams are released before recording"
-            )
         raise
 
     if teleop is not None:
         try:
             logger.info("🔧 TELEOP CONNECTION: Attempting to connect teleoperator...")
-            teleop.connect()
-            logger.info("✅ TELEOP CONNECTION: Teleoperator connected successfully")
+            teleop.bus.connect()
+            logger.info("✅ TELEOP CONNECTION: Teleoperator bus connected successfully")
         except Exception as e:
             logger.error(f"❌ TELEOP CONNECTION: Failed to connect teleoperator: {e}")
             raise
 
-    # Ensure calibration is properly loaded and applied to the devices
-    logger.info("Applying calibration to devices")
+    # Torque is still disabled at this point, which is what writing the
+    # calibration registers requires.
+    logger.info("Writing calibration to motors...")
+    robot.bus.write_calibration(robot.calibration)
+    if teleop is not None:
+        teleop.bus.write_calibration(teleop.calibration)
 
-    # Write calibration to motors' memory (similar to teleoperation code)
-    if hasattr(robot, "bus") and robot.calibration is not None:
-        try:
-            logger.info("Writing robot calibration to motors...")
-            robot.bus.write_calibration(robot.calibration)
-            logger.info("Robot calibration applied successfully")
-        except Exception as e:
-            logger.error(f"Error writing robot calibration: {e}")
-    else:
-        logger.warning("Robot bus or calibration not available - calibration may not be applied")
+    try:
+        logger.info("🔧 CAMERA CONNECTION: Connecting cameras...")
+        for cam in robot.cameras.values():
+            cam.connect()
+        logger.info("✅ CAMERA CONNECTION: Cameras connected successfully")
+    except Exception as e:
+        logger.error(f"❌ CAMERA CONNECTION: Failed to connect cameras: {e}")
+        logger.error("💡 Make sure frontend camera streams are released before recording")
+        raise
 
-    if teleop is not None and hasattr(teleop, "bus") and teleop.calibration is not None:
-        try:
-            logger.info("Writing teleop calibration to motors...")
-            teleop.bus.write_calibration(teleop.calibration)
-            logger.info("Teleop calibration applied successfully")
-        except Exception as e:
-            logger.error(f"Error writing teleop calibration: {e}")
-    else:
-        logger.warning("Teleop bus or calibration not available - calibration may not be applied")
+    logger.info("Configuring motors...")
+    robot.configure()
+    if teleop is not None:
+        teleop.configure()
+    logger.info("✅ Devices ready")
 
     # Start with episode 1 - but track it properly
     current_episode = 1
