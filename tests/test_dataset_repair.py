@@ -16,6 +16,7 @@ recording that was interrupted before `LeRobotDataset.finalize()` ran."""
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -43,7 +44,7 @@ def lerobot_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return home
 
 
-def _record(repo_id: str, *, video: bool) -> Path:
+def _record(repo_id: str, *, video: bool, episodes: int = EPISODES) -> Path:
     """Write a small finished dataset and return its root."""
     from lerobot.datasets import LeRobotDataset
 
@@ -59,7 +60,7 @@ def _record(repo_id: str, *, video: bool) -> Path:
         }
 
     dataset = LeRobotDataset.create(repo_id, fps=FPS, features=features, use_videos=video)
-    for episode in range(EPISODES):
+    for episode in range(episodes):
         for frame in range(FRAMES):
             values = np.full(2, episode * FRAMES + frame, dtype=np.float32)
             item = {"action": values, "observation.state": values, "task": "repair me"}
@@ -96,6 +97,14 @@ def test_readable_dataset_is_not_touched(lerobot_home: Path) -> None:
     _record(REPO_ID, video=False)
 
     assert repair_local_dataset(REPO_ID) is None
+
+
+@pytest.mark.parametrize("repo_id", ["../escape", "repair_test/../../escape", "/etc"])
+def test_repo_id_cannot_escape_the_cache_directory(lerobot_home: Path, repo_id: str) -> None:
+    from lelab.dataset_repair import DatasetRepairError, repair_local_dataset
+
+    with pytest.raises(DatasetRepairError, match="Invalid dataset id"):
+        repair_local_dataset(repo_id)
 
 
 @pytest.mark.parametrize("video", [False, True])
@@ -151,6 +160,39 @@ def test_truncated_data_file_is_moved_out_of_the_readers_way(lerobot_home: Path)
     assert not orphan.exists()
     assert orphan.with_suffix(".parquet.unreadable").exists()
     assert LeRobotDataset(REPO_ID).num_episodes == EPISODES
+
+
+def test_episodes_without_video_lose_their_frames_and_stats_too(lerobot_home: Path) -> None:
+    """An episode the videos don't cover is dropped from the index, so its rows
+    and its contribution to stats.json have to go with it."""
+    from lelab.dataset_repair import repair_local_dataset
+    from lerobot.datasets import LeRobotDataset
+
+    broken = _record(REPO_ID, video=True, episodes=2)
+    # Same recording, one episode shorter: stands in both for the video that
+    # was never flushed and for the statistics the repair should end up with.
+    reference = _record("repair_test/reference", video=True, episodes=1)
+
+    shutil.rmtree(broken / "meta" / "episodes")
+    shutil.copy(
+        next((reference / "videos").rglob("*.mp4")),
+        next((broken / "videos").rglob("*.mp4")),
+    )
+
+    message = repair_local_dataset(REPO_ID)
+    assert message is not None
+    assert "Recovered 1 episode(s)" in message
+
+    repaired = LeRobotDataset(REPO_ID)
+    assert repaired.num_episodes == 1
+    assert repaired.num_frames == FRAMES
+    # The dropped episode's rows are gone from the shards, not just unreferenced.
+    assert len(repaired.hf_dataset) == FRAMES
+
+    repaired_stats = json.loads((broken / "meta" / "stats.json").read_text())
+    reference_stats = json.loads((reference / "meta" / "stats.json").read_text())
+    assert repaired_stats["action"]["max"] == reference_stats["action"]["max"]
+    assert repaired_stats["action"]["mean"] == reference_stats["action"]["mean"]
 
 
 def test_unrecoverable_dataset_reports_instead_of_hitting_the_hub(lerobot_home: Path) -> None:

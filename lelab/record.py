@@ -318,7 +318,15 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
                 current_phase = "error"
                 if recording_start_time:
                     session_end_elapsed_seconds = int(time.time() - recording_start_time)
-                last_recording_info = {"success": False, "error": str(e)}
+                # Episodes already saved survive the failure (it can happen in
+                # the reset phase, in finalize, or in the Hub push), so keep the
+                # count: the frontend still offers them for upload.
+                last_recording_info = {
+                    "success": False,
+                    "error": str(e),
+                    "dataset_repo_id": request.dataset_repo_id,
+                    "saved_episodes": saved_episodes,
+                }
             finally:
                 if current_phase != "error":
                     current_phase = "completed"
@@ -438,11 +446,12 @@ def handle_recording_status() -> dict[str, Any]:
     if recording_config:
         status["dataset_repo_id"] = recording_config.dataset_repo_id
 
-    # Carry the failure reason so the frontend can show what actually went
-    # wrong instead of sending the user to the upload page for a dataset that
-    # was never recorded.
+    # Carry the failure reason and how much of the session survived it, so the
+    # frontend can offer a partial dataset for upload and only send the user
+    # home when nothing was saved.
     if current_phase == "error" and last_recording_info:
         status["error"] = last_recording_info.get("error", "Unknown error")
+        status["saved_episodes"] = last_recording_info.get("saved_episodes", 0)
 
     # Add episode information if recording is active
     if recording_active and recording_config:
@@ -660,51 +669,54 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
     # ends with configure(), which leaves torque enabled — writing the
     # calibration registers afterwards corrupts the bus a few seconds into the
     # recording loop.
-    try:
-        logger.info("🔧 ROBOT CONNECTION: Attempting to connect robot...")
-        robot.bus.connect()
-        logger.info("✅ ROBOT CONNECTION: Robot bus connected successfully")
-    except Exception as e:
-        logger.error(f"❌ ROBOT CONNECTION: Failed to connect robot: {e}")
-        raise
-
-    if teleop is not None:
-        try:
-            logger.info("🔧 TELEOP CONNECTION: Attempting to connect teleoperator...")
-            teleop.bus.connect()
-            logger.info("✅ TELEOP CONNECTION: Teleoperator bus connected successfully")
-        except Exception as e:
-            logger.error(f"❌ TELEOP CONNECTION: Failed to connect teleoperator: {e}")
-            raise
-
-    # Torque is still disabled at this point, which is what writing the
-    # calibration registers requires.
-    logger.info("Writing calibration to motors...")
-    robot.bus.write_calibration(robot.calibration)
-    if teleop is not None:
-        teleop.bus.write_calibration(teleop.calibration)
-
-    try:
-        logger.info("🔧 CAMERA CONNECTION: Connecting cameras...")
-        for cam in robot.cameras.values():
-            cam.connect()
-        logger.info("✅ CAMERA CONNECTION: Cameras connected successfully")
-    except Exception as e:
-        logger.error(f"❌ CAMERA CONNECTION: Failed to connect cameras: {e}")
-        logger.error("💡 Make sure frontend camera streams are released before recording")
-        raise
-
-    logger.info("Configuring motors...")
-    robot.configure()
-    if teleop is not None:
-        teleop.configure()
-    logger.info("✅ Devices ready")
-
     # Start with episode 1 - but track it properly
     current_episode = 1
     saved_episodes = 0  # Track how many episodes we've actually saved
 
+    # Setup runs inside the same try as the recording loop: a failure partway
+    # through it still leaves buses and cameras open, and the teardown below is
+    # what frees them for the next attempt (see issue #50).
     try:
+        try:
+            logger.info("🔧 ROBOT CONNECTION: Attempting to connect robot...")
+            robot.bus.connect()
+            logger.info("✅ ROBOT CONNECTION: Robot bus connected successfully")
+        except Exception as e:
+            logger.error(f"❌ ROBOT CONNECTION: Failed to connect robot: {e}")
+            raise
+
+        if teleop is not None:
+            try:
+                logger.info("🔧 TELEOP CONNECTION: Attempting to connect teleoperator...")
+                teleop.bus.connect()
+                logger.info("✅ TELEOP CONNECTION: Teleoperator bus connected successfully")
+            except Exception as e:
+                logger.error(f"❌ TELEOP CONNECTION: Failed to connect teleoperator: {e}")
+                raise
+
+        # Torque is still disabled at this point, which is what writing the
+        # calibration registers requires.
+        logger.info("Writing calibration to motors...")
+        robot.bus.write_calibration(robot.calibration)
+        if teleop is not None:
+            teleop.bus.write_calibration(teleop.calibration)
+
+        try:
+            logger.info("🔧 CAMERA CONNECTION: Connecting cameras...")
+            for cam in robot.cameras.values():
+                cam.connect()
+            logger.info("✅ CAMERA CONNECTION: Cameras connected successfully")
+        except Exception as e:
+            logger.error(f"❌ CAMERA CONNECTION: Failed to connect cameras: {e}")
+            logger.error("💡 Make sure frontend camera streams are released before recording")
+            raise
+
+        logger.info("Configuring motors...")
+        robot.configure()
+        if teleop is not None:
+            teleop.configure()
+        logger.info("✅ Devices ready")
+
         while saved_episodes < cfg.dataset.num_episodes:
             # RECORDING PHASE - with dataset (matches original record.py exactly)
             current_phase = "recording"
@@ -884,18 +896,20 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
         log_say("Stop recording", cfg.play_sounds, blocking=True)
 
     finally:
-        # Writes the parquet footers for meta/episodes/. Without it the dataset
-        # is invalid on disk, so reopening it (upload, /dataset-info) misses
-        # meta/episodes and falls back to downloading from the Hub — which 404s
-        # for a dataset that was never pushed.
-        dataset.finalize()
-
-        # safe_disconnect_device force-releases the serial port / cameras if a
-        # normal disconnect fails, so a flaky teardown can't leave the device
-        # busy and block the next recording session (see issue #50).
-        safe_disconnect_device(robot, logger, context="recording cleanup")
-        if teleop:
-            safe_disconnect_device(teleop, logger, context="recording cleanup")
+        try:
+            # Writes the parquet footers for meta/episodes/. Without it the
+            # dataset is invalid on disk, so reopening it (upload,
+            # /dataset-info) misses meta/episodes and falls back to downloading
+            # from the Hub — which 404s for a dataset that was never pushed.
+            dataset.finalize()
+        finally:
+            # safe_disconnect_device force-releases the serial port / cameras if
+            # a normal disconnect fails, so a flaky teardown can't leave the
+            # device busy and block the next recording session (see issue #50).
+            # Nested so a failed finalize can't strand the hardware.
+            safe_disconnect_device(robot, logger, context="recording cleanup")
+            if teleop:
+                safe_disconnect_device(teleop, logger, context="recording cleanup")
 
     if cfg.dataset.push_to_hub:
         if dataset.num_episodes > 0:

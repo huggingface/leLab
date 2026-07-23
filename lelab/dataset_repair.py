@@ -146,6 +146,98 @@ def _assign_videos(rows: list[dict[str, Any]], root: Path, video_key: str, fps: 
     return len(rows)
 
 
+def _trim_data(root: Path, keep_through: int) -> int:
+    """Drop data rows belonging to episodes past `keep_through`.
+
+    The reader loads every row under data/ and push_to_hub uploads the whole
+    directory, so rows the rebuilt index no longer references would otherwise
+    travel with the dataset. Returns the number of frames dropped.
+    """
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+
+    dropped = 0
+    for path in sorted((root / "data").rglob("*.parquet"), key=_chunk_file):
+        table = pq.read_table(path)
+        kept = table.filter(pc.less_equal(table["episode_index"], keep_through))
+        if kept.num_rows == table.num_rows:
+            continue
+        dropped += table.num_rows - kept.num_rows
+        if kept.num_rows == 0:
+            path.unlink()
+        else:
+            pq.write_table(kept, path, compression="snappy", use_dictionary=True)
+    return dropped
+
+
+def _episode_video_frames(root: Path, video_key: str, row: dict[str, Any]) -> "np.ndarray":  # noqa: F821
+    """Decode a sample of the frames one episode references, as (N, C, H, W) in [0, 1]."""
+    import av
+    import numpy as np
+
+    from lerobot.datasets.compute_stats import sample_indices
+
+    file_index = row[f"videos/{video_key}/file_index"]
+    start = row[f"videos/{video_key}/from_timestamp"]
+    end = row[f"videos/{video_key}/to_timestamp"]
+
+    path = next((root / "videos" / video_key).rglob(f"*file-{file_index:03d}.mp4"))
+    with av.open(str(path)) as container:
+        frames = [
+            frame
+            for frame in container.decode(container.streams.video[0])
+            if start <= float(frame.time) < end
+        ]
+
+    if not frames:
+        raise DatasetRepairError(f"No decodable frames for {video_key} in episode {row['episode_index']}")
+
+    sampled = [frames[i] for i in sample_indices(len(frames))]
+    return np.stack([frame.to_ndarray(format="rgb24").transpose(2, 0, 1) for frame in sampled]) / 255.0
+
+
+def _recompute_stats(root: Path, info: dict[str, Any], rows: list[dict[str, Any]]) -> None:
+    """Rewrite meta/stats.json over the retained frames only.
+
+    stats.json is aggregated as each episode is saved, so it still describes
+    episodes that were lost with the interruption, and training normalizes with
+    it. Rebuilt the way recording builds it, per episode then aggregated, so the
+    numbers match what the same episodes would have produced on their own.
+    """
+    import numpy as np
+    import pyarrow.parquet as pq
+
+    from lerobot.datasets.compute_stats import aggregate_stats, get_feature_stats
+    from lerobot.datasets.io_utils import write_stats
+
+    columns: dict[str, np.ndarray] = {}  # noqa: F821
+    for path in sorted((root / "data").rglob("*.parquet"), key=_chunk_file):
+        table = pq.read_table(path)
+        for key in table.schema.names:
+            values = np.stack(table[key].to_numpy(zero_copy_only=False).tolist())
+            columns[key] = np.concatenate([columns[key], values]) if key in columns else values
+
+    per_episode = []
+    for row in rows:
+        episode_stats = {}
+        for key, feature in info["features"].items():
+            if feature["dtype"] in {"string", "language"}:
+                continue
+
+            if feature["dtype"] in {"image", "video"}:
+                values = _episode_video_frames(root, key, row)
+                episode_stats[key] = {
+                    name: value if name == "count" else np.squeeze(value, axis=0)
+                    for name, value in get_feature_stats(values, axis=(0, 2, 3), keepdims=True).items()
+                }
+            elif key in columns:
+                values = columns[key][row["dataset_from_index"] : row["dataset_to_index"]]
+                episode_stats[key] = get_feature_stats(values, axis=0, keepdims=values.ndim == 1)
+        per_episode.append(episode_stats)
+
+    write_stats(aggregate_stats(per_episode), root)
+
+
 def _write_episodes(root: Path, rows: list[dict[str, Any]]) -> None:
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -167,7 +259,14 @@ def repair_local_dataset(repo_id: str) -> str | None:
     from lerobot.datasets.io_utils import load_episodes
     from lerobot.utils.constants import HF_LEROBOT_HOME
 
-    root = Path(HF_LEROBOT_HOME) / repo_id
+    cache_root = Path(HF_LEROBOT_HOME).resolve()
+    root = (cache_root / repo_id).resolve()
+
+    # repo_id reaches here straight from the request body, and this function
+    # rewrites info.json and renames files. Keep it inside the cache.
+    if root == cache_root or cache_root not in root.parents:
+        raise DatasetRepairError(f"Invalid dataset id: {repo_id}")
+
     if not (root / "meta" / "info.json").exists():
         return None
 
@@ -192,19 +291,25 @@ def repair_local_dataset(repo_id: str) -> str | None:
             "and the partial files it left behind cannot be read. Re-record it."
         )
 
-    _write_episodes(root, rows)
-
     # The reader loads every parquet file under data/, so an unreadable one
     # would still break it. Keep the bytes, just out of the glob's reach.
     for path in truncated:
         path.rename(path.with_suffix(".parquet.unreadable"))
+
+    lost = recorded_episodes - len(rows)
+    if lost > 0:
+        # Episodes the videos don't cover still have their frames in the
+        # readable shards; drop them so data, index and stats agree.
+        _trim_data(root, rows[-1]["episode_index"])
+        _recompute_stats(root, info, rows)
+
+    _write_episodes(root, rows)
 
     info["total_episodes"] = len(rows)
     info["total_frames"] = sum(row["length"] for row in rows)
     info["splits"] = {"train": f"0:{len(rows)}"}
     (root / "meta" / "info.json").write_text(json.dumps(info, indent=4))
 
-    lost = recorded_episodes - len(rows)
     message = f"Recovered {len(rows)} episode(s) from an interrupted recording of {repo_id}"
     if lost > 0:
         message += f"; {lost} episode(s) were lost because the recording was cut short"

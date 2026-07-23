@@ -188,16 +188,22 @@ const Recording = () => {
         }
 
         if (!status.recording_active && status.session_ended) {
-          // A failed session recorded nothing, so the upload page would offer
-          // an empty dataset. Show why it failed and go back instead.
+          // A failure can land after episodes were already saved, so surface
+          // the reason either way and only go home when nothing survived it.
           if (status.current_phase === "error") {
+            const saved = status.saved_episodes || 0;
             toast({
-              title: "Recording Failed",
-              description: status.error || "The recording session failed to start.",
+              title: saved > 0 ? "Recording Interrupted" : "Recording Failed",
+              description:
+                saved > 0
+                  ? `${saved} episode(s) were saved before the session failed: ${status.error || "unknown error"}`
+                  : status.error || "The recording session failed to start.",
               variant: "destructive",
             });
-            navigate("/");
-            return;
+            if (saved === 0) {
+              navigate("/");
+              return;
+            }
           }
           const datasetInfo = {
             dataset_repo_id:
