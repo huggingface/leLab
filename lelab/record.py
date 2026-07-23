@@ -17,6 +17,7 @@ import re
 import shutil
 import threading
 import time
+import traceback
 from datetime import datetime
 from typing import Any
 
@@ -30,6 +31,7 @@ from lerobot.robots.so_follower import SO101FollowerConfig
 from lerobot.scripts.lerobot_record import RecordConfig
 from lerobot.teleoperators.so_leader import SO101LeaderConfig
 
+from .dataset_repair import DatasetRepairError, repair_local_dataset
 from .utils.config import setup_calibration_files, with_lelab_tag
 from .utils.devices import safe_disconnect_device
 
@@ -469,6 +471,8 @@ def handle_get_dataset_info(request: DatasetInfoRequest) -> dict[str, Any]:
     try:
         from lerobot.datasets import LeRobotDataset
 
+        repair_local_dataset(request.dataset_repo_id)
+
         dataset = LeRobotDataset(request.dataset_repo_id)
         return {
             "success": True,
@@ -480,6 +484,10 @@ def handle_get_dataset_info(request: DatasetInfoRequest) -> dict[str, Any]:
             "total_frames": dataset.num_frames,
             "robot_type": getattr(dataset.meta, "robot_type", "Unknown robot"),
         }
+    except DatasetRepairError as e:
+        logger.warning(f"Could not repair local dataset {request.dataset_repo_id}: {e}")
+        return {"success": False, "message": str(e)}
+
     except Exception as e:
         logger.warning(f"Could not load local dataset {request.dataset_repo_id}: {e}")
         return {
@@ -525,6 +533,8 @@ def handle_upload_dataset(request: UploadRequest) -> dict[str, Any]:
         # Import LeRobotDataset to load and upload the dataset
         from lerobot.datasets import LeRobotDataset
 
+        repair_local_dataset(request.dataset_repo_id)
+
         logger.info(f"Loading dataset {request.dataset_repo_id} for upload")
 
         # Load the dataset from local storage
@@ -546,10 +556,12 @@ def handle_upload_dataset(request: UploadRequest) -> dict[str, Any]:
             "num_episodes": dataset.num_episodes,
         }
 
+    except DatasetRepairError as e:
+        logger.error(f"Cannot upload {request.dataset_repo_id}: {e}")
+        return {"success": False, "message": str(e)}
+
     except Exception as e:
         logger.error(f"Error uploading dataset {request.dataset_repo_id}: {e}")
-        import traceback
-
         logger.error(f"Full traceback: {traceback.format_exc()}")
 
         err_text = str(e).lower()
@@ -863,6 +875,12 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
         log_say("Stop recording", cfg.play_sounds, blocking=True)
 
     finally:
+        # Writes the parquet footers for meta/episodes/. Without it the dataset
+        # is invalid on disk, so reopening it (upload, /dataset-info) misses
+        # meta/episodes and falls back to downloading from the Hub — which 404s
+        # for a dataset that was never pushed.
+        dataset.finalize()
+
         # safe_disconnect_device force-releases the serial port / cameras if a
         # normal disconnect fails, so a flaky teardown can't leave the device
         # busy and block the next recording session (see issue #50).
@@ -871,7 +889,10 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
             safe_disconnect_device(teleop, logger, context="recording cleanup")
 
     if cfg.dataset.push_to_hub:
-        dataset.push_to_hub(tags=cfg.dataset.tags, private=cfg.dataset.private)
+        if dataset.num_episodes > 0:
+            dataset.push_to_hub(tags=cfg.dataset.tags, private=cfg.dataset.private)
+        else:
+            logger.warning("No episodes saved — skipping push to hub")
 
     log_say("Exiting", cfg.play_sounds)
     return dataset

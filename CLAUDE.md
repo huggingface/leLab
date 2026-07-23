@@ -39,6 +39,7 @@ Run the Python tests with `pytest` (config in [pyproject.toml](pyproject.toml); 
 - [teleoperate.py](lelab/teleoperate.py) — leader→follower teleoperation (wraps `lerobot.teleoperate`).
 - [calibrate.py](lelab/calibrate.py) — step-by-step web calibration with a `CalibrationManager` singleton and `_step_complete` threading.Event.
 - [train.py](lelab/train.py) — wraps the LeRobot training CLI as a subprocess (psutil for lifecycle, queue for log streaming).
+- [dataset_repair.py](lelab/dataset_repair.py) — rebuilds `meta/episodes/` for a recording interrupted before `LeRobotDataset.finalize()` ran. Without an episode index LeRobot reads a local dataset as "not downloaded yet" and fetches it from the Hub, which 404s for a dataset that was never pushed. Call `repair_local_dataset(repo_id)` before opening a recorded dataset with `LeRobotDataset`.
 - [utils/config.py](lelab/utils/config.py) — shared paths and persistence: calibration JSON, saved ports, saved config selections. **Import shared constants from here, do not hardcode paths in feature modules.**
 
 ### State model
