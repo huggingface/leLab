@@ -17,6 +17,7 @@ import re
 import shutil
 import threading
 import time
+import traceback
 from datetime import datetime
 from typing import Any
 
@@ -30,6 +31,7 @@ from lerobot.robots.so_follower import SO101FollowerConfig
 from lerobot.scripts.lerobot_record import RecordConfig
 from lerobot.teleoperators.so_leader import SO101LeaderConfig
 
+from .dataset_repair import DatasetRepairError, repair_local_dataset
 from .utils.config import setup_calibration_files, with_lelab_tag
 from .utils.devices import safe_disconnect_device
 
@@ -309,11 +311,22 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
                     "robot_type": getattr(dataset.meta, "robot_type", "Unknown robot"),
                 }
             except Exception as e:
-                logger.exception("Recording session failed")
+                # lerobot's init_logging() installs a root formatter that only
+                # renders the message, so logger.exception() would drop the
+                # traceback. Fold it into the message instead.
+                logger.error("Recording session failed: %s\n%s", e, traceback.format_exc())
                 current_phase = "error"
                 if recording_start_time:
                     session_end_elapsed_seconds = int(time.time() - recording_start_time)
-                last_recording_info = {"success": False, "error": str(e)}
+                # Episodes already saved survive the failure (it can happen in
+                # the reset phase, in finalize, or in the Hub push), so keep the
+                # count: the frontend still offers them for upload.
+                last_recording_info = {
+                    "success": False,
+                    "error": str(e),
+                    "dataset_repo_id": request.dataset_repo_id,
+                    "saved_episodes": saved_episodes,
+                }
             finally:
                 if current_phase != "error":
                     current_phase = "completed"
@@ -433,6 +446,13 @@ def handle_recording_status() -> dict[str, Any]:
     if recording_config:
         status["dataset_repo_id"] = recording_config.dataset_repo_id
 
+    # Carry the failure reason and how much of the session survived it, so the
+    # frontend can offer a partial dataset for upload and only send the user
+    # home when nothing was saved.
+    if current_phase == "error" and last_recording_info:
+        status["error"] = last_recording_info.get("error", "Unknown error")
+        status["saved_episodes"] = last_recording_info.get("saved_episodes", 0)
+
     # Add episode information if recording is active
     if recording_active and recording_config:
         status["current_episode"] = current_episode
@@ -469,6 +489,8 @@ def handle_get_dataset_info(request: DatasetInfoRequest) -> dict[str, Any]:
     try:
         from lerobot.datasets import LeRobotDataset
 
+        repair_local_dataset(request.dataset_repo_id)
+
         dataset = LeRobotDataset(request.dataset_repo_id)
         return {
             "success": True,
@@ -480,6 +502,10 @@ def handle_get_dataset_info(request: DatasetInfoRequest) -> dict[str, Any]:
             "total_frames": dataset.num_frames,
             "robot_type": getattr(dataset.meta, "robot_type", "Unknown robot"),
         }
+    except DatasetRepairError as e:
+        logger.warning(f"Could not repair local dataset {request.dataset_repo_id}: {e}")
+        return {"success": False, "message": str(e)}
+
     except Exception as e:
         logger.warning(f"Could not load local dataset {request.dataset_repo_id}: {e}")
         return {
@@ -525,6 +551,8 @@ def handle_upload_dataset(request: UploadRequest) -> dict[str, Any]:
         # Import LeRobotDataset to load and upload the dataset
         from lerobot.datasets import LeRobotDataset
 
+        repair_local_dataset(request.dataset_repo_id)
+
         logger.info(f"Loading dataset {request.dataset_repo_id} for upload")
 
         # Load the dataset from local storage
@@ -546,10 +574,12 @@ def handle_upload_dataset(request: UploadRequest) -> dict[str, Any]:
             "num_episodes": dataset.num_episodes,
         }
 
+    except DatasetRepairError as e:
+        logger.error(f"Cannot upload {request.dataset_repo_id}: {e}")
+        return {"success": False, "message": str(e)}
+
     except Exception as e:
         logger.error(f"Error uploading dataset {request.dataset_repo_id}: {e}")
-        import traceback
-
         logger.error(f"Full traceback: {traceback.format_exc()}")
 
         err_text = str(e).lower()
@@ -631,59 +661,62 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
             encoder_threads=cfg.dataset.encoder_threads,
         )
 
-    # 🔧 ROBOT CONNECTION: Connect with enhanced error handling for camera conflicts
-    try:
-        logger.info("🔧 ROBOT CONNECTION: Attempting to connect robot...")
-        robot.connect()
-        logger.info("✅ ROBOT CONNECTION: Robot connected successfully")
-    except Exception as e:
-        logger.error(f"❌ ROBOT CONNECTION: Failed to connect robot: {e}")
-        # If robot connection fails due to camera conflict, provide clear error
-        if "camera" in str(e).lower() or "device" in str(e).lower() or "busy" in str(e).lower():
-            logger.error("💡 ROBOT CONNECTION: Camera connection failure - likely camera resource conflict")
-            logger.error(
-                "💡 ROBOT CONNECTION: Make sure frontend camera streams are released before recording"
-            )
-        raise
-
-    if teleop is not None:
-        try:
-            logger.info("🔧 TELEOP CONNECTION: Attempting to connect teleoperator...")
-            teleop.connect()
-            logger.info("✅ TELEOP CONNECTION: Teleoperator connected successfully")
-        except Exception as e:
-            logger.error(f"❌ TELEOP CONNECTION: Failed to connect teleoperator: {e}")
-            raise
-
-    # Ensure calibration is properly loaded and applied to the devices
-    logger.info("Applying calibration to devices")
-
-    # Write calibration to motors' memory (similar to teleoperation code)
-    if hasattr(robot, "bus") and robot.calibration is not None:
-        try:
-            logger.info("Writing robot calibration to motors...")
-            robot.bus.write_calibration(robot.calibration)
-            logger.info("Robot calibration applied successfully")
-        except Exception as e:
-            logger.error(f"Error writing robot calibration: {e}")
-    else:
-        logger.warning("Robot bus or calibration not available - calibration may not be applied")
-
-    if teleop is not None and hasattr(teleop, "bus") and teleop.calibration is not None:
-        try:
-            logger.info("Writing teleop calibration to motors...")
-            teleop.bus.write_calibration(teleop.calibration)
-            logger.info("Teleop calibration applied successfully")
-        except Exception as e:
-            logger.error(f"Error writing teleop calibration: {e}")
-    else:
-        logger.warning("Teleop bus or calibration not available - calibration may not be applied")
-
+    # Bring the devices up in the same order as teleoperation: buses, then
+    # calibration, then cameras and motor configuration.
+    #
+    # `robot.connect()` can't be used here. It prompts on stdin when the motors
+    # disagree with the calibration file (EOFError under the server), and it
+    # ends with configure(), which leaves torque enabled — writing the
+    # calibration registers afterwards corrupts the bus a few seconds into the
+    # recording loop.
     # Start with episode 1 - but track it properly
     current_episode = 1
     saved_episodes = 0  # Track how many episodes we've actually saved
 
+    # Setup runs inside the same try as the recording loop: a failure partway
+    # through it still leaves buses and cameras open, and the teardown below is
+    # what frees them for the next attempt (see issue #50).
     try:
+        try:
+            logger.info("🔧 ROBOT CONNECTION: Attempting to connect robot...")
+            robot.bus.connect()
+            logger.info("✅ ROBOT CONNECTION: Robot bus connected successfully")
+        except Exception as e:
+            logger.error(f"❌ ROBOT CONNECTION: Failed to connect robot: {e}")
+            raise
+
+        if teleop is not None:
+            try:
+                logger.info("🔧 TELEOP CONNECTION: Attempting to connect teleoperator...")
+                teleop.bus.connect()
+                logger.info("✅ TELEOP CONNECTION: Teleoperator bus connected successfully")
+            except Exception as e:
+                logger.error(f"❌ TELEOP CONNECTION: Failed to connect teleoperator: {e}")
+                raise
+
+        # Torque is still disabled at this point, which is what writing the
+        # calibration registers requires.
+        logger.info("Writing calibration to motors...")
+        robot.bus.write_calibration(robot.calibration)
+        if teleop is not None:
+            teleop.bus.write_calibration(teleop.calibration)
+
+        try:
+            logger.info("🔧 CAMERA CONNECTION: Connecting cameras...")
+            for cam in robot.cameras.values():
+                cam.connect()
+            logger.info("✅ CAMERA CONNECTION: Cameras connected successfully")
+        except Exception as e:
+            logger.error(f"❌ CAMERA CONNECTION: Failed to connect cameras: {e}")
+            logger.error("💡 Make sure frontend camera streams are released before recording")
+            raise
+
+        logger.info("Configuring motors...")
+        robot.configure()
+        if teleop is not None:
+            teleop.configure()
+        logger.info("✅ Devices ready")
+
         while saved_episodes < cfg.dataset.num_episodes:
             # RECORDING PHASE - with dataset (matches original record.py exactly)
             current_phase = "recording"
@@ -863,15 +896,26 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
         log_say("Stop recording", cfg.play_sounds, blocking=True)
 
     finally:
-        # safe_disconnect_device force-releases the serial port / cameras if a
-        # normal disconnect fails, so a flaky teardown can't leave the device
-        # busy and block the next recording session (see issue #50).
-        safe_disconnect_device(robot, logger, context="recording cleanup")
-        if teleop:
-            safe_disconnect_device(teleop, logger, context="recording cleanup")
+        try:
+            # Writes the parquet footers for meta/episodes/. Without it the
+            # dataset is invalid on disk, so reopening it (upload,
+            # /dataset-info) misses meta/episodes and falls back to downloading
+            # from the Hub — which 404s for a dataset that was never pushed.
+            dataset.finalize()
+        finally:
+            # safe_disconnect_device force-releases the serial port / cameras if
+            # a normal disconnect fails, so a flaky teardown can't leave the
+            # device busy and block the next recording session (see issue #50).
+            # Nested so a failed finalize can't strand the hardware.
+            safe_disconnect_device(robot, logger, context="recording cleanup")
+            if teleop:
+                safe_disconnect_device(teleop, logger, context="recording cleanup")
 
     if cfg.dataset.push_to_hub:
-        dataset.push_to_hub(tags=cfg.dataset.tags, private=cfg.dataset.private)
+        if dataset.num_episodes > 0:
+            dataset.push_to_hub(tags=cfg.dataset.tags, private=cfg.dataset.private)
+        else:
+            logger.warning("No episodes saved — skipping push to hub")
 
     log_say("Exiting", cfg.play_sounds)
     return dataset

@@ -67,6 +67,7 @@ interface BackendStatus {
   session_elapsed_seconds?: number;
   session_ended?: boolean;
   dataset_repo_id?: string;
+  error?: string;
   available_controls: {
     stop_recording: boolean;
     exit_early: boolean;
@@ -187,6 +188,23 @@ const Recording = () => {
         }
 
         if (!status.recording_active && status.session_ended) {
+          // A failure can land after episodes were already saved, so surface
+          // the reason either way and only go home when nothing survived it.
+          if (status.current_phase === "error") {
+            const saved = status.saved_episodes || 0;
+            toast({
+              title: saved > 0 ? "Recording Interrupted" : "Recording Failed",
+              description:
+                saved > 0
+                  ? `${saved} episode(s) were saved before the session failed: ${status.error || "unknown error"}`
+                  : status.error || "The recording session failed to start.",
+              variant: "destructive",
+            });
+            if (saved === 0) {
+              navigate("/");
+              return;
+            }
+          }
           const datasetInfo = {
             dataset_repo_id:
               status.dataset_repo_id || recordingConfig.dataset_repo_id,
@@ -205,7 +223,7 @@ const Recording = () => {
     pollStatus();
     const statusInterval = setInterval(pollStatus, 1000);
     return () => clearInterval(statusInterval);
-  }, [recordingSessionStarted, recordingConfig, navigate, baseUrl, fetchWithHeaders]);
+  }, [recordingSessionStarted, recordingConfig, navigate, baseUrl, fetchWithHeaders, toast]);
 
   const formatTime = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
