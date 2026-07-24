@@ -55,6 +55,12 @@ _inference_proc: subprocess.Popen | None = None
 _inference_started_at: float | None = None
 _inference_rollout_started_at: float | None = None
 _inference_meta: dict[str, Any] = {}
+# Latest control-loop rate sample emitted by lelab.rollout_metrics, and the
+# target the rollout was configured with. Both are written by the stdout pump
+# thread and read by the status route; plain assignments of immutable values,
+# same pattern as _inference_rollout_started_at above.
+_inference_fps: dict[str, Any] | None = None
+_inference_target_fps: float | None = None
 # Guards mutations to the globals above; held only for the short critical
 # sections in start/stop/status.
 _state_lock = threading.Lock()
@@ -65,12 +71,23 @@ _HUB_ROOT_REF_RE = re.compile(r"^(?P<repo>[^@]+)@root$")
 # UI can present a "rollout time" separate from the multi-second policy
 # load + bus connect + camera connect setup overhead.
 _ROLLOUT_START_MARKER = "Rollout setup complete"
+# One per second from lelab.rollout_metrics' rate meter.
+_FPS_RE = re.compile(
+    r"\[LELAB_FPS\] now=([\d.]+) avg=([\d.]+) min=([\d.]+) gap=([\d.]+) n=(\d+)"
+)
+# lerobot announces the configured target once: "Robot: so101_follower | FPS: 30 | ...".
+# Read it rather than assuming RolloutConfig's 30.0 default, so the UI stays
+# honest if the rollout config ever changes.
+_TARGET_FPS_RE = re.compile(r"\bFPS:\s*([\d.]+)")
+# A sample older than this means the rate meter stopped reporting (run ending,
+# subprocess wedged) — the UI must not keep showing a stale number as live.
+_FPS_STALE_AFTER_S = 3.0
 
 
 def _pump_stdout(proc: subprocess.Popen, log_handle) -> None:
-    """Tee the subprocess's stdout to the log file and watch for the
-    rollout-start marker."""
-    global _inference_rollout_started_at
+    """Tee the subprocess's stdout to the log file, watch for the rollout-start
+    marker, and pick up the control-loop rate samples."""
+    global _inference_rollout_started_at, _inference_fps, _inference_target_fps
     try:
         for raw in iter(proc.stdout.readline, b""):
             try:
@@ -88,6 +105,17 @@ def _pump_stdout(proc: subprocess.Popen, log_handle) -> None:
                     "Inference rollout main loop started after %.1fs of setup",
                     _inference_rollout_started_at - (_inference_started_at or _inference_rollout_started_at),
                 )
+            elif (m := _FPS_RE.search(line)) is not None:
+                _inference_fps = {
+                    "now": float(m.group(1)),
+                    "avg": float(m.group(2)),
+                    "min": float(m.group(3)),
+                    "worst_gap_ms": float(m.group(4)),
+                    "ticks": int(m.group(5)),
+                    "at": time.time(),
+                }
+            elif _inference_target_fps is None and (m := _TARGET_FPS_RE.search(line)) is not None:
+                _inference_target_fps = float(m.group(1))
     except Exception as exc:
         logger.exception("Inference stdout pump failed: %s", exc)
     finally:
@@ -235,11 +263,29 @@ def _classify_outcome(rc: int | None, rollout_started: bool, error_text: str | N
     return "failed"
 
 
+def _fps_payload(sample: dict[str, Any] | None, target: float | None, live: bool) -> dict[str, Any]:
+    """Flatten the last rate sample into the status response.
+
+    `live` is False once the run is over: the averages stay meaningful as a
+    summary, but there is no current rate any more."""
+    stale = not live or sample is None or (time.time() - sample["at"]) > _FPS_STALE_AFTER_S
+    return {
+        "target_fps": target,
+        "fps_now": None if (sample is None or stale) else sample["now"],
+        "fps_avg": sample["avg"] if sample else None,
+        "fps_min": sample["min"] if sample else None,
+        "fps_worst_gap_ms": sample["worst_gap_ms"] if sample else None,
+        "fps_ticks": sample["ticks"] if sample else 0,
+        "fps_stale": stale,
+    }
+
+
 def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
     """Start a one-shot rollout subprocess. Returns a dict — the route
     layer turns it into a JSON response or HTTPException as appropriate."""
     global inference_active, _inference_proc, _inference_started_at
     global _inference_rollout_started_at, _inference_meta
+    global _inference_fps, _inference_target_fps
 
     # Mutex with teleop and recording: all three drive the same serial bus.
     from . import record as _record, teleoperate as _teleoperate
@@ -277,7 +323,9 @@ def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
         cmd = [
             sys.executable,
             "-m",
-            "lerobot.scripts.lerobot_rollout",
+            # Thin wrapper around lerobot.scripts.lerobot_rollout that installs
+            # the control-loop rate meter before handing over to it.
+            "lelab.rollout_metrics",
             "--strategy.type=base",
             f"--policy.path={policy_path}",
             f"--policy.device={_detect_device()}",
@@ -334,6 +382,8 @@ def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
         _inference_proc = proc
         _inference_started_at = time.time()
         _inference_rollout_started_at = None
+        _inference_fps = None
+        _inference_target_fps = None
         _inference_meta = {
             "policy_ref": request.policy_ref,
             "duration_s": request.duration_s,
@@ -346,6 +396,7 @@ def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
 def handle_stop_inference() -> dict[str, Any]:
     global inference_active, _inference_proc, _inference_started_at
     global _inference_rollout_started_at, _inference_meta
+    global _inference_fps, _inference_target_fps
 
     with _state_lock:
         if not inference_active or _inference_proc is None:
@@ -369,12 +420,15 @@ def handle_stop_inference() -> dict[str, Any]:
         _inference_started_at = None
         _inference_rollout_started_at = None
         _inference_meta = {}
+        _inference_fps = None
+        _inference_target_fps = None
     return {"success": True, "message": "Inference stopped"}
 
 
 def handle_inference_status() -> dict[str, Any]:
     global inference_active, _inference_proc, _inference_started_at
     global _inference_rollout_started_at, _inference_meta
+    global _inference_fps, _inference_target_fps
 
     # Finalise state lazily if the subprocess died on its own.
     with _state_lock:
@@ -385,11 +439,15 @@ def handle_inference_status() -> dict[str, Any]:
             finished_meta = _inference_meta
             finished_started = _inference_started_at
             finished_rollout_started = _inference_rollout_started_at
+            finished_fps = _inference_fps
+            finished_target_fps = _inference_target_fps
             inference_active = False
             _inference_proc = None
             _inference_started_at = None
             _inference_rollout_started_at = None
             _inference_meta = {}
+            _inference_fps = None
+            _inference_target_fps = None
             # On failure, surface the real error from the log so the UI doesn't
             # have to send the user digging through the cache.
             error = _extract_error_from_log(finished_meta.get("log_path")) if rc else None
@@ -408,6 +466,7 @@ def handle_inference_status() -> dict[str, Any]:
                 "rollout_started_at": finished_rollout_started,
                 "rollout_elapsed_s": 0,
                 "elapsed_s": 0,
+                **_fps_payload(finished_fps, finished_target_fps, live=False),
             }
         elapsed = (time.time() - _inference_started_at) if _inference_started_at else 0
         rollout_elapsed = time.time() - _inference_rollout_started_at if _inference_rollout_started_at else 0
@@ -420,4 +479,5 @@ def handle_inference_status() -> dict[str, Any]:
             "duration_s": _inference_meta.get("duration_s"),
             "policy_ref": _inference_meta.get("policy_ref"),
             "log_path": _inference_meta.get("log_path"),
+            **_fps_payload(_inference_fps, _inference_target_fps, live=inference_active),
         }

@@ -35,6 +35,8 @@ def _reset_rollout_globals(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(rollout, "_inference_started_at", None)
     monkeypatch.setattr(rollout, "_inference_rollout_started_at", None)
     monkeypatch.setattr(rollout, "_inference_meta", {})
+    monkeypatch.setattr(rollout, "_inference_fps", None)
+    monkeypatch.setattr(rollout, "_inference_target_fps", None)
 
 
 def test_inference_request_rejects_missing_required_fields() -> None:
@@ -219,6 +221,69 @@ def test_handle_inference_status_when_idle_returns_dict_with_expected_keys() -> 
     assert result["inference_active"] is False
     for key in ("started_at", "rollout_started_at", "elapsed_s", "rollout_elapsed_s"):
         assert key in result
+    for key in ("target_fps", "fps_now", "fps_avg", "fps_min", "fps_stale"):
+        assert key in result
+
+
+def test_fps_regex_parses_a_rate_meter_line() -> None:
+    """The line format is the contract between lelab.rollout_metrics (which
+    prints it in the subprocess) and the stdout pump that reads it."""
+    from lelab.rollout import _FPS_RE
+
+    m = _FPS_RE.search("[LELAB_FPS] now=28.6 avg=27.9 min=11.4 gap=452 n=1742")
+    assert m is not None
+    assert m.groups() == ("28.6", "27.9", "11.4", "452", "1742")
+
+
+def test_target_fps_regex_reads_lerobots_banner_and_ignores_our_own_line() -> None:
+    from lelab.rollout import _TARGET_FPS_RE
+
+    banner = "INFO Robot: so101_follower | FPS: 30 | Duration: 60s"
+    assert _TARGET_FPS_RE.search(banner).group(1) == "30"
+    assert _TARGET_FPS_RE.search("[LELAB_FPS] now=28.6 avg=27.9 min=11.4 gap=4 n=17") is None
+
+
+def test_fps_payload_without_a_sample_reports_stale() -> None:
+    from lelab.rollout import _fps_payload
+
+    payload = _fps_payload(None, None, live=True)
+    assert payload["fps_stale"] is True
+    assert payload["fps_now"] is None
+    assert payload["fps_ticks"] == 0
+
+
+def test_fps_payload_drops_a_sample_older_than_the_stale_window() -> None:
+    """A wedged subprocess stops emitting; the UI must not keep showing its
+    last rate as if it were live."""
+    import time
+
+    from lelab.rollout import _FPS_STALE_AFTER_S, _fps_payload
+
+    sample = {
+        "now": 28.6, "avg": 27.9, "min": 11.4, "worst_gap_ms": 452.0,
+        "ticks": 1742, "at": time.time() - (_FPS_STALE_AFTER_S + 1),
+    }
+    payload = _fps_payload(sample, 30.0, live=True)
+    assert payload["fps_stale"] is True
+    assert payload["fps_now"] is None
+    # The run summary stays available even once the live rate is gone.
+    assert payload["fps_avg"] == 27.9
+
+
+def test_fps_payload_keeps_the_summary_but_drops_the_live_rate_once_finished() -> None:
+    import time
+
+    from lelab.rollout import _fps_payload
+
+    sample = {
+        "now": 28.6, "avg": 27.9, "min": 11.4, "worst_gap_ms": 452.0,
+        "ticks": 1742, "at": time.time(),
+    }
+    payload = _fps_payload(sample, 30.0, live=False)
+    assert payload["fps_now"] is None
+    assert payload["fps_avg"] == 27.9
+    assert payload["fps_min"] == 11.4
+    assert payload["target_fps"] == 30.0
 
 
 def _stub_request():
