@@ -507,8 +507,15 @@ def camera_feed_frames(cam_key: str, fps: float = 15.0):
     while recording_active and current_robot is None and time.time() < deadline:
         time.sleep(0.1)
 
-    while recording_active and current_robot is not None:
-        cam = current_robot.cameras.get(cam_key)
+    while recording_active:
+        # Snapshot the module global once per iteration. The recording teardown
+        # clears current_robot before it disconnects the cameras, so reading it
+        # a single time avoids dereferencing a robot that went away between the
+        # check and the access.
+        robot = current_robot
+        if robot is None:
+            break
+        cam = robot.cameras.get(cam_key)
         if cam is None:
             # Unknown/removed camera — nothing to stream.
             break
