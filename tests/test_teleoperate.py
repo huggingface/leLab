@@ -51,6 +51,44 @@ def test_get_joint_positions_from_robot_uses_provided_object() -> None:
     assert isinstance(positions, dict)
 
 
+def test_get_joint_positions_maps_degrees_to_radians_without_correction() -> None:
+    """Every joint maps its Present_Position (degrees around the calibration
+    center) straight to radians, deg * pi/180, with no per-joint offset.
+    shoulder_lift/elbow_flex used to be run through a correction table; a
+    calibration that would have triggered it is supplied here to prove the
+    offset is gone and they now map like every other joint."""
+    import math
+
+    from lelab.teleoperate import get_joint_positions_from_robot
+
+    class _Cal:
+        # The removed correction derived its offset from range_min/range_max.
+        range_min = 0
+        range_max = 4095
+
+    class _Robot:
+        calibration = {"shoulder_lift": _Cal(), "elbow_flex": _Cal()}
+
+        def get_observation(self):
+            return {
+                "shoulder_pan.pos": 0.0,
+                "shoulder_lift.pos": 90.0,
+                "elbow_flex.pos": -45.0,
+                "wrist_flex.pos": 30.0,
+                "wrist_roll.pos": 12.0,
+                "gripper.pos": 50.0,
+            }
+
+    positions = get_joint_positions_from_robot(_Robot())
+
+    assert positions["Rotation"] == pytest.approx(0.0)
+    assert positions["Pitch"] == pytest.approx(math.radians(90.0))
+    assert positions["Elbow"] == pytest.approx(math.radians(-45.0))
+    assert positions["Wrist_Pitch"] == pytest.approx(math.radians(30.0))
+    assert positions["Wrist_Roll"] == pytest.approx(math.radians(12.0))
+    assert positions["Jaw"] == pytest.approx(math.radians(50.0))
+
+
 def test_start_teleoperation_reports_connection_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
