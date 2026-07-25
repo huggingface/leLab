@@ -266,6 +266,11 @@ def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
         # Claim the slot now so a concurrent caller losing the race sees us.
         inference_active = True
 
+    # Opened partway through setup; the stdout pump thread takes ownership once
+    # it starts. Tracked here so a failure before that hand-off can close it
+    # instead of leaking the file handle (which on Windows also keeps the log
+    # locked).
+    log_handle = None
     try:
         # `setup_follower_calibration_file` returns the basename without the
         # .json extension. We need that stripped form for `--robot.id`,
@@ -323,9 +328,14 @@ def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
             name="inference-stdout-pump",
             daemon=True,
         ).start()
+        log_handle = None  # pump thread owns and closes it from here on
     except Exception as exc:
         logger.exception("Failed to start inference")
-        # Subprocess never started — release the slot.
+        # Startup failed before the pump thread took over (most often Popen
+        # itself). Release the slot and close the log file if we opened it before
+        # failing, so the handle isn't leaked.
+        if log_handle is not None:
+            log_handle.close()
         with _state_lock:
             inference_active = False
         return {"success": False, "status_code": 500, "message": f"Failed to start inference: {exc}"}
