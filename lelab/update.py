@@ -185,11 +185,19 @@ def _compute_status() -> dict[str, Any]:
         base.commits_behind = 0
         return base.model_dump()
 
+    # compare(base=installed, head=latest) reports how the repo relates to the
+    # installed commit. Only status "ahead" means the repo has strictly newer
+    # commits the install can fast-forward to — the one case worth a nudge.
+    # "behind" (the install sits ahead of the default branch) and "diverged"
+    # (history rewritten / force-push) must not nag: the in-place --force
+    # reinstall would throw away those local commits. If the compare is
+    # unavailable (e.g. the installed commit is no longer in the repo), stay
+    # silent rather than guess.
     compare = _github_json(f"/repos/{owner}/{repo}/compare/{current}...{latest}")
     if isinstance(compare, dict):
         base.commits_behind = compare.get("ahead_by")
         base.compare_url = compare.get("html_url")
-    base.update_available = True
+        base.update_available = compare.get("status") == "ahead"
     return base.model_dump()
 
 
