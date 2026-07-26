@@ -10,8 +10,10 @@ import React, {
 import { useLocation, useNavigate } from "react-router-dom";
 import { ONBOARDING_STEPS, TourStep } from "@/lib/onboardingSteps";
 import { useOnboardingProgress } from "@/hooks/useOnboardingProgress";
+import { isHostedSpace } from "@/lib/isHostedSpace";
 import SpotlightOverlay from "@/components/onboarding/SpotlightOverlay";
 import TourLauncher from "@/components/onboarding/TourLauncher";
+import WelcomeDialog from "@/components/onboarding/WelcomeDialog";
 
 // Persisted across sessions, mirroring the useUpdateCheck pattern. The `-v1`
 // suffix lets a future revamp re-offer the tour to everyone by bumping it.
@@ -71,6 +73,7 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({
   const [isActive, setIsActive] = useState(false);
   const [currentStepId, setCurrentStepId] = useState<string | null>(null);
   const [hasSeen, setHasSeen] = useState<boolean>(() => readStatus() !== null);
+  const [showWelcome, setShowWelcome] = useState(false);
 
   const progress = useOnboardingProgress(isActive);
 
@@ -103,8 +106,25 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({
   }, []);
 
   const start = useCallback(() => {
+    setShowWelcome(false);
     setCurrentStepId(ONBOARDING_STEPS[0]?.id ?? null);
     setIsActive(true);
+  }, []);
+
+  const dismissWelcome = useCallback(() => {
+    setShowWelcome(false);
+    writeStatus("dismissed");
+    setHasSeen(true);
+  }, []);
+
+  // Offer the tour once, on the first visit only. Suppressed on the hosted HF
+  // Space, where UsageInstructionsModal owns the first-run moment (a
+  // non-dismissible install prompt) — the two must never stack. The corner
+  // launcher stays available everywhere regardless.
+  useEffect(() => {
+    if (readStatus() === null && !isHostedSpace()) {
+      setShowWelcome(true);
+    }
   }, []);
 
   const next = useCallback(() => {
@@ -211,6 +231,11 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({
   return (
     <OnboardingContext.Provider value={value}>
       {children}
+      <WelcomeDialog
+        open={showWelcome}
+        onStart={start}
+        onDismiss={dismissWelcome}
+      />
       <SpotlightOverlay />
       <TourLauncher variant="floating" />
     </OnboardingContext.Provider>
