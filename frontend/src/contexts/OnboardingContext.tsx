@@ -9,12 +9,17 @@ import React, {
 } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ONBOARDING_STEPS, TourStep } from "@/lib/onboardingSteps";
+import { useOnboardingProgress } from "@/hooks/useOnboardingProgress";
 import SpotlightOverlay from "@/components/onboarding/SpotlightOverlay";
 import TourLauncher from "@/components/onboarding/TourLauncher";
 
 // Persisted across sessions, mirroring the useUpdateCheck pattern. The `-v1`
 // suffix lets a future revamp re-offer the tour to everyone by bumping it.
 const STORAGE_KEY = "lelab:onboarding-v1";
+// Delay before auto-advancing once a step's goal is met, so the user sees the
+// "done" state register before moving on.
+const AUTO_ADVANCE_MS = 1100;
+
 type OnboardingStatus = "dismissed" | "completed";
 
 const readStatus = (): OnboardingStatus | null => {
@@ -37,8 +42,13 @@ const writeStatus = (status: OnboardingStatus) => {
 interface OnboardingContextValue {
   isActive: boolean;
   currentStep: TourStep | null;
+  /** 0-based index of the current step among the steps visible to this user. */
   stepIndex: number;
   totalSteps: number;
+  /** True when the current step's goal has been achieved. */
+  currentComplete: boolean;
+  /** True when the current step's prerequisite is not met yet (info only). */
+  currentGated: boolean;
   /** True once the user has finished or dismissed the tour at least once. */
   hasSeen: boolean;
   start: () => void;
@@ -59,39 +69,58 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({
   const location = useLocation();
 
   const [isActive, setIsActive] = useState(false);
-  const [stepIndex, setStepIndex] = useState(0);
+  const [currentStepId, setCurrentStepId] = useState<string | null>(null);
   const [hasSeen, setHasSeen] = useState<boolean>(() => readStatus() !== null);
 
-  const totalSteps = ONBOARDING_STEPS.length;
+  const progress = useOnboardingProgress(isActive);
+
+  // Steps whose `show` predicate excludes this user drop out — but the current
+  // step is always kept so it can never vanish mid-view and strand the tour.
+  const visibleSteps = useMemo(
+    () =>
+      ONBOARDING_STEPS.filter(
+        (s) => s.id === currentStepId || !s.show || s.show(progress)
+      ),
+    [progress, currentStepId]
+  );
+
+  const stepIndex = currentStepId
+    ? visibleSteps.findIndex((s) => s.id === currentStepId)
+    : -1;
   const currentStep =
-    isActive && stepIndex >= 0 && stepIndex < totalSteps
-      ? ONBOARDING_STEPS[stepIndex]
-      : null;
+    isActive && stepIndex >= 0 ? visibleSteps[stepIndex] : null;
+
+  const currentComplete = currentStep?.isComplete
+    ? currentStep.isComplete(progress)
+    : false;
+  const currentGated = currentStep?.gate ? !currentStep.gate(progress) : false;
 
   const stop = useCallback((completed: boolean) => {
     setIsActive(false);
+    setCurrentStepId(null);
     writeStatus(completed ? "completed" : "dismissed");
     setHasSeen(true);
   }, []);
 
   const start = useCallback(() => {
-    setStepIndex(0);
+    setCurrentStepId(ONBOARDING_STEPS[0]?.id ?? null);
     setIsActive(true);
   }, []);
 
   const next = useCallback(() => {
-    setStepIndex((i) => {
-      if (i >= totalSteps - 1) {
-        stop(true);
-        return i;
-      }
-      return i + 1;
-    });
-  }, [totalSteps, stop]);
+    const idx = visibleSteps.findIndex((s) => s.id === currentStepId);
+    if (idx < 0) return;
+    if (idx >= visibleSteps.length - 1) {
+      stop(true);
+      return;
+    }
+    setCurrentStepId(visibleSteps[idx + 1].id);
+  }, [visibleSteps, currentStepId, stop]);
 
   const back = useCallback(() => {
-    setStepIndex((i) => Math.max(0, i - 1));
-  }, []);
+    const idx = visibleSteps.findIndex((s) => s.id === currentStepId);
+    if (idx > 0) setCurrentStepId(visibleSteps[idx - 1].id);
+  }, [visibleSteps, currentStepId]);
 
   const skipStep = next;
 
@@ -126,12 +155,36 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({
     navigate(currentStep.route);
   }, [isActive, currentStep, location.pathname, navigate]);
 
+  // Auto-advance when a step's goal is met — but only on a false->true
+  // transition while the step is shown, so returning to an already-complete
+  // step via Back doesn't immediately bounce forward again.
+  const autoRef = useRef<{ id: string | null; done: boolean }>({
+    id: null,
+    done: false,
+  });
+  useEffect(() => {
+    if (!isActive || !currentStep) return;
+    if (autoRef.current.id !== currentStep.id) {
+      // Entering a (possibly already-complete) step: set the baseline and
+      // never auto-advance out of a step that was already done on arrival.
+      autoRef.current = { id: currentStep.id, done: currentComplete };
+      return;
+    }
+    if (!autoRef.current.done && currentComplete) {
+      autoRef.current.done = true;
+      const t = setTimeout(() => next(), AUTO_ADVANCE_MS);
+      return () => clearTimeout(t);
+    }
+  }, [isActive, currentStep, currentComplete, next]);
+
   const value = useMemo<OnboardingContextValue>(
     () => ({
       isActive,
       currentStep,
       stepIndex,
-      totalSteps,
+      totalSteps: visibleSteps.length,
+      currentComplete,
+      currentGated,
       hasSeen,
       start,
       next,
@@ -143,7 +196,9 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({
       isActive,
       currentStep,
       stepIndex,
-      totalSteps,
+      visibleSteps.length,
+      currentComplete,
+      currentGated,
       hasSeen,
       start,
       next,
