@@ -137,8 +137,8 @@ const TourCard: React.FC<TourCardProps> = ({ rect }) => {
         {currentGated && !currentComplete && (
           <p className="mt-2 flex items-center gap-1.5 text-xs text-amber-400">
             <Lock className="h-3 w-3 shrink-0" />
-            Finish the earlier step to unlock this. You can keep reading and move
-            on with Skip.
+            Finish the earlier step to unlock this, or continue with Next
+            whenever you like.
           </p>
         )}
 
