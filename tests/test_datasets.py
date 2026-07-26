@@ -86,6 +86,22 @@ def test_list_user_datasets_returns_empty_when_not_logged_in(
         assert list_user_datasets() == []
 
 
+def test_list_local_datasets_with_source_tags_local_without_hub(
+    tmp_lerobot_home: Path,
+) -> None:
+    from lelab.datasets import list_local_datasets_with_source
+
+    _make_dataset(tmp_lerobot_home, "pusht")
+
+    # The local-only listing must never consult the Hub.
+    with patch("lelab.datasets.list_user_datasets") as hub:
+        result = list_local_datasets_with_source()
+        hub.assert_not_called()
+
+    by_id = {d["repo_id"]: d for d in result}
+    assert by_id["pusht"]["source"] == "local"
+
+
 def test_list_all_datasets_merges_hub_and_local(
     tmp_lerobot_home: Path,
 ) -> None:

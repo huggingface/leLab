@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useApi } from "@/contexts/ApiContext";
 import { useHfAuth } from "@/contexts/HfAuthContext";
-import { listDatasets } from "@/lib/replayApi";
+import { listLocalDatasets } from "@/lib/replayApi";
 import { listJobs } from "@/lib/jobsApi";
 import type { RobotRecord } from "@/hooks/useRobots";
 import type { ProgressSnapshot } from "@/lib/onboardingSteps";
@@ -28,9 +28,10 @@ const EMPTY: ProgressSnapshot = {
  * (which refetches per route and owns selection) — a second instance would
  * double traffic and race the selection state.
  *
- * Only cheap local endpoints are polled: no /jobs/hub, so the tour never adds
- * Hugging Face Hub API load. Tracked cloud jobs already surface in /jobs, and
- * auth comes from the existing HfAuth context.
+ * Only cheap local endpoints are polled — /robots, /datasets?scope=local (a
+ * filesystem scan, no Hub call), and /jobs — so the tour never adds Hugging
+ * Face Hub API load. Tracked cloud jobs already surface in /jobs, and auth
+ * comes from the existing HfAuth context.
  */
 export function useOnboardingProgress(active: boolean): ProgressSnapshot {
   const { baseUrl, fetchWithHeaders } = useApi();
@@ -50,7 +51,7 @@ export function useOnboardingProgress(active: boolean): ProgressSnapshot {
       fetchWithHeaders(`${baseUrl}/robots`)
         .then((r) => (r.ok ? r.json() : null))
         .catch(() => null),
-      listDatasets(baseUrl, fetchWithHeaders).catch(() => []),
+      listLocalDatasets(baseUrl, fetchWithHeaders).catch(() => []),
       listJobs(baseUrl, fetchWithHeaders, 20).catch(() => []),
     ]);
 
