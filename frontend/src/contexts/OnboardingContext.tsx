@@ -2,9 +2,12 @@ import React, {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { ONBOARDING_STEPS, TourStep } from "@/lib/onboardingSteps";
 import SpotlightOverlay from "@/components/onboarding/SpotlightOverlay";
 import TourLauncher from "@/components/onboarding/TourLauncher";
@@ -52,6 +55,9 @@ const OnboardingContext = createContext<OnboardingContextValue | null>(null);
 export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
+  const navigate = useNavigate();
+  const location = useLocation();
+
   const [isActive, setIsActive] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
   const [hasSeen, setHasSeen] = useState<boolean>(() => readStatus() !== null);
@@ -88,6 +94,37 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({
   }, []);
 
   const skipStep = next;
+
+  // Navigate to a step's route once, when that step is entered — never during
+  // render. We deliberately do NOT re-navigate on later location changes, so a
+  // user who clicks away mid-step isn't yanked back (the spotlight just falls
+  // back to a centered card). The calibration page needs a robot_name in
+  // navigation state to show the right robot's controls, so we forward the
+  // currently-selected robot (persisted by useRobots).
+  const lastNavStepId = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isActive || !currentStep) {
+      lastNavStepId.current = null;
+      return;
+    }
+    if (lastNavStepId.current === currentStep.id) return;
+    lastNavStepId.current = currentStep.id;
+    if (location.pathname === currentStep.route) return;
+    if (currentStep.route === "/calibration") {
+      let robotName: string | null = null;
+      try {
+        robotName = localStorage.getItem("lelab.selectedRobot");
+      } catch {
+        // Storage unavailable — fall through to a plain navigation.
+      }
+      navigate(
+        "/calibration",
+        robotName ? { state: { robot_name: robotName } } : undefined
+      );
+      return;
+    }
+    navigate(currentStep.route);
+  }, [isActive, currentStep, location.pathname, navigate]);
 
   const value = useMemo<OnboardingContextValue>(
     () => ({
