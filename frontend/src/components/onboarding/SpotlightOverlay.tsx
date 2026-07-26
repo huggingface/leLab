@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { useLocation } from "react-router-dom";
 import { useOnboarding } from "@/contexts/OnboardingContext";
 import TourCard from "@/components/onboarding/TourCard";
 
@@ -11,6 +12,7 @@ const MOUNT_TIMEOUT_MS = 3000;
 
 const SpotlightOverlay: React.FC = () => {
   const { isActive, currentStep, stop } = useOnboarding();
+  const location = useLocation();
   const [rect, setRect] = useState<DOMRect | null>(null);
   // Becomes true once we've either located the target or given up (fallback).
   const [ready, setReady] = useState(false);
@@ -19,7 +21,8 @@ const SpotlightOverlay: React.FC = () => {
   const target = currentStep?.target ?? null;
 
   // Locate the step's target, tracking it across scroll/resize/layout shifts.
-  // Re-runs whenever the step changes.
+  // Re-runs whenever the step changes, and on route changes so a manual
+  // navigation away mid-step re-queries (rather than pinning a stale rect).
   useLayoutEffect(() => {
     setReady(false);
     setRect(null);
@@ -37,7 +40,15 @@ const SpotlightOverlay: React.FC = () => {
     const startedAt = performance.now();
 
     const measure = () => {
-      if (tracked) setRect(tracked.getBoundingClientRect());
+      if (!tracked) return;
+      // The element can leave the DOM under us (e.g. the user navigated away
+      // before this effect re-runs). Drop the spotlight instead of pinning it
+      // to a stale position.
+      if (!tracked.isConnected) {
+        setRect(null);
+        return;
+      }
+      setRect(tracked.getBoundingClientRect());
     };
 
     const attachTrackers = (el: Element) => {
@@ -77,7 +88,7 @@ const SpotlightOverlay: React.FC = () => {
       window.removeEventListener("resize", measure);
       observer?.disconnect();
     };
-  }, [isActive, stepId, target]);
+  }, [isActive, stepId, target, location.pathname]);
 
   // Esc leaves the tour from anywhere.
   useEffect(() => {
