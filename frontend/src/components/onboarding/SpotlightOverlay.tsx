@@ -42,6 +42,11 @@ const SpotlightOverlay: React.FC = () => {
 
     const attachTrackers = (el: Element) => {
       tracked = el;
+      // Bring the target on-screen if it's below the fold (e.g. the cameras or
+      // jobs step). "nearest" scrolls the minimum needed and does nothing when
+      // it's already visible; the scroll listener below keeps the cutout and
+      // card glued to it as the smooth scroll settles.
+      el.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
       measure();
       setReady(true);
       window.addEventListener("scroll", measure, true);
