@@ -104,7 +104,7 @@ const SpotlightOverlay: React.FC = () => {
       ) : (
         <div className="absolute inset-0 bg-black/60" />
       )}
-      <TourCard rect={hasRect ? rect : null} />
+      <TourCard key={currentStep.id} rect={hasRect ? rect : null} />
     </div>,
     document.body
   );

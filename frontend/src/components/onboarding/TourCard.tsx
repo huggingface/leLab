@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Check, Lock, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -37,6 +37,13 @@ const TourCard: React.FC<TourCardProps> = ({ rect }) => {
       setSize({ w: r.width, h: r.height });
     }
   }, [currentStep?.id, rect]);
+
+  // Move focus to the card when a step opens so keyboard and screen-reader
+  // users land on the guidance. The card remounts per step (keyed by id), so
+  // this fires once per step.
+  useEffect(() => {
+    cardRef.current?.focus();
+  }, []);
 
   if (!currentStep) return null;
 
@@ -90,9 +97,12 @@ const TourCard: React.FC<TourCardProps> = ({ rect }) => {
       ref={cardRef}
       role="dialog"
       aria-label="Guided tour"
+      aria-live="polite"
+      tabIndex={-1}
       className={cn(
         "pointer-events-auto fixed z-[45] w-[340px] max-w-[calc(100vw-16px)]",
-        "rounded-lg border border-gray-700 bg-gray-900 text-gray-300 shadow-2xl"
+        "rounded-lg border border-gray-700 bg-gray-900 text-gray-300 shadow-2xl outline-none",
+        "animate-in fade-in-0 zoom-in-95 duration-200 motion-reduce:animate-none"
       )}
       style={pos}
     >
