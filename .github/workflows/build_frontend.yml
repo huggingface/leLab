@@ -43,7 +43,8 @@ jobs:
           if [[ -n "$(git status --porcelain frontend/dist)" ]]; then
             git add frontend/dist
             git commit -m "ci: rebuild frontend/dist [skip ci]"
-            echo "${GH_TOKEN}" | gh auth login --with-token
+            # gh reads GH_TOKEN from the env; `gh auth login` would refuse
+            # to run while it is set.
             gh auth setup-git
             git push origin "HEAD:${GITHUB_REF_NAME}"
           else
