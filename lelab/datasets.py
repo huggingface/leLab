@@ -264,8 +264,20 @@ def handle_episode_detail(repo_id: str, episode_index: int) -> dict[str, Any]:
 def load_episode_frame_png(
     repo_id: str, episode_index: int, camera: str | None, frame_index: int, max_width: int | None
 ) -> bytes:
-    """One decoded frame as PNG bytes. Raises on any miss; the route maps to 404."""
+    """One decoded frame as PNG bytes. Raises on any miss; the route maps to 404.
+
+    The bounds check matters on a packed mp4: episodes sit back to back in one
+    file, so an out-of-range ``frame_index`` would otherwise decode cleanly —
+    and serve a frame of the *next* episode with a 200.
+    """
     dataset_dir = episode_media.resolve_dataset_dir(repo_id)
+    rows = episode_media.read_episode_index(dataset_dir)
+    row = next((r for r in rows if r.episode_idx == episode_index), None)
+    if frame_index < 0 or (row and row.length and frame_index >= row.length):
+        raise episode_media.EpisodeNotFoundError(
+            f"Frame {frame_index} out of range for episode {episode_index}"
+            + (f" (length {row.length})" if row and row.length else "")
+        )
     location = episode_media.locate_episode_video(dataset_dir, episode_index, camera=camera)
     return episode_media.extract_frame_png(location, frame_index, max_width=max_width)
 

@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useApi } from "@/contexts/ApiContext";
-import { EpisodeDetail, videoUrl } from "@/lib/datasetApi";
+import { EpisodeDetail, frameUrl, videoUrl } from "@/lib/datasetApi";
 import FilmStrip from "./FilmStrip";
 import MotionTrace from "./MotionTrace";
 
@@ -253,6 +253,10 @@ const EpisodeViewer: React.FC<EpisodeViewerProps> = ({ repoId, detail, onNavigat
             key={`${activeCam}-${activeInfo.chunk}-${activeInfo.file_index}`}
             ref={driverRef}
             src={videoUrl(baseUrl, repoId, activeCam, activeInfo.chunk, activeInfo.file_index)}
+            // The episode's first frame, decoded server-side, so the box shows
+            // the scene immediately instead of sitting black while the mp4
+            // downloads and seeks to the episode's window.
+            poster={frameUrl(baseUrl, repoId, detail.episode_index, activeCam, 0, 640)}
             // Height-capped and ratio-natural: robot cameras are 4:3, so forcing
             // a 16:9 box would pillarbox them. The cap is sized so the transport,
             // motion trace and film strip all stay above the fold on a laptop.
@@ -284,6 +288,7 @@ const EpisodeViewer: React.FC<EpisodeViewerProps> = ({ repoId, detail, onNavigat
                   secondaryRefs.current[c.name] = el;
                 }}
                 src={videoUrl(baseUrl, repoId, c.name, c.chunk, c.file_index)}
+                poster={frameUrl(baseUrl, repoId, detail.episode_index, c.name, 0, 640)}
                 className="max-h-[22vh] w-auto max-w-full bg-black object-contain"
                 preload="auto"
                 playsInline

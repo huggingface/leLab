@@ -81,7 +81,11 @@ def resolve_dataset_dir(repo_id: str) -> Path:
     from a query string, so this is load-bearing rather than defensive.
     """
     root = lerobot_cache_root()
-    target = (root / repo_id).resolve()
+    try:
+        target = (root / repo_id).resolve()
+    except (ValueError, OSError) as e:
+        # e.g. an embedded NUL byte; a garbage repo_id is a 404, not a 500.
+        raise DatasetNotFoundError(f"Invalid dataset path: {repo_id}") from e
     if target == root or root not in target.parents:
         raise DatasetNotFoundError(f"Invalid dataset path: {repo_id}")
     if not (target / "meta" / "info.json").is_file():
@@ -451,11 +455,23 @@ def _decode_at(container, stream, target_s: float):
 def extract_frame_png(
     location: EpisodeVideoLocation, frame_index: int, *, max_width: int | None = None
 ) -> bytes:
-    """Decode one episode-relative frame to PNG bytes."""
+    """Decode one episode-relative frame to PNG bytes.
+
+    Refuses targets outside the episode's window when one is known: on a
+    packed mp4 an out-of-window target decodes *cleanly* — into the next
+    episode's footage — so it must be an error here, not just at the route's
+    length check (which a row with no usable ``length`` never reaches).
+    """
     import av
     from PIL import Image
 
+    if frame_index < 0:
+        raise EpisodeNotFoundError(f"Frame {frame_index} out of range")
     target = _frame_time(location, frame_index)
+    if location.to_timestamp is not None and target >= location.to_timestamp:
+        raise EpisodeNotFoundError(
+            f"Frame {frame_index} is outside episode {location.episode_idx}'s video window"
+        )
     try:
         with av.open(str(location.path)) as container:
             stream = container.streams.video[0]
@@ -469,7 +485,8 @@ def extract_frame_png(
     except Exception as e:
         raise EpisodeNotFoundError(f"Could not decode {location.path.name}: {e}") from e
 
-    if max_width and img.width > max_width:
+    # max_width <= 0 is a no-op rather than a PIL ValueError from resize.
+    if max_width and max_width > 0 and img.width > max_width:
         height = max(1, round(img.height * max_width / img.width))
         img = img.resize((max_width, height), Image.BILINEAR)
 
@@ -513,7 +530,7 @@ def extract_thumbnails(
                 if frame is None:
                     continue
                 img = frame.to_image()
-                if img.width > max_width:
+                if max_width > 0 and img.width > max_width:
                     height = max(1, round(img.height * max_width / img.width))
                     img = img.resize((max_width, height), Image.BILINEAR)
                 buf = io.BytesIO()

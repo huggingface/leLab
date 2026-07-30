@@ -271,6 +271,37 @@ def test_extract_frame_png_respects_max_width(dataset: str) -> None:
     assert img.height == 12  # 32x24 halved, aspect preserved
 
 
+def test_extract_frame_png_tolerates_nonpositive_max_width(dataset: str) -> None:
+    """A negative max_width must be a no-op, not a PIL ValueError → 500."""
+    from lelab.episode_media import extract_frame_png, locate_episode_video, resolve_dataset_dir
+
+    loc = locate_episode_video(resolve_dataset_dir(dataset), 0, camera="top")
+    for max_width in (0, -5):
+        assert extract_frame_png(loc, 0, max_width=max_width)[:4] == b"\x89PNG"
+
+
+def test_extract_frame_png_refuses_frames_outside_the_window(dataset: str) -> None:
+    """The module itself bounds the decode, not just the route's length check.
+
+    Episode 0 owns 0.0..1.2s of the packed file. Frame 14's target (1.4s) is
+    episode 1's footage; before the window check it decoded cleanly and came
+    back as a 200 — byte-identical to episode 1's frame 2.
+    """
+    from lelab.episode_media import (
+        EpisodeNotFoundError,
+        extract_frame_png,
+        locate_episode_video,
+        resolve_dataset_dir,
+    )
+
+    loc = locate_episode_video(resolve_dataset_dir(dataset), 0, camera="top")
+    for bad in (12, 14, 10_000_000, -1):
+        with pytest.raises(EpisodeNotFoundError):
+            extract_frame_png(loc, bad)
+    # The last real frame (11) sits just inside the window and still decodes.
+    assert extract_frame_png(loc, 11)[:4] == b"\x89PNG"
+
+
 def test_extract_frame_decodes_inside_the_right_episode(dataset: str) -> None:
     """Frame 0 of episode 1 must not be frame 0 of the file.
 

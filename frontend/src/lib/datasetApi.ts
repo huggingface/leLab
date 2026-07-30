@@ -162,7 +162,7 @@ export function videoUrl(
   return `${baseUrl}/dataset-video?${qs}`;
 }
 
-/** URL for a single decoded frame as a PNG. Goes into <img src>. */
+/** URL for a single decoded frame as a PNG. Goes into <video poster> (or <img src>). */
 export function frameUrl(
   baseUrl: string,
   repoId: string,
