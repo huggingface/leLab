@@ -65,7 +65,12 @@ const EpisodeViewer: React.FC<EpisodeViewerProps> = ({ repoId, detail, onNavigat
       const v = driverRef.current;
       if (!v) return;
       const clamped = Math.max(0, Math.min(frameIndex, Math.max(detail.length - 1, 0)));
-      v.currentTime = fromTs + clamped / fps;
+      // Seek to the frame's CENTER, not its boundary. A boundary seek sits
+      // epsilon away from `clamped / fps`, so the timeupdate recompute
+      // (floor((t - fromTs) * fps)) can floor to the previous frame: stepping
+      // right went +1 then snapped back, stepping left jumped 2. Mid-frame,
+      // floor(clamped + 0.5) is immune to float error in either direction.
+      v.currentTime = fromTs + (clamped + 0.5) / fps;
       setCurrentFrame(clamped);
     },
     [fromTs, fps, detail.length],
