@@ -91,6 +91,7 @@ class UploadRequest(BaseModel):
 
 class DatasetInfoRequest(BaseModel):
     dataset_repo_id: str
+    delete_from_hub: bool = False
 
 
 def _normalize_dataset_repo_id(repo_id: str) -> str:
@@ -692,6 +693,18 @@ def handle_delete_dataset(request: DatasetInfoRequest) -> dict[str, Any]:
 
     if not target.exists():
         return {"success": False, "message": f"Dataset not found on disk: {repo_id}"}
+
+    if request.delete_from_hub:
+        from huggingface_hub import delete_repo
+        from huggingface_hub.errors import RepositoryNotFoundError
+
+        try:
+            delete_repo(repo_id, repo_type="dataset")
+        except RepositoryNotFoundError:
+            pass
+        except Exception as e:
+            logger.error(f"Failed to delete {repo_id} from the Hub: {e}")
+            return {"success": False, "message": f"Failed to delete dataset from the Hub: {e}"}
 
     try:
         shutil.rmtree(target)
