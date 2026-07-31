@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 
 
@@ -119,3 +121,61 @@ def test_build_camera_configs_skips_non_opencv_type() -> None:
     configs = _build_camera_configs(cameras, Cv2Backends.ANY)
 
     assert configs == {}
+
+
+def test_handle_delete_dataset_calls_delete_repo_when_requested(
+    tmp_lerobot_home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lelab.record import DatasetInfoRequest, handle_delete_dataset
+
+    monkeypatch.setattr("lerobot.utils.constants.HF_LEROBOT_HOME", tmp_lerobot_home)
+    dataset_dir = tmp_lerobot_home / "user" / "dataset"
+    dataset_dir.mkdir(parents=True)
+
+    spy = MagicMock()
+    monkeypatch.setattr("huggingface_hub.delete_repo", spy)
+
+    result = handle_delete_dataset(DatasetInfoRequest(dataset_repo_id="user/dataset", delete_from_hub=True))
+
+    assert result["success"] is True
+    spy.assert_called_once_with("user/dataset", repo_type="dataset")
+    assert not dataset_dir.exists()
+
+
+def test_handle_delete_dataset_skips_hub_call_by_default(
+    tmp_lerobot_home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lelab.record import DatasetInfoRequest, handle_delete_dataset
+
+    monkeypatch.setattr("lerobot.utils.constants.HF_LEROBOT_HOME", tmp_lerobot_home)
+    dataset_dir = tmp_lerobot_home / "user" / "dataset"
+    dataset_dir.mkdir(parents=True)
+
+    spy = MagicMock()
+    monkeypatch.setattr("huggingface_hub.delete_repo", spy)
+
+    result = handle_delete_dataset(DatasetInfoRequest(dataset_repo_id="user/dataset"))
+
+    assert result["success"] is True
+    spy.assert_not_called()
+    assert not dataset_dir.exists()
+
+
+def test_handle_delete_dataset_hub_failure_keeps_local_copy(
+    tmp_lerobot_home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lelab.record import DatasetInfoRequest, handle_delete_dataset
+
+    monkeypatch.setattr("lerobot.utils.constants.HF_LEROBOT_HOME", tmp_lerobot_home)
+    dataset_dir = tmp_lerobot_home / "user" / "dataset"
+    dataset_dir.mkdir(parents=True)
+
+    def raise_error(*args, **kwargs):
+        raise RuntimeError("network error")
+
+    monkeypatch.setattr("huggingface_hub.delete_repo", raise_error)
+
+    result = handle_delete_dataset(DatasetInfoRequest(dataset_repo_id="user/dataset", delete_from_hub=True))
+
+    assert result["success"] is False
+    assert dataset_dir.exists()
