@@ -72,6 +72,8 @@ const Upload = () => {
   const [uploadSuccess, setUploadSuccess] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteFromHub, setDeleteFromHub] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
 
   // Load actual dataset information from backend
   React.useEffect(() => {
@@ -231,13 +233,18 @@ const Upload = () => {
     try {
       const response = await fetchWithHeaders(`${baseUrl}/delete-dataset`, {
         method: "POST",
-        body: JSON.stringify({ dataset_repo_id: datasetInfo.dataset_repo_id }),
+        body: JSON.stringify({
+          dataset_repo_id: datasetInfo.dataset_repo_id,
+          delete_from_hub: deleteFromHub,
+        }),
       });
       const data = await response.json();
       if (response.ok && data.success) {
         toast({
           title: "Dataset Deleted",
-          description: `${datasetInfo.dataset_repo_id} has been removed from disk.`,
+          description: deleteFromHub
+            ? `${datasetInfo.dataset_repo_id} has been removed from disk and the Hub.`
+            : `${datasetInfo.dataset_repo_id} has been removed from disk.`,
         });
         navigate("/");
       } else {
@@ -256,6 +263,8 @@ const Upload = () => {
     } finally {
       setIsDeleting(false);
       setShowDeleteConfirm(false);
+      setDeleteFromHub(false);
+      setDeleteConfirmText("");
     }
   };
 
@@ -536,7 +545,16 @@ const Upload = () => {
         )}
       </div>
 
-      <AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+      <AlertDialog
+        open={showDeleteConfirm}
+        onOpenChange={(open) => {
+          setShowDeleteConfirm(open);
+          if (!open) {
+            setDeleteFromHub(false);
+            setDeleteConfirmText("");
+          }
+        }}
+      >
         <AlertDialogContent className="bg-gray-900 border-gray-700 text-white">
           <AlertDialogHeader>
             <AlertDialogTitle>Delete dataset from disk?</AlertDialogTitle>
@@ -544,13 +562,42 @@ const Upload = () => {
               This permanently removes <span className="font-mono text-white">{datasetInfo.dataset_repo_id}</span> from your local cache. This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {isAlreadyOnHub && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="delete-from-hub"
+                  checked={deleteFromHub}
+                  onCheckedChange={(checked) => setDeleteFromHub(checked === true)}
+                />
+                <Label htmlFor="delete-from-hub" className="text-sm text-gray-300">
+                  Also delete this dataset from the HuggingFace Hub
+                </Label>
+              </div>
+              {deleteFromHub && (
+                <div className="space-y-1">
+                  <Label className="text-xs text-gray-400">
+                    Type <span className="font-mono text-white">{datasetInfo.dataset_repo_id}</span> to confirm
+                  </Label>
+                  <Input
+                    value={deleteConfirmText}
+                    onChange={(e) => setDeleteConfirmText(e.target.value)}
+                    className="bg-gray-800 border-gray-700 text-white"
+                  />
+                </div>
+              )}
+            </div>
+          )}
           <AlertDialogFooter>
             <AlertDialogCancel className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700">
               Keep dataset
             </AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDeleteDataset}
-              disabled={isDeleting}
+              disabled={
+                isDeleting ||
+                (deleteFromHub && deleteConfirmText !== datasetInfo.dataset_repo_id)
+              }
               className="bg-red-500 hover:bg-red-600 text-white"
             >
               {isDeleting ? "Deleting…" : "Delete"}
