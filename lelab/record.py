@@ -551,11 +551,16 @@ def handle_get_dataset_info(request: DatasetInfoRequest) -> dict[str, Any]:
         repair_local_dataset(request.dataset_repo_id)
 
         dataset = LeRobotDataset(request.dataset_repo_id)
+        try:
+            tasks = [str(t) for t in dataset.meta.tasks.index]
+        except Exception:
+            tasks = []
         return {
             "success": True,
             "dataset_repo_id": request.dataset_repo_id,
             "num_episodes": dataset.num_episodes,
             "single_task": getattr(dataset.meta, "single_task", "Unknown task"),
+            "tasks": tasks,
             "fps": dataset.fps,
             "features": list(dataset.features.keys()),
             "total_frames": dataset.num_frames,
@@ -686,9 +691,17 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
 
     if cfg.resume:
         num_cameras = len(robot.cameras) if hasattr(robot, "cameras") else 0
+        # LeRobotDataset.resume() refuses root=None (it would write into the
+        # revision-safe Hub snapshot cache), so resolve the same default local
+        # directory that LeRobotDataset.create() uses.
+        resume_root = cfg.dataset.root
+        if resume_root is None:
+            from lerobot.utils.constants import HF_LEROBOT_HOME
+
+            resume_root = HF_LEROBOT_HOME / cfg.dataset.repo_id
         dataset = LeRobotDataset.resume(
             cfg.dataset.repo_id,
-            root=cfg.dataset.root,
+            root=resume_root,
             batch_encoding_size=cfg.dataset.video_encoding_batch_size,
             rgb_encoder=cfg.dataset.rgb_encoder,
             depth_encoder=cfg.dataset.depth_encoder,

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import logging
 import os
 from datetime import UTC, datetime
@@ -42,6 +43,17 @@ def _dir_mtime_iso(path: Path) -> str | None:
         ts = path.stat().st_mtime
         return datetime.fromtimestamp(ts, tz=UTC).isoformat()
     except OSError:
+        return None
+
+
+def _dataset_episode_count(path: Path) -> int | None:
+    """Episode count from <dir>/meta/info.json, without loading the dataset."""
+    try:
+        with open(path / "meta" / "info.json", encoding="utf-8") as f:
+            info = json.load(f)
+        count = info.get("total_episodes")
+        return int(count) if count is not None else None
+    except (OSError, ValueError, TypeError):
         return None
 
 
@@ -76,6 +88,7 @@ def list_local_datasets() -> list[dict[str, Any]]:
                     "repo_id": top.name,
                     "last_modified": _dir_mtime_iso(top),
                     "private": False,
+                    "num_episodes": _dataset_episode_count(top),
                 }
             )
             continue
@@ -97,6 +110,7 @@ def list_local_datasets() -> list[dict[str, Any]]:
                         "repo_id": f"{top.name}/{sub.name}",
                         "last_modified": _dir_mtime_iso(sub),
                         "private": False,
+                        "num_episodes": _dataset_episode_count(sub),
                     }
                 )
 
@@ -150,6 +164,7 @@ def list_all_datasets() -> list[dict[str, Any]]:
         if rid in merged:
             existing = merged[rid]
             existing["source"] = "both"
+            existing["num_episodes"] = item.get("num_episodes")
             # Keep the newer timestamp; ISO strings sort lexically.
             a = existing.get("last_modified") or ""
             b = item.get("last_modified") or ""

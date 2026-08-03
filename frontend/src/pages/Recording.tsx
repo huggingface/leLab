@@ -25,6 +25,7 @@ import {
   playResetStartCue,
   playAutoAdvanceWarning,
 } from "@/lib/recordingAudio";
+import { setEpisodeTarget } from "@/lib/episodeTargets";
 import { useApi } from "@/contexts/ApiContext";
 import {
   AlertDialog,
@@ -52,6 +53,7 @@ interface RecordingConfig {
   push_to_hub: boolean;
   resume: boolean;
   streaming_encoding: boolean;
+  episode_target?: number | null;
 }
 
 type Phase = "preparing" | "recording" | "resetting" | "completed";
@@ -298,6 +300,12 @@ const Recording = () => {
       const data = await response.json();
 
       if (response.ok) {
+        if (recordingConfig.episode_target) {
+          setEpisodeTarget(
+            data.dataset_id ?? recordingConfig.dataset_repo_id,
+            recordingConfig.episode_target,
+          );
+        }
         setRecordingSessionStarted(true);
         toast({
           title: "Recording Started",

@@ -12,13 +12,23 @@ import JobsSection from "@/components/jobs/JobsSection";
 
 import UsageInstructionsModal from "@/components/landing/UsageInstructionsModal";
 import { useHfAuth } from "@/contexts/HfAuthContext";
+import { useApi } from "@/contexts/ApiContext";
 import { useRobots } from "@/hooks/useRobots";
 import { useDatasets } from "@/hooks/useDatasets";
 import { DatasetItem } from "@/lib/replayApi";
+import { getEpisodeTarget } from "@/lib/episodeTargets";
 import { CameraConfig } from "@/components/recording/CameraConfiguration";
 import { isHostedSpace } from "@/lib/isHostedSpace";
 
 const ON_SPACE = isHostedSpace();
+
+export interface ResumeDatasetInfo {
+  fps: number;
+  cameras: string[];
+  robotType: string;
+  numEpisodes: number;
+  task: string | null;
+}
 
 const Landing = () => {
   const [showUsageModal, setShowUsageModal] = useState(ON_SPACE);
@@ -45,6 +55,10 @@ const Landing = () => {
   const [resetTimeS, setResetTimeS] = useState(15);
   const [streamingEncoding, setStreamingEncoding] = useState(true);
   const [cameras, setCameras] = useState<CameraConfig[]>([]);
+  const [resumeMode, setResumeMode] = useState(false);
+  const [resumeInfo, setResumeInfo] = useState<ResumeDatasetInfo | null>(null);
+  const [episodeTarget, setEpisodeTargetState] = useState<number | null>(null);
+  const { baseUrl, fetchWithHeaders } = useApi();
 
   const releaseStreamsRef = useRef<(() => void) | null>(null);
 
@@ -80,6 +94,11 @@ const Landing = () => {
 
   const handleRecordingModalClose = (open: boolean) => {
     setShowRecordingModal(open);
+    if (!open && resumeMode) {
+      setResumeMode(false);
+      setResumeInfo(null);
+      setDatasetName("");
+    }
     if (!open && releaseStreamsRef.current) {
       console.log("🧹 Modal closed: Releasing camera streams");
       releaseStreamsRef.current();
@@ -118,8 +137,47 @@ const Landing = () => {
   };
 
   const handleCreateDataset = (name: string) => {
+    setResumeMode(false);
+    setEpisodeTargetState(null);
     setDatasetName(name);
     openRecordingModal();
+  };
+
+  const handleResumeDataset = async (item: DatasetItem) => {
+    setResumeMode(true);
+    setDatasetName(item.repo_id);
+    setResumeInfo(null);
+    setEpisodeTargetState(getEpisodeTarget(item.repo_id));
+    openRecordingModal();
+    try {
+      const response = await fetchWithHeaders(`${baseUrl}/dataset-info`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dataset_repo_id: item.repo_id }),
+      });
+      const info = await response.json();
+      if (!info.success) return;
+      const cameras = (info.features ?? [])
+        .filter((f: string) => f.startsWith("observation.images."))
+        .map((f: string) => f.split(".").pop() as string);
+      const tasks: string[] = info.tasks ?? [];
+      const task =
+        tasks.length > 0
+          ? tasks[tasks.length - 1]
+          : info.single_task && info.single_task !== "Unknown task"
+            ? info.single_task
+            : null;
+      setResumeInfo({
+        fps: info.fps ?? 30,
+        cameras,
+        robotType: info.robot_type ?? "unknown",
+        numEpisodes: info.num_episodes ?? 0,
+        task,
+      });
+      if (task) setSingleTask(task);
+    } catch (e) {
+      console.warn("Could not load dataset info for resume:", e);
+    }
   };
 
   const handleStartRecording = async () => {
@@ -149,8 +207,9 @@ const Landing = () => {
       return;
     }
 
-    const datasetRepoId =
-      auth.status === "authenticated"
+    const datasetRepoId = resumeMode
+      ? datasetName
+      : auth.status === "authenticated"
         ? `${auth.username}/${datasetName}`
         : datasetName;
 
@@ -207,12 +266,13 @@ const Landing = () => {
       num_episodes: numEpisodes,
       episode_time_s: episodeTimeS,
       reset_time_s: resetTimeS,
-      fps: 30,
+      fps: resumeMode && resumeInfo ? resumeInfo.fps : 30,
       video: true,
       push_to_hub: false,
-      resume: false,
+      resume: resumeMode,
       streaming_encoding: streamingEncoding,
       cameras: cameraDict,
+      episode_target: episodeTarget,
     };
 
     setShowRecordingModal(false);
@@ -249,6 +309,7 @@ const Landing = () => {
                 datasets={datasets}
                 loading={datasetsLoading}
                 onPickExisting={handlePickExisting}
+                onResumeExisting={handleResumeDataset}
                 onOpenCustom={handleOpenCustom}
                 onCreateNew={handleCreateDataset}
               >
@@ -297,6 +358,10 @@ const Landing = () => {
         open={showRecordingModal}
         onOpenChange={handleRecordingModalClose}
         robot={selectedRecord}
+        resumeMode={resumeMode}
+        resumeInfo={resumeInfo}
+        episodeTarget={episodeTarget}
+        setEpisodeTarget={setEpisodeTargetState}
         datasetName={datasetName}
         setDatasetName={setDatasetName}
         singleTask={singleTask}

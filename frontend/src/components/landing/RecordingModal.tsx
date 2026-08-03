@@ -17,17 +17,22 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { AlertTriangle, CheckCircle, ChevronDown } from "lucide-react";
+import { AlertTriangle, CheckCircle, ChevronDown, Disc } from "lucide-react";
 import CameraConfiguration, {
   CameraConfig,
 } from "@/components/recording/CameraConfiguration";
 import { useHfAuth } from "@/contexts/HfAuthContext";
 import { RobotRecord } from "@/hooks/useRobots";
+import { ResumeDatasetInfo } from "@/pages/Landing";
 
 interface RecordingModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   robot: RobotRecord | null;
+  resumeMode?: boolean;
+  resumeInfo?: ResumeDatasetInfo | null;
+  episodeTarget?: number | null;
+  setEpisodeTarget?: (value: number | null) => void;
   datasetName: string;
   setDatasetName: (value: string) => void;
   singleTask: string;
@@ -50,6 +55,10 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
   open,
   onOpenChange,
   robot,
+  resumeMode = false,
+  resumeInfo = null,
+  episodeTarget = null,
+  setEpisodeTarget,
   datasetName,
   setDatasetName,
   singleTask,
@@ -69,7 +78,17 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
 }) => {
   const { auth } = useHfAuth();
 
-  const canStart = !!robot && robot.is_clean;
+  const configuredCameraNames = cameras.map((c) => c.name);
+  const missingCameras = resumeInfo
+    ? resumeInfo.cameras.filter((c) => !configuredCameraNames.includes(c))
+    : [];
+  const extraCameras = resumeInfo
+    ? configuredCameraNames.filter((c) => !resumeInfo.cameras.includes(c))
+    : [];
+  const camerasMatch = missingCameras.length === 0 && extraCameras.length === 0;
+  const setupOk = !resumeMode || !resumeInfo || camerasMatch;
+
+  const canStart = !!robot && robot.is_clean && setupOk;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -81,7 +100,7 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
             </div>
           </div>
           <DialogTitle className="text-white text-center text-2xl font-bold">
-            Configure Recording
+            {resumeMode ? "Continue Recording" : "Configure Recording"}
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-6 py-4">
@@ -124,6 +143,84 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
               <h3 className="text-lg font-semibold text-white border-b border-gray-700 pb-2">
                 Dataset Configuration
               </h3>
+              {resumeMode && (
+                <Alert className="bg-blue-900/40 border-blue-700 text-blue-100">
+                  <Disc className="h-4 w-4" />
+                  <AlertDescription>
+                    New episodes will be appended to{" "}
+                    <strong className="font-mono">{datasetName}</strong>
+                    {resumeInfo && (
+                      <> ({resumeInfo.numEpisodes} episodes so far)</>
+                    )}
+                    . The setup must match the original recording exactly.
+                  </AlertDescription>
+                </Alert>
+              )}
+              {resumeMode && resumeInfo && (
+                <div className="rounded-lg border border-gray-700 bg-gray-800/60 p-3 space-y-2">
+                  <p className="text-sm font-medium text-gray-200">
+                    Required setup (from the dataset)
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                    <div className="rounded bg-gray-800 border border-gray-700 px-2 py-1.5">
+                      <span className="text-gray-500 block">Robot type</span>
+                      <span className="text-gray-200 font-mono">
+                        {resumeInfo.robotType}
+                      </span>
+                    </div>
+                    <div className="rounded bg-gray-800 border border-gray-700 px-2 py-1.5">
+                      <span className="text-gray-500 block">FPS</span>
+                      <span className="text-gray-200 font-mono">
+                        {resumeInfo.fps}
+                      </span>
+                    </div>
+                    <div
+                      className={`rounded px-2 py-1.5 border ${
+                        camerasMatch
+                          ? "bg-gray-800 border-gray-700"
+                          : "bg-red-900/40 border-red-700"
+                      }`}
+                    >
+                      <span className="text-gray-500 block">Cameras</span>
+                      <span
+                        className={`font-mono ${camerasMatch ? "text-gray-200" : "text-red-300"}`}
+                      >
+                        {resumeInfo.cameras.join(", ") || "none"}
+                      </span>
+                    </div>
+                  </div>
+                  {!camerasMatch && (
+                    <Alert className="bg-red-900/40 border-red-700 text-red-100">
+                      <AlertTriangle className="h-4 w-4" />
+                      <AlertDescription className="text-xs">
+                        Camera setup doesn&apos;t match the dataset.
+                        {missingCameras.length > 0 && (
+                          <>
+                            {" "}
+                            Missing:{" "}
+                            <strong className="font-mono">
+                              {missingCameras.join(", ")}
+                            </strong>
+                            .
+                          </>
+                        )}
+                        {extraCameras.length > 0 && (
+                          <>
+                            {" "}
+                            Not in the dataset:{" "}
+                            <strong className="font-mono">
+                              {extraCameras.join(", ")}
+                            </strong>
+                            .
+                          </>
+                        )}{" "}
+                        Rename or adjust your cameras below to match, then the
+                        button will unlock.
+                      </AlertDescription>
+                    </Alert>
+                  )}
+                </div>
+              )}
               <div className="grid grid-cols-1 gap-4">
                 <div className="space-y-2">
                   <Label
@@ -135,20 +232,24 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
                   <Input
                     id="datasetName"
                     value={datasetName}
+                    disabled={resumeMode}
                     onChange={(e) =>
                       setDatasetName(
                         e.target.value.replace(/[^A-Za-z0-9._-]/g, "_")
                       )
                     }
                     placeholder="my_dataset"
-                    className="bg-gray-800 border-gray-700 text-white"
+                    className="bg-gray-800 border-gray-700 text-white disabled:opacity-60"
                   />
-                  <p className="text-xs text-gray-500">
-                    Letters, numbers, <code>.</code> <code>_</code>{" "}
-                    <code>-</code> only — other characters become{" "}
-                    <code>_</code>.
-                  </p>
+                  {!resumeMode && (
+                    <p className="text-xs text-gray-500">
+                      Letters, numbers, <code>.</code> <code>_</code>{" "}
+                      <code>-</code> only — other characters become{" "}
+                      <code>_</code>.
+                    </p>
+                  )}
                   {datasetName &&
+                    !resumeMode &&
                     (auth.status === "authenticated" ? (
                       <p className="text-xs text-gray-500">
                         Will be saved as{" "}
@@ -177,23 +278,46 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
                     className="bg-gray-800 border-gray-700 text-white"
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label
-                    htmlFor="numEpisodes"
-                    className="text-sm font-medium text-gray-300"
-                  >
-                    Number of Episodes
-                  </Label>
-                  <NumberInput
-                    id="numEpisodes"
-                    min="1"
-                    max="100"
-                    value={numEpisodes}
-                    onChange={(v) => {
-                      if (v !== undefined) setNumEpisodes(v);
-                    }}
-                    className="bg-gray-800 border-gray-700 text-white"
-                  />
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label
+                      htmlFor="numEpisodes"
+                      className="text-sm font-medium text-gray-300"
+                    >
+                      {resumeMode ? "Episodes to add" : "Number of Episodes"}
+                    </Label>
+                    <NumberInput
+                      id="numEpisodes"
+                      min="1"
+                      max="100"
+                      value={numEpisodes}
+                      onChange={(v) => {
+                        if (v !== undefined) setNumEpisodes(v);
+                      }}
+                      className="bg-gray-800 border-gray-700 text-white"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label
+                      htmlFor="episodeTarget"
+                      className="text-sm font-medium text-gray-300"
+                    >
+                      Episode goal (optional)
+                    </Label>
+                    <NumberInput
+                      id="episodeTarget"
+                      min="1"
+                      value={episodeTarget ?? undefined}
+                      onChange={(v) => {
+                        setEpisodeTarget?.(v ?? null);
+                      }}
+                      className="bg-gray-800 border-gray-700 text-white"
+                    />
+                    <p className="text-xs text-gray-500">
+                      Total episodes you aim for across all sessions — shows
+                      progress in the dataset list.
+                    </p>
+                  </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
@@ -286,7 +410,7 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
               disabled={!canStart}
               className="w-full sm:w-auto bg-red-500 hover:bg-red-600 text-white px-10 py-6 text-lg transition-all shadow-md shadow-red-500/30 hover:shadow-lg hover:shadow-red-500/40 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              Start Recording
+              {resumeMode ? "Resume Recording" : "Start Recording"}
             </Button>
             <Button
               onClick={() => onOpenChange(false)}
