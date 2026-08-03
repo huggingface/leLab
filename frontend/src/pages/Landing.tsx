@@ -97,15 +97,11 @@ const Landing = () => {
   };
 
   const handlePickExisting = (item: DatasetItem) => {
+    // Anything with files on disk opens in the local episode browser; upload and
+    // delete are reachable from there. A Hub-only dataset has no videos here to
+    // decode, so it still goes out to the visualize_dataset Space.
     if (item.source === "local" || item.source === "both") {
-      navigate("/upload", {
-        state: {
-          datasetInfo: {
-            dataset_repo_id: item.repo_id,
-            source: item.source,
-          },
-        },
-      });
+      navigate(`/edit-dataset?dataset=${encodeURIComponent(item.repo_id)}`);
       return;
     }
     openHubViewer(item.repo_id, item.private);
