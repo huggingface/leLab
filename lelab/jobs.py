@@ -46,12 +46,37 @@ logger = logging.getLogger(__name__)
 JobState = Literal["running", "done", "failed", "interrupted"]
 
 
+class SshConnectionConfig(BaseModel):
+    """Connection details for a user-owned remote training server.
+
+    Deliberately makes no assumption about what's installed on the remote
+    host: `remote_python_cmd` is a free-form shell fragment (e.g. "python",
+    "/opt/venv/bin/python", "source ~/venv/bin/activate && python") rather
+    than a hardcoded interpreter path, since lelab has no way to know how
+    the user's server is set up.
+    """
+
+    host: str
+    port: int = 22
+    username: str
+    # Path to a private key file. None ⇒ rely on the local ssh agent /
+    # default identity files (~/.ssh/id_rsa, etc.) — never a password: lelab
+    # doesn't handle interactive auth or store secrets.
+    ssh_key_path: str | None = None
+    # Absolute path on the remote host under which datasets/outputs are
+    # staged for this job (e.g. "/home/user/lelab-runs").
+    remote_workdir: str
+    remote_python_cmd: str = "python"
+
+
 class JobTarget(BaseModel):
     """Where a job should run. `local` ⇒ LocalJobRunner. `hf_cloud` requires
-    a non-empty `flavor` from HfApi.list_jobs_hardware()."""
+    a non-empty `flavor` from HfApi.list_jobs_hardware(). `ssh_remote`
+    requires `ssh`."""
 
-    runner: Literal["local", "hf_cloud"] = "local"
+    runner: Literal["local", "hf_cloud", "ssh_remote"] = "local"
     flavor: str | None = None
+    ssh: SshConnectionConfig | None = None
 
 
 class TrainingMetrics(BaseModel):
@@ -79,15 +104,23 @@ class JobRecord(BaseModel):
     exit_code: int | None = None
     error_message: str | None = None
     metrics: TrainingMetrics = TrainingMetrics()
-    runner: Literal["local", "hf_cloud", "imported"] = "local"
-    # PID of the detached subprocess (local runner only); survives uvicorn
-    # --reload so a fresh registry can re-attach by tailing the log file.
+    runner: Literal["local", "hf_cloud", "ssh_remote", "imported"] = "local"
+    # PID of the detached subprocess (local + ssh_remote runners: for
+    # ssh_remote this is the local `ssh` client's pid, not a remote pid).
+    # Survives uvicorn --reload so a fresh registry can re-attach by tailing
+    # the log file.
     process_pid: int | None = None
     # HF Jobs identifiers (hf_cloud runner only)
     hf_job_id: str | None = None
     hf_flavor: str | None = None
     hf_repo_id: str | None = None
     hf_job_url: str | None = None
+    # ssh_remote runner only: connection used to start this job (so checkpoint
+    # pulls still work after a lelab restart) and the remote output directory
+    # the runner picked (outside record.output_dir, which stays a local path
+    # for _list_local_checkpoints to scan after a pull).
+    ssh_config: SshConnectionConfig | None = None
+    ssh_remote_dir: str | None = None
     # Captured from training stdout the first time wandb prints the run URL.
     wandb_run_url: str | None = None
     # Number of checkpoints currently visible (local: filesystem; cloud:
@@ -523,6 +556,11 @@ def _list_local_checkpoints(output_dir: str) -> list[JobCheckpoint]:
 
 
 _CLOUD_CKPT_TTL_SECONDS = 30.0
+
+# Min seconds between scp checkpoint pulls for a single ssh_remote job. A full
+# recursive scp of the checkpoints/ tree isn't cheap, and the frontend polls
+# checkpoints every ~5s — this keeps that from hammering the remote host.
+_SSH_CHECKPOINT_PULL_INTERVAL_S = 30.0
 _CKPT_PATH_RE = re.compile(r"^checkpoints/(\d+)/pretrained_model/config\.json$")
 
 
@@ -672,6 +710,9 @@ class JobRegistry:
         # repo_id -> (expires_at_epoch, checkpoint list)
         self._cloud_ckpt_cache: dict[str, tuple[float, list[JobCheckpoint]]] = {}
 
+        # job_id -> last scp-pull epoch, for _maybe_pull_ssh_checkpoints' rate limit.
+        self._ssh_pull_cache: dict[str, float] = {}
+
         # Fired (best-effort) on every state change: new job, stop initiated,
         # watchdog finalisation, delete. Server wires this to a WebSocket
         # broadcast so the frontend can refetch on-event instead of polling.
@@ -797,10 +838,13 @@ class JobRegistry:
 
     def start(self, config: TrainingRequest, target: JobTarget | None = None) -> JobRecord:
         from .runners.hf_cloud import HfCloudJobRunner  # lazy import to avoid circular import
+        from .runners.ssh_remote import SshRemoteJobRunner  # lazy import to avoid circular import
 
         target = target or JobTarget()
         if target.runner == "hf_cloud" and not target.flavor:
             raise ValueError("flavor is required when runner is hf_cloud")
+        if target.runner == "ssh_remote" and not target.ssh:
+            raise ValueError("ssh connection details are required when runner is ssh_remote")
 
         with self._lock:
             # Local trainings are bounded by this machine's GPU/USB resources,
@@ -824,6 +868,7 @@ class JobRegistry:
                 started_at=time.time(),
                 runner=target.runner,
                 hf_flavor=target.flavor,
+                ssh_config=target.ssh,
             )
 
             job_dir.mkdir(parents=True, exist_ok=True)
@@ -833,6 +878,8 @@ class JobRegistry:
             log_path = _job_log_path(self._output_root, job_id)
             if target.runner == "local":
                 runner = LocalJobRunner(record.metrics, log_file_path=log_path)
+            elif target.runner == "ssh_remote":
+                runner = SshRemoteJobRunner(record.metrics, log_path, target.ssh)
             else:
                 runner = HfCloudJobRunner(record.metrics, log_path, target.flavor)
 
@@ -850,8 +897,10 @@ class JobRegistry:
             # / page URL / model repo are printed by lerobot's submit_to_hf and
             # only appear in stdout a few seconds after start, so they're None
             # here; the watchdog (_tick) parses and persists them once they land.
-            if target.runner == "local":
+            if target.runner in ("local", "ssh_remote"):
                 record.process_pid = runner.pid()
+            if target.runner == "ssh_remote":
+                record.ssh_remote_dir = runner.remote_output_dir()
 
             self._persist(record, force=True)
             self._runners[job_id] = runner
@@ -1021,10 +1070,36 @@ class JobRegistry:
             return _list_imported_local(record.output_dir)
         if record.runner == "local":
             return _list_local_checkpoints(record.output_dir)
+        if record.runner == "ssh_remote":
+            # Pull the remote checkpoints/ tree into the same local output_dir
+            # a local job would use, then reuse the exact same local listing —
+            # no separate "remote" checkpoint representation needed. Rate
+            # limited so the ~5s poll from the frontend doesn't scp on every tick.
+            self._maybe_pull_ssh_checkpoints(record)
+            return _list_local_checkpoints(record.output_dir)
         # Cloud: _list_imported_hub prefers the checkpoints/<step>/ tree (pushed when
         # save_checkpoint_to_hub is on) and falls back to the final model at the repo
         # root, so a finished run is always reachable even with no per-step tree.
         return self._list_cloud_cached(record.hf_repo_id)
+
+    def _maybe_pull_ssh_checkpoints(self, record: JobRecord) -> None:
+        """Best-effort scp pull of the remote checkpoints/ dir, rate-limited
+        per job. Silently no-ops on any failure (offline server, nothing
+        saved yet) — checkpoint listing degrades to "none yet" rather than
+        surfacing a transient network error to the whole jobs page."""
+        if not record.ssh_config or not record.ssh_remote_dir:
+            return
+        now = time.time()
+        last = self._ssh_pull_cache.get(record.id, 0.0)
+        if now - last < _SSH_CHECKPOINT_PULL_INTERVAL_S:
+            return
+        self._ssh_pull_cache[record.id] = now
+        from .runners.ssh_remote import pull_checkpoints  # lazy: avoid circular import
+
+        try:
+            pull_checkpoints(record.ssh_config, record.ssh_remote_dir, record.output_dir)
+        except Exception as exc:
+            logger.info("Checkpoint pull skipped for ssh_remote job %s: %s", record.id, exc)
 
     def list_checkpoints(self, job_id: str) -> builtins.list[JobCheckpoint]:
         """Return checkpoints saved for this job, ascending by step.

@@ -275,6 +275,11 @@ const ConfigurationMode: React.FC = () => {
   const targetRequiresAuth = trainingConfig.target.runner === "hf_cloud";
   const targetMissingFlavor =
     trainingConfig.target.runner === "hf_cloud" && !trainingConfig.target.flavor;
+  const targetMissingSshFields =
+    trainingConfig.target.runner === "ssh_remote" &&
+    (!trainingConfig.target.ssh?.host.trim() ||
+      !trainingConfig.target.ssh?.username.trim() ||
+      !trainingConfig.target.ssh?.remote_workdir.trim());
   const localBlocked =
     trainingConfig.target.runner === "local" && localJobRunning;
   const startDisabled =
@@ -282,13 +287,16 @@ const ConfigurationMode: React.FC = () => {
     !trainingConfig.dataset_repo_id.trim() ||
     localBlocked ||
     (targetRequiresAuth && !authenticated) ||
-    targetMissingFlavor;
+    targetMissingFlavor ||
+    targetMissingSshFields;
   const startTooltip = localBlocked
     ? "Another local training is already running"
     : targetRequiresAuth && !authenticated
     ? "Log in to Hugging Face to use cloud compute"
     : targetMissingFlavor
     ? "Select a hardware flavor"
+    : targetMissingSshFields
+    ? "Fill in host, username, and remote working directory"
     : undefined;
 
   return (
