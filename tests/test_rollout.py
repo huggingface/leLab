@@ -363,7 +363,12 @@ def test_friendly_hint_maps_common_failures() -> None:
 
     assert "gripper" in (_friendly_hint("Motor overload detected") or "").lower()
     assert "connect" in (_friendly_hint("Failed to connect to the follower") or "").lower()
-    assert "rtc" in (_friendly_hint("GrootPolicy.select_action does not support relative-action policies") or "").lower()
+    assert (
+        "rtc"
+        in (
+            _friendly_hint("GrootPolicy.select_action does not support relative-action policies") or ""
+        ).lower()
+    )
     assert _friendly_hint("some unrecognised traceback") is None
     assert _friendly_hint(None) is None
 

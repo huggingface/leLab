@@ -177,7 +177,9 @@ def build_training_command(
             )
         if request.policy_relative_exclude_joints is not None:
             # draccus parses list values from a single JSON token, e.g. '["gripper"]'.
-            cmd.extend(["--policy.relative_exclude_joints", json.dumps(request.policy_relative_exclude_joints)])
+            cmd.extend(
+                ["--policy.relative_exclude_joints", json.dumps(request.policy_relative_exclude_joints)]
+            )
         if request.policy_use_bf16 is not None:
             cmd.extend(["--policy.use_bf16", "true" if request.policy_use_bf16 else "false"])
 
