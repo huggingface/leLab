@@ -22,7 +22,10 @@ interface MonitoringStatsProps {
 
 interface LossPoint {
   step: number;
-  loss: number;
+  loss?: number;
+  // Held-out validation loss; sparser cadence than the training loss, so
+  // most points leave it undefined and the chart line uses connectNulls.
+  eval_loss?: number;
 }
 
 interface LrPoint {
@@ -41,6 +44,7 @@ const MonitoringStats: React.FC<MonitoringStatsProps> = ({
   const [lossHistory, setLossHistory] = useState<LossPoint[]>([]);
   const [lrHistory, setLrHistory] = useState<LrPoint[]>([]);
   const lastStepRef = useRef(0);
+  const lastEvalLossRef = useRef<number | null>(null);
   const { baseUrl, fetchWithHeaders } = useApi();
 
   // Seed the curves from the persisted log on mount (and when the active job
@@ -53,8 +57,12 @@ const MonitoringStats: React.FC<MonitoringStatsProps> = ({
       .then((points) => {
         if (cancelled || points.length === 0) return;
         const lossSeed: LossPoint[] = points
-          .filter((p) => p.loss != null)
-          .map((p) => ({ step: p.step, loss: p.loss as number }))
+          .filter((p) => p.loss != null || p.eval_loss != null)
+          .map((p) => ({
+            step: p.step,
+            loss: p.loss ?? undefined,
+            eval_loss: p.eval_loss ?? undefined,
+          }))
           .slice(-HISTORY_CAP);
         const lrSeed: LrPoint[] = points
           .filter((p) => p.lr != null)
@@ -67,6 +75,10 @@ const MonitoringStats: React.FC<MonitoringStatsProps> = ({
         // step-regressed reset in the live-append effect below.
         const lastSeededStep = points[points.length - 1]?.step ?? 0;
         lastStepRef.current = lastSeededStep;
+        // Remember the last seeded eval loss so the live-append effect only
+        // adds a new eval point when the value actually changes.
+        const lastEval = [...points].reverse().find((p) => p.eval_loss != null);
+        lastEvalLossRef.current = lastEval?.eval_loss ?? null;
       })
       .catch(() => {
         // 404 or transient — fall through; live ticks will populate from empty.
@@ -83,6 +95,7 @@ const MonitoringStats: React.FC<MonitoringStatsProps> = ({
     if (step < lastStepRef.current) {
       setLossHistory([]);
       setLrHistory([]);
+      lastEvalLossRef.current = null;
     }
     lastStepRef.current = step;
 
@@ -90,8 +103,30 @@ const MonitoringStats: React.FC<MonitoringStatsProps> = ({
       const loss = trainingStatus.current_loss;
       setLossHistory((prev) => {
         const last = prev[prev.length - 1];
-        if (last && last.step === step) return prev;
+        if (last && last.step === step && last.loss != null) return prev;
+        if (last && last.step === step) {
+          // Merge onto an eval-only point at the same step.
+          return [...prev.slice(0, -1), { ...last, loss }];
+        }
         return [...prev, { step, loss }].slice(-HISTORY_CAP);
+      });
+    }
+
+    // The live status only carries the latest eval loss; append a point when
+    // its value changes (evals run every eval_steps, far sparser than ticks).
+    if (
+      step > 0 &&
+      trainingStatus.eval_loss != null &&
+      trainingStatus.eval_loss !== lastEvalLossRef.current
+    ) {
+      const evalLoss = trainingStatus.eval_loss;
+      lastEvalLossRef.current = evalLoss;
+      setLossHistory((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && last.step === step) {
+          return [...prev.slice(0, -1), { ...last, eval_loss: evalLoss }];
+        }
+        return [...prev, { step, eval_loss: evalLoss }].slice(-HISTORY_CAP);
       });
     }
 
@@ -103,7 +138,12 @@ const MonitoringStats: React.FC<MonitoringStatsProps> = ({
         return [...prev, { step, lr }].slice(-HISTORY_CAP);
       });
     }
-  }, [trainingStatus.current_step, trainingStatus.current_loss, trainingStatus.current_lr]);
+  }, [
+    trainingStatus.current_step,
+    trainingStatus.current_loss,
+    trainingStatus.current_lr,
+    trainingStatus.eval_loss,
+  ]);
 
   const progress = getProgressPercentage();
   // Until tqdm fires its first progress line, total_steps is 0 — show
@@ -160,6 +200,12 @@ const MonitoringStats: React.FC<MonitoringStatsProps> = ({
                 <span className="text-slate-400 text-sm font-normal">
                   ({trainingStatus.current_loss?.toFixed(4) ?? '—'})
                 </span>
+                {trainingStatus.eval_loss != null && (
+                  <span className="text-pink-300 text-sm font-normal">
+                    {' '}
+                    · val {trainingStatus.eval_loss.toFixed(4)}
+                  </span>
+                )}
               </span>
             </CardTitle>
           </CardHeader>
@@ -192,15 +238,26 @@ const MonitoringStats: React.FC<MonitoringStatsProps> = ({
                         borderRadius: 8,
                       }}
                       labelStyle={{ color: '#cbd5e1' }}
-                      itemStyle={{ color: '#34d399' }}
                       formatter={(v: number) => v.toFixed(4)}
                     />
                     <Line
                       type="monotone"
                       dataKey="loss"
+                      name="train"
                       stroke="#34d399"
                       strokeWidth={2}
                       dot={false}
+                      connectNulls
+                      isAnimationActive={false}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="eval_loss"
+                      name="val"
+                      stroke="#f472b6"
+                      strokeWidth={2}
+                      dot={{ r: 3, fill: '#f472b6' }}
+                      connectNulls
                       isAnimationActive={false}
                     />
                   </LineChart>

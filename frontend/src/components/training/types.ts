@@ -13,6 +13,11 @@ export interface TrainingConfig {
   seed?: number;
   num_workers: number;
 
+  // Validation (held-out split). Both must be > 0 for eval to run;
+  // the form toggles them together.
+  dataset_eval_split: number;
+  eval_steps: number;
+
   // Logging and checkpointing
   log_freq: number;
   save_freq: number;
@@ -50,6 +55,7 @@ export interface TrainingStatus {
   current_loss?: number;
   current_lr?: number;
   grad_norm?: number;
+  eval_loss?: number;
   epoch_time?: number;
   eta_seconds?: number;
   available_controls: {
