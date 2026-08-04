@@ -26,7 +26,39 @@ export interface InferenceStatus {
   log_path: string | null;
   exited?: boolean;
   exit_code?: number | null;
+  /** Control-loop telemetry, measured in the rollout subprocess. */
+  target_fps: number | null;
+  /** Rate over the last second — null while setting up or once the run ends. */
+  fps_now: number | null;
+  fps_avg: number | null;
+  /** Slowest one-second window of the run. */
+  fps_min: number | null;
+  /** Longest single gap between two control-loop ticks. */
+  fps_worst_gap_ms: number | null;
+  fps_ticks: number;
+  fps_stale: boolean;
 }
+
+export type FpsTone = "good" | "warn" | "bad";
+
+/**
+ * How healthy a measured rate is against the target. The thresholds are
+ * deliberately forgiving: a rollout that holds 26 of its 30 Hz is fine, one
+ * that halves is not.
+ */
+export function fpsTone(fps: number, target: number | null): FpsTone {
+  if (!target || target <= 0) return "good";
+  const ratio = fps / target;
+  if (ratio >= 0.85) return "good";
+  if (ratio >= 0.55) return "warn";
+  return "bad";
+}
+
+export const FPS_TONE_TEXT: Record<FpsTone, string> = {
+  good: "text-green-400",
+  warn: "text-amber-400",
+  bad: "text-red-400",
+};
 
 export async function startInference(
   baseUrl: string,
