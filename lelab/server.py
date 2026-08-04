@@ -28,7 +28,8 @@ from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.datastructures import Headers
@@ -36,8 +37,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
 from starlette.types import Scope
 
-# Import our custom recording functionality
-from . import datasets as dataset_browser, record as _record
+from . import datasets as dataset_browser
 
 # Import our custom calibration functionality
 from .calibrate import CalibrationRequest, calibration_manager
@@ -48,18 +48,37 @@ from .jobs import (
     JobTarget,
     job_registry,
 )
+
+# Import our custom recording functionality
 from .record import (
     DatasetInfoRequest,
     RecordingRequest,
     UploadRequest,
+    camera_feed_frames,
     handle_delete_dataset,
     handle_exit_early,
     handle_get_dataset_info,
+    handle_pause_recording,
     handle_recording_status,
     handle_rerecord_episode,
+    handle_resume_recording,
     handle_start_recording,
     handle_stop_recording,
     handle_upload_dataset,
+    recording_active,
+)
+from .dataset_edit import (
+    DeleteEpisodesInplaceRequest,
+    DeleteEpisodesRequest,
+    MergeRequest,
+    handle_delete_episodes,
+    handle_delete_episodes_inplace,
+    handle_get_editable_datasets,
+    handle_get_episode_video_info,
+    handle_get_episodes,
+    handle_merge_status,
+    handle_serve_video_file,
+    handle_start_merge,
 )
 from .rollout import (
     InferenceRequest,
@@ -450,6 +469,7 @@ def camera_feed(cam_key: str):
     frontend just points an <img> at this URL. Only valid while a session is
     active; the generator ends itself when recording stops.
     """
+    import lelab.record as _record
     if not _record.recording_active:
         raise HTTPException(status_code=409, detail="No active recording session")
     return StreamingResponse(
@@ -470,6 +490,18 @@ def recording_rerecord_episode():
     return handle_rerecord_episode()
 
 
+@app.post("/pause-recording")
+def pause_recording():
+    """Pause recording after the current episode."""
+    return handle_pause_recording()
+
+
+@app.post("/resume-recording")
+def resume_recording():
+    """Resume recording from a paused state."""
+    return handle_resume_recording()
+
+
 @app.post("/upload-dataset")
 def upload_dataset(request: UploadRequest):
     """Upload dataset to HuggingFace Hub"""
@@ -487,6 +519,68 @@ def delete_dataset(request: DatasetInfoRequest):
     """Remove a recorded dataset directory from local disk."""
     return handle_delete_dataset(request)
 
+
+
+
+# ============================================================================
+# DATASET EDIT ENDPOINTS
+# ============================================================================
+
+@app.get("/edit/datasets")
+def edit_list_datasets():
+    """List local datasets enriched with episode counts for the Edit UI."""
+    return handle_get_editable_datasets()
+
+
+@app.post("/edit/merge")
+def edit_start_merge(request: MergeRequest):
+    """Start a background merge of multiple local datasets."""
+    return handle_start_merge(request)
+
+
+@app.get("/edit/merge-status")
+def edit_merge_status():
+    """Poll the progress of the currently running merge."""
+    return handle_merge_status()
+
+
+@app.post("/edit/delete-episodes")
+def edit_delete_episodes(request: DeleteEpisodesRequest):
+    """Delete episodes from a dataset and save result as a new dataset."""
+    return handle_delete_episodes(request)
+
+
+@app.post("/edit/delete-episodes-inplace")
+def edit_delete_episodes_inplace(request: DeleteEpisodesInplaceRequest):
+    """Delete episodes from a dataset in-place (replaces the source dataset)."""
+    return handle_delete_episodes_inplace(request)
+
+
+@app.get("/dataset-episodes")
+def dataset_episodes(repo_id: str):
+    """Return episode list (index, length, task) for a local dataset."""
+    return handle_get_episodes(repo_id)
+
+
+@app.get("/dataset-episode-video-info")
+def dataset_episode_video_info(repo_id: str, episode_index: int):
+    """Return video file paths and timestamps for one episode."""
+    return handle_get_episode_video_info(repo_id, episode_index)
+
+
+@app.get("/dataset-video-file")
+def dataset_video_file(repo_id: str, path: str):
+    """Stream a video file from a local dataset (supports HTTP Range requests)."""
+    from fastapi.responses import FileResponse as _FileResponse
+    try:
+        file_path = handle_serve_video_file(repo_id, path)
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return _FileResponse(
+        str(file_path),
+        media_type="video/mp4",
+        headers={"Accept-Ranges": "bytes"},
+    )
 
 # ============================================================================
 # JOB ENDPOINTS
@@ -667,6 +761,26 @@ def stop_job(job_id: str):
         raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found") from exc
     except JobNotRunningError as exc:
         raise HTTPException(status_code=409, detail=f"Job {job_id!r} is not running") from exc
+
+
+@app.post("/jobs/{job_id}/pause")
+def pause_job(job_id: str):
+    try:
+        return job_registry.pause(job_id)
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found") from exc
+    except (JobNotRunningError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/jobs/{job_id}/resume")
+def resume_job(job_id: str):
+    try:
+        return job_registry.resume(job_id)
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found") from exc
+    except (JobNotRunningError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.delete("/jobs/{job_id}", status_code=204)

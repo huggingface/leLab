@@ -15,7 +15,7 @@ import HfAuthBanner from "@/components/landing/HfAuthBanner";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
-import { Loader2, Play, Square, Trash2, ArrowLeft } from "lucide-react";
+import { Loader2, Pause, Play, Square, Trash2, ArrowLeft } from "lucide-react";
 
 import { DatasetItem, listDatasets } from "@/lib/replayApi";
 import {
@@ -27,6 +27,8 @@ import {
   listJobs,
   startTrainingJob,
   stopJob,
+  pauseJob,
+  resumeJob,
   deleteJob,
   listRunnerHardware,
   RunnerFlavor,
@@ -50,7 +52,7 @@ function jobToStatus(job: JobRecord | null, isStarting: boolean): TrainingStatus
     };
   }
   return {
-    training_active: job.state === "running",
+    training_active: job.state === "running" || job.state === "paused",
     current_step: job.metrics.current_step,
     total_steps: job.metrics.total_steps,
     current_loss: job.metrics.current_loss ?? undefined,
@@ -58,9 +60,9 @@ function jobToStatus(job: JobRecord | null, isStarting: boolean): TrainingStatus
     grad_norm: job.metrics.grad_norm ?? undefined,
     eta_seconds: job.metrics.eta_seconds ?? undefined,
     available_controls: {
-      stop_training: job.state === "running",
-      pause_training: false,
-      resume_training: false,
+      stop_training: job.state === "running" || job.state === "paused",
+      pause_training: job.state === "running",
+      resume_training: job.state === "paused",
     },
   };
 }
@@ -435,7 +437,7 @@ const MonitoringMode: React.FC<{ jobId: string }> = ({ jobId }) => {
     tick();
     const id = setInterval(() => {
       if (cancelled) return;
-      if (jobStateRef.current && jobStateRef.current !== "running") return;
+      if (jobStateRef.current && jobStateRef.current !== "running" && jobStateRef.current !== "paused") return;
       tick();
     }, 5000);
     return () => {
@@ -470,7 +472,7 @@ const MonitoringMode: React.FC<{ jobId: string }> = ({ jobId }) => {
     tick();
     const id = setInterval(() => {
       if (cancelled) return;
-      if (jobStateRef.current && jobStateRef.current !== "running") return;
+      if (jobStateRef.current && jobStateRef.current !== "running" && jobStateRef.current !== "paused") return;
       tick();
     }, POLL_INTERVAL_MS);
     return () => {
@@ -510,6 +512,36 @@ const MonitoringMode: React.FC<{ jobId: string }> = ({ jobId }) => {
     } catch (e) {
       toast({
         title: "Stop failed",
+        description: e instanceof Error ? e.message : String(e),
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handlePause = async () => {
+    if (!job) return;
+    try {
+      const next = await pauseJob(baseUrl, fetchWithHeaders, job.id);
+      setJob(next);
+      toast({ title: "Training paused" });
+    } catch (e) {
+      toast({
+        title: "Pause failed",
+        description: e instanceof Error ? e.message : String(e),
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleResume = async () => {
+    if (!job) return;
+    try {
+      const next = await resumeJob(baseUrl, fetchWithHeaders, job.id);
+      setJob(next);
+      toast({ title: "Training resumed" });
+    } catch (e) {
+      toast({
+        title: "Resume failed",
         description: e instanceof Error ? e.message : String(e),
         variant: "destructive",
       });
@@ -556,6 +588,8 @@ const MonitoringMode: React.FC<{ jobId: string }> = ({ jobId }) => {
   }
 
   const isRunning = job.state === "running";
+  const isPaused = job.state === "paused";
+  const isActive = isRunning || isPaused;
 
   return (
     <div className="min-h-screen bg-slate-900 text-white p-4">
@@ -604,10 +638,21 @@ const MonitoringMode: React.FC<{ jobId: string }> = ({ jobId }) => {
               </p>
             </div>
           </div>
-          {isRunning ? (
-            <Button onClick={handleStop} className="bg-red-500 hover:bg-red-600 text-white">
-              <Square className="w-4 h-4 mr-2" /> Stop
-            </Button>
+          {isActive ? (
+            <div className="flex items-center gap-2">
+              {isPaused ? (
+                <Button onClick={handleResume} className="bg-green-600 hover:bg-green-700 text-white">
+                  <Play className="w-4 h-4 mr-2" /> Resume
+                </Button>
+              ) : (
+                <Button onClick={handlePause} className="bg-amber-600 hover:bg-amber-700 text-white">
+                  <Pause className="w-4 h-4 mr-2" /> Pause
+                </Button>
+              )}
+              <Button onClick={handleStop} className="bg-red-500 hover:bg-red-600 text-white">
+                <Square className="w-4 h-4 mr-2" /> Stop
+              </Button>
+            </div>
           ) : (
             <Button onClick={handleDelete} variant="ghost" className="text-slate-400 hover:text-white">
               <Trash2 className="w-4 h-4 mr-2" /> Delete

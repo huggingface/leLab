@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { ChevronsUpDown } from "lucide-react";
+import { ChevronsUpDown, Pencil, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import LandingTopBar from "@/components/landing/LandingTopBar";
@@ -265,6 +265,27 @@ const Landing = () => {
                   <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                 </Button>
               </DatasetPicker>
+            </div>
+            <div className="bg-gray-800 rounded-lg border border-gray-700 p-3 flex flex-col gap-2">
+              <h3 className="font-semibold text-lg text-left h-10 flex items-center">
+                Edit Datasets
+              </h3>
+              <Button
+                onClick={() => navigate("/edit-dataset")}
+                variant="outline"
+                className="w-full border-gray-600 text-gray-200 hover:bg-gray-700 hover:text-white"
+              >
+                <Pencil className="w-4 h-4 mr-2" />
+                Merge &amp; Edit
+              </Button>
+              <Button
+                onClick={() => navigate("/rerecord")}
+                variant="outline"
+                className="w-full border-gray-600 text-gray-200 hover:bg-gray-700 hover:text-white"
+              >
+                <RefreshCw className="w-4 h-4 mr-2" />
+                Add / Re-record
+              </Button>
             </div>
             <div className="bg-gray-800 rounded-lg border border-gray-700 p-3 flex flex-col gap-2">
               <h3 className="font-semibold text-lg text-left h-10 flex items-center">

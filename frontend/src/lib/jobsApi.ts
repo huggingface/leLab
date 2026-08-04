@@ -210,6 +210,28 @@ export async function stopJob(
   });
 }
 
+export async function pauseJob(
+  baseUrl: string,
+  fetcher: Fetcher,
+  id: string,
+): Promise<JobRecord> {
+  return apiRequest<JobRecord>(baseUrl, fetcher, `/jobs/${id}/pause`, {
+    method: "POST",
+    action: "Pause job",
+  });
+}
+
+export async function resumeJob(
+  baseUrl: string,
+  fetcher: Fetcher,
+  id: string,
+): Promise<JobRecord> {
+  return apiRequest<JobRecord>(baseUrl, fetcher, `/jobs/${id}/resume`, {
+    method: "POST",
+    action: "Resume job",
+  });
+}
+
 export async function deleteJob(
   baseUrl: string,
   fetcher: Fetcher,

@@ -50,8 +50,11 @@ recording_start_time = None  # Track when recording started
 session_end_elapsed_seconds = None  # Final session duration after the run ends
 current_episode = 1  # Track current episode number
 saved_episodes = 0  # Track how many episodes have been saved
-current_phase = "preparing"  # Track current phase: "preparing", "recording", "resetting", "completed"
+current_phase = "preparing"  # Track current phase: "preparing", "recording", "resetting", "completed", "paused"
 phase_start_time = None  # Track when current phase started
+recording_paused = False  # True while waiting for the user to resume between episodes
+_pause_resume_event = threading.Event()  # Set = NOT paused (running), clear = paused
+_pause_resume_event.set()
 last_recording_info: dict[str, Any] | None = (
     None  # Snapshot of the most recently completed dataset (for /dataset-info)
 )
@@ -190,6 +193,15 @@ def create_record_config(request: RecordingRequest) -> RecordConfig:
         private=request.private,
         streaming_encoding=request.streaming_encoding,
     )
+    # LeLab runs teleoperation/recording and video encoding on the same host.
+    # AV1 (libsvtav1) can saturate CPU and starve motor/camera I/O, causing
+    # dropped control-loop rate and serial read timeouts during recording.
+    # Favor a lightweight default encoder profile for interactive capture.
+    if dataset_config.video:
+        dataset_config.rgb_encoder.vcodec = "h264"
+        dataset_config.rgb_encoder.preset = "ultrafast"
+        dataset_config.encoder_threads = 1
+        logger.info("Using lightweight recording encoder profile: h264/ultrafast (threads=1)")
 
     # Create the main record config
     record_config = RecordConfig(
@@ -410,6 +422,35 @@ def handle_rerecord_episode() -> dict[str, Any]:
     }
 
 
+def handle_pause_recording() -> dict[str, Any]:
+    """Pause recording between episodes. Ends the current phase early and waits."""
+    global recording_paused, current_phase
+    if not recording_active or recording_events is None:
+        return {"success": False, "message": "No recording session is active"}
+    if recording_paused:
+        return {"success": False, "message": "Recording is already paused"}
+    recording_paused = True
+    _pause_resume_event.clear()
+    # End the active phase immediately so the worker reaches the pause checkpoint
+    recording_events["exit_early"] = True
+    recording_events["_exit_early_triggered"] = True
+    logger.info("Recording paused by user")
+    return {"success": True, "message": "Recording paused — current episode will be saved and recording will wait"}
+
+
+def handle_resume_recording() -> dict[str, Any]:
+    """Resume recording after a pause."""
+    global recording_paused, current_phase
+    if not recording_active:
+        return {"success": False, "message": "No recording session is active"}
+    if not recording_paused:
+        return {"success": False, "message": "Recording is not paused"}
+    recording_paused = False
+    _pause_resume_event.set()
+    logger.info("Recording resumed by user")
+    return {"success": True, "message": "Recording resumed"}
+
+
 def handle_recording_status() -> dict[str, Any]:
     """Handle recording status request"""
     # If recording is not active and phase is completed or error, indicate session has ended
@@ -428,13 +469,15 @@ def handle_recording_status() -> dict[str, Any]:
 
     status = {
         "recording_active": recording_active,
-        "current_phase": current_phase,  # "preparing", "recording", "resetting", "completed"
+        "recording_paused": recording_paused,
+        "current_phase": current_phase,  # "preparing", "recording", "resetting", "paused", "completed"
         "session_ended": session_ended,  # New field to indicate session completion
         "available_controls": {
             "stop_recording": recording_active,  # ESC key replacement
-            "exit_early": recording_active,  # Right arrow key replacement
-            "rerecord_episode": recording_active
-            and current_phase == "recording",  # Only during recording phase
+            "exit_early": recording_active and not recording_paused,  # Right arrow key replacement
+            "rerecord_episode": recording_active and current_phase == "recording",  # Only during recording phase
+            "pause_recording": recording_active and not recording_paused and current_phase in ("recording", "resetting"),
+            "resume_recording": recording_active and recording_paused,
         },
         "message": "Recording session failed with error - check logs"
         if current_phase == "error"
@@ -507,15 +550,8 @@ def camera_feed_frames(cam_key: str, fps: float = 15.0):
     while recording_active and current_robot is None and time.time() < deadline:
         time.sleep(0.1)
 
-    while recording_active:
-        # Snapshot the module global once per iteration. The recording teardown
-        # clears current_robot before it disconnects the cameras, so reading it
-        # a single time avoids dereferencing a robot that went away between the
-        # check and the access.
-        robot = current_robot
-        if robot is None:
-            break
-        cam = robot.cameras.get(cam_key)
+    while recording_active and current_robot is not None:
+        cam = current_robot.cameras.get(cam_key)
         if cam is None:
             # Unknown/removed camera — nothing to stream.
             break
@@ -673,7 +709,11 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
     from lerobot.utils.feature_utils import hw_to_dataset_features
     from lerobot.utils.utils import log_say
 
-    global current_phase, phase_start_time, current_episode, saved_episodes, current_robot
+    global current_phase, phase_start_time, current_episode, saved_episodes, current_robot, recording_paused
+
+    # Reset pause state for new session
+    recording_paused = False
+    _pause_resume_event.set()
 
     robot = make_robot_from_config(cfg.robot)
     teleop = make_teleoperator_from_config(cfg.teleop) if cfg.teleop is not None else None
@@ -908,6 +948,20 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
             # Check if we've completed all episodes
             if saved_episodes >= cfg.dataset.num_episodes:
                 break
+
+            # ── Pause checkpoint (between episodes) ───────────────────────
+            if recording_paused:
+                current_phase = "paused"
+                phase_start_time = None
+                print(f"⏸ STATUS CHANGE: Recording paused after episode {current_episode - 1}")
+                logger.info("Recording paused — waiting for resume")
+                _pause_resume_event.wait()  # blocks until handle_resume_recording sets it
+                # Restore flags that may have been set by the pause trigger
+                web_events["exit_early"] = False
+                web_events["_exit_early_triggered"] = False
+                print(f"▶ STATUS CHANGE: Recording resumed — continuing from episode {current_episode}")
+                logger.info("Recording resumed")
+            # ─────────────────────────────────────────────────────────────
 
             # Execute reset phase to prepare for next episode
             # Skip reset for the last episode that was just saved

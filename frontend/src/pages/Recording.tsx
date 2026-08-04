@@ -14,6 +14,7 @@ import {
   RotateCcw,
   Square,
   SkipForward,
+  Pause,
   Play,
   Volume2,
   VolumeX,
@@ -54,10 +55,11 @@ interface RecordingConfig {
   streaming_encoding: boolean;
 }
 
-type Phase = "preparing" | "recording" | "resetting" | "completed";
+type Phase = "preparing" | "recording" | "resetting" | "paused" | "completed";
 
 interface BackendStatus {
   recording_active: boolean;
+  recording_paused: boolean;
   current_phase: string;
   current_episode?: number;
   total_episodes?: number;
@@ -73,6 +75,8 @@ interface BackendStatus {
     stop_recording: boolean;
     exit_early: boolean;
     rerecord_episode: boolean;
+    pause_recording: boolean;
+    resume_recording: boolean;
   };
 }
 
@@ -243,23 +247,6 @@ const Recording = () => {
         }
 
         if (!status.recording_active && status.session_ended) {
-          // A failure can land after episodes were already saved, so surface
-          // the reason either way and only go home when nothing survived it.
-          if (status.current_phase === "error") {
-            const saved = status.saved_episodes || 0;
-            toast({
-              title: saved > 0 ? "Recording Interrupted" : "Recording Failed",
-              description:
-                saved > 0
-                  ? `${saved} episode(s) were saved before the session failed: ${status.error || "unknown error"}`
-                  : status.error || "The recording session failed to start.",
-              variant: "destructive",
-            });
-            if (saved === 0) {
-              navigate("/");
-              return;
-            }
-          }
           const datasetInfo = {
             dataset_repo_id:
               status.dataset_repo_id || recordingConfig.dataset_repo_id,
@@ -278,7 +265,7 @@ const Recording = () => {
     pollStatus();
     const statusInterval = setInterval(pollStatus, 1000);
     return () => clearInterval(statusInterval);
-  }, [recordingSessionStarted, recordingConfig, navigate, baseUrl, fetchWithHeaders, toast]);
+  }, [recordingSessionStarted, recordingConfig, navigate, baseUrl, fetchWithHeaders]);
 
   const formatTime = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
@@ -389,6 +376,26 @@ const Recording = () => {
         description: "Could not connect to the backend server.",
         variant: "destructive",
       });
+    }
+  }, [backendStatus, baseUrl, fetchWithHeaders, toast]);
+
+  const handlePauseRecording = useCallback(async () => {
+    if (!backendStatus?.available_controls.pause_recording) return;
+    try {
+      await fetchWithHeaders(`${baseUrl}/pause-recording`, { method: "POST" });
+      toast({ title: "Recording paused", description: "Current episode saved. Click Resume to continue." });
+    } catch {
+      toast({ title: "Error", description: "Failed to pause recording.", variant: "destructive" });
+    }
+  }, [backendStatus, baseUrl, fetchWithHeaders, toast]);
+
+  const handleResumeRecording = useCallback(async () => {
+    if (!backendStatus?.available_controls.resume_recording) return;
+    try {
+      await fetchWithHeaders(`${baseUrl}/resume-recording`, { method: "POST" });
+      toast({ title: "Recording resumed" });
+    } catch {
+      toast({ title: "Error", description: "Failed to resume recording.", variant: "destructive" });
     }
   }, [backendStatus, baseUrl, fetchWithHeaders, toast]);
 
@@ -510,6 +517,7 @@ const Recording = () => {
     if (currentPhase === "recording") return `RECORDING EPISODE ${currentEpisode}`;
     if (currentPhase === "resetting") return "RESET — GET READY";
     if (currentPhase === "preparing") return "PREPARING SESSION";
+    if (currentPhase === "paused") return "⏸ PAUSED — CLICK RESUME TO CONTINUE";
     return "SESSION COMPLETE";
   };
 
@@ -518,6 +526,8 @@ const Recording = () => {
       ? { dot: "bg-red-500", pill: "bg-red-500/15 text-red-300", timer: "text-green-400", bar: "bg-green-500", button: "bg-green-500 hover:bg-green-600" }
       : currentPhase === "resetting"
       ? { dot: "bg-orange-500", pill: "bg-orange-500/15 text-orange-300", timer: "text-orange-400", bar: "bg-orange-500", button: "bg-orange-500 hover:bg-orange-600" }
+      : currentPhase === "paused"
+      ? { dot: "bg-amber-400", pill: "bg-amber-400/15 text-amber-300", timer: "text-amber-400", bar: "bg-amber-400", button: "bg-amber-500 hover:bg-amber-600" }
       : { dot: "bg-gray-500", pill: "bg-gray-500/15 text-gray-300", timer: "text-gray-400", bar: "bg-gray-500", button: "bg-gray-500" };
 
   const primaryLabel =
@@ -560,6 +570,30 @@ const Recording = () => {
             >
               {muted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
             </Button>
+            {backendStatus.available_controls.pause_recording && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handlePauseRecording}
+                aria-label="Pause recording"
+                className="h-8 w-8 text-amber-400 hover:text-amber-300 hover:bg-gray-800"
+                title="Pause recording (saves current episode)"
+              >
+                <Pause className="w-5 h-5" />
+              </Button>
+            )}
+            {backendStatus.available_controls.resume_recording && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleResumeRecording}
+                aria-label="Resume recording"
+                className="h-8 w-8 text-green-400 hover:text-green-300 hover:bg-gray-800"
+                title="Resume recording"
+              >
+                <Play className="w-5 h-5" />
+              </Button>
+            )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -703,6 +737,8 @@ const Recording = () => {
   );
 };
 
+export default Recording;
+
 interface CameraFeedProps {
   baseUrl: string;
   name: string;
@@ -774,5 +810,3 @@ const CameraFeed: React.FC<CameraFeedProps> = ({
     </div>
   );
 };
-
-export default Recording;
