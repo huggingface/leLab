@@ -352,6 +352,21 @@ def inference_status():
     return handle_inference_status()
 
 
+@app.get("/demo-camera/{cam_id}")
+def demo_camera_frame(cam_id: str):
+    """Latest camera frame teed by the inference subprocess (demo preview)."""
+    from fastapi.responses import FileResponse
+
+    from .rollout import demo_frames_dir
+
+    if not cam_id.replace("_", "").isalnum():
+        raise HTTPException(status_code=400, detail="Invalid camera id")
+    path = demo_frames_dir() / f"cam{cam_id}.jpg"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="No frame available")
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
 @app.get("/health")
 def health_check():
     """Simple health check endpoint to verify server is running"""

@@ -42,6 +42,13 @@ from .utils.config import setup_follower_calibration_file
 logger = logging.getLogger(__name__)
 
 
+def demo_frames_dir() -> Path:
+    """Directory where the rollout wrapper drops live camera JPEGs."""
+    import tempfile
+
+    return Path(tempfile.gettempdir()) / "lelab_demo_frames"
+
+
 class InferenceRequest(BaseModel):
     follower_port: str
     follower_config: str
@@ -335,8 +342,16 @@ def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
         cmd = [
             sys.executable,
             "-m",
-            "lerobot.scripts.lerobot_rollout",
+            # Thin wrapper around lerobot.scripts.lerobot_rollout that also
+            # tees camera frames to disk for the demo page's live preview.
+            "lelab.rollout_frames",
             "--strategy.type=base",
+            # Tried --inference.type=rtc to eliminate the periodic ~200ms
+            # chunk-recompute stall, but this lerobot version's RTC engine
+            # calls ACTPolicy.predict_action_chunk(inference_delay=...) and
+            # ACT doesn't accept that kwarg (RTC targets flow-matching
+            # policies). Reverted to sync; see rollout_frames.py's prefetch
+            # tee for the ACT-specific fix instead.
             f"--policy.path={policy_path}",
             f"--policy.device={_detect_device()}",
             "--robot.type=so101_follower",
@@ -356,6 +371,7 @@ def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
 
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
+        env["LELAB_DEMO_FRAMES_DIR"] = str(demo_frames_dir())
         # Feed a single newline into stdin so SOFollower.calibrate()'s
         # `input("Press ENTER to use the calibration file ...")` returns "" and
         # writes the existing calibration to the motors instead of hanging

@@ -30,6 +30,7 @@ import {
   listJobCheckpoints,
 } from "@/lib/checkpointsApi";
 import { startInference } from "@/lib/inferenceApi";
+import { saveDemoPreset } from "@/lib/demoPreset";
 import CheckpointDropdown from "@/components/jobs/CheckpointDropdown";
 import { useAvailableCameras } from "@/hooks/useAvailableCameras";
 import { useCameraStream } from "@/hooks/useCameraStream";
@@ -225,14 +226,22 @@ const InferenceModal: React.FC<Props> = ({
         fps: DEFAULT_FPS,
       };
     }
+    const request = {
+      follower_port: robot.follower_port,
+      follower_config: robot.follower_config,
+      policy_ref: selectedRef,
+      task,
+      cameras: cameraDict,
+      duration_s: durationS,
+    };
     try {
-      await startInference(baseUrl, fetchWithHeaders, {
-        follower_port: robot.follower_port,
-        follower_config: robot.follower_config,
-        policy_ref: selectedRef,
-        task,
-        cameras: cameraDict,
-        duration_s: durationS,
+      await startInference(baseUrl, fetchWithHeaders, request);
+      // The last successfully started inference becomes the demo-mode preset.
+      saveDemoPreset({
+        request,
+        policyLabel: `${jobId} · step ${selectedStep}`,
+        robotName: robot.name,
+        savedAt: new Date().toISOString(),
       });
       onOpenChange(false);
       navigate("/inference");

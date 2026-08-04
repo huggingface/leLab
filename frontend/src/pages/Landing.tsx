@@ -270,12 +270,21 @@ const Landing = () => {
               <h3 className="font-semibold text-lg text-left h-10 flex items-center">
                 Create a model
               </h3>
-              <Button
-                onClick={handleTrainingClick}
-                className="w-full bg-green-500 hover:bg-green-600 text-white"
-              >
-                Training
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  onClick={handleTrainingClick}
+                  className="flex-1 bg-green-500 hover:bg-green-600 text-white"
+                >
+                  Training
+                </Button>
+                <Button
+                  onClick={() => navigate("/demo")}
+                  variant="outline"
+                  className="flex-1 border-gray-600 text-gray-300 bg-gray-800 hover:bg-gray-700 hover:text-white"
+                >
+                  Demo mode
+                </Button>
+              </div>
             </div>
           </div>
         </div>
