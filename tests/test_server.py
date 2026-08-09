@@ -160,6 +160,44 @@ def _install_fake_pygrabber(monkeypatch: pytest.MonkeyPatch, filter_graph_cls) -
     monkeypatch.setitem(sys.modules, "pygrabber.dshow_graph", module)
 
 
+def _install_fake_comtypes(
+    monkeypatch: pytest.MonkeyPatch,
+    co_initialize,
+    co_uninitialize,
+) -> None:
+    import sys
+    import types
+
+    module = types.ModuleType("comtypes")
+    module.CoInitialize = co_initialize
+    module.CoUninitialize = co_uninitialize
+    monkeypatch.setitem(sys.modules, "comtypes", module)
+
+
+def test_windows_cameras_initializes_com_in_worker_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DirectShow is called only while COM is initialized for this thread."""
+    from lelab import server
+
+    events = []
+
+    class _FakeGraph:
+        def get_input_devices(self) -> list[str]:
+            events.append("enumerate")
+            return ["USB webcam"]
+
+    _install_fake_comtypes(
+        monkeypatch,
+        lambda: events.append("initialize"),
+        lambda: events.append("uninitialize"),
+    )
+    _install_fake_pygrabber(monkeypatch, _FakeGraph)
+
+    assert server._windows_cameras() == [
+        {"index": 0, "name": "USB webcam", "available": True},
+    ]
+    assert events == ["initialize", "enumerate", "uninitialize"]
+
+
 def test_windows_cameras_uses_real_directshow_names(monkeypatch: pytest.MonkeyPatch) -> None:
     """The Windows path returns pygrabber's real device names in index order so
     the frontend can match each camera to its browser deviceId (issues #12/#16).
