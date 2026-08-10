@@ -1004,6 +1004,28 @@ def _generic_cv2_cameras(backend) -> list[dict[str, Any]]:
     return cameras
 
 
+@contextlib.contextmanager
+def _windows_com_initialized():
+    """Initialize COM for the current Windows worker thread when available."""
+    try:
+        import comtypes
+    except ImportError:
+        yield
+        return
+
+    try:
+        comtypes.CoInitialize()
+    except OSError as e:
+        logger.warning("Windows COM initialization failed: %s", e)
+        yield
+        return
+
+    try:
+        yield
+    finally:
+        comtypes.CoUninitialize()
+
+
 def _windows_cameras() -> list[dict[str, Any]]:
     """Enumerate Windows cameras with their real DirectShow names.
 
@@ -1013,16 +1035,17 @@ def _windows_cameras() -> list[dict[str, Any]]:
     frontend match each index to the browser's ``MediaDeviceInfo.label`` for the
     live preview. Falls back to generic names if pygrabber is unavailable.
     """
-    try:
-        from pygrabber.dshow_graph import FilterGraph
+    with _windows_com_initialized():
+        try:
+            from pygrabber.dshow_graph import FilterGraph
 
-        names = FilterGraph().get_input_devices()
-    except Exception as e:  # ImportError, or a COM/DirectShow failure
-        logger.warning("pygrabber unavailable; using generic camera names: %s", e)
-        import cv2
+            names = FilterGraph().get_input_devices()
+        except Exception as e:  # ImportError, or a COM/DirectShow failure
+            logger.warning("pygrabber unavailable; using generic camera names: %s", e)
+            import cv2
 
-        return _generic_cv2_cameras(cv2.CAP_DSHOW)
-    return [{"index": i, "name": name, "available": True} for i, name in enumerate(names)]
+            return _generic_cv2_cameras(cv2.CAP_DSHOW)
+        return [{"index": i, "name": name, "available": True} for i, name in enumerate(names)]
 
 
 def _v4l2_camera_name(index: int) -> str | None:
