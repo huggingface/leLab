@@ -623,6 +623,7 @@ const Calibration = () => {
                     onClick={handleStartCalibration}
                     className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-full py-6 text-lg"
                     disabled={!robotName || !deviceType || !port}
+                    data-tour="calibration-start"
                   >
                     <Play className="w-5 h-5 mr-2" />
                     Start Calibration
@@ -904,7 +905,10 @@ const Calibration = () => {
         </div>
 
         {robotName && (
-          <Card className="bg-slate-800/60 border-slate-700 backdrop-blur-sm mt-6">
+          <Card
+            className="bg-slate-800/60 border-slate-700 backdrop-blur-sm mt-6"
+            data-tour="calibration-cameras"
+          >
             <CardHeader className="flex-row items-center justify-between space-y-0">
               <CardTitle className="flex items-center gap-2 text-slate-200">
                 <Settings className="w-5 h-5 text-blue-400" />

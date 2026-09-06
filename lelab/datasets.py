@@ -133,6 +133,16 @@ def list_user_datasets() -> list[dict[str, Any]]:
     return out
 
 
+def list_local_datasets_with_source() -> list[dict[str, Any]]:
+    """Local-cache datasets tagged with source="local" — a pure filesystem scan.
+
+    Same entry shape as `list_all_datasets`, but never contacts the Hub. For
+    lightweight callers that only need to know what exists on disk (e.g. a
+    poller) and must not add Hub API load.
+    """
+    return [{**d, "source": "local"} for d in list_local_datasets()]
+
+
 def list_all_datasets() -> list[dict[str, Any]]:
     """Merged listing: Hub datasets + local cache, with `source` field.
 

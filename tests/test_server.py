@@ -248,3 +248,32 @@ def test_import_model_route_maps_value_error_to_400(client, monkeypatch) -> None
     resp = client.post("/jobs/import", json={"source": "/tmp/x"})
     assert resp.status_code == 400
     assert "No usable model" in resp.json()["detail"]
+
+
+def test_datasets_local_scope_skips_hub_merge(client, monkeypatch) -> None:
+    """`?scope=local` returns the local-only listing and never runs the
+    Hub-merging path (which would issue a Hugging Face API call)."""
+    from lelab import datasets as datasets_mod
+
+    local = [{"repo_id": "pusht", "last_modified": None, "private": False, "source": "local"}]
+
+    def boom() -> list:
+        raise AssertionError("list_all_datasets must not run for scope=local")
+
+    monkeypatch.setattr(datasets_mod, "list_local_datasets_with_source", lambda: local)
+    monkeypatch.setattr(datasets_mod, "list_all_datasets", boom)
+
+    resp = client.get("/datasets?scope=local")
+    assert resp.status_code == 200
+    assert resp.json() == local
+
+
+def test_datasets_default_scope_uses_merged_listing(client, monkeypatch) -> None:
+    from lelab import datasets as datasets_mod
+
+    merged = [{"repo_id": "x", "last_modified": None, "private": False, "source": "both"}]
+    monkeypatch.setattr(datasets_mod, "list_all_datasets", lambda: merged)
+
+    resp = client.get("/datasets")
+    assert resp.status_code == 200
+    assert resp.json() == merged

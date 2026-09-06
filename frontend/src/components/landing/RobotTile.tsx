@@ -47,7 +47,7 @@ const RobotTile: React.FC<RobotTileProps> = ({
   return (
     <div className="bg-gray-800 rounded-lg border border-gray-700 p-3 flex flex-col gap-2 relative">
       <div className="flex items-center gap-2">
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0" data-tour="robot-selector">
           <RobotSelector
             selectedName={selectedName}
             availableNames={availableNames}
@@ -75,6 +75,7 @@ const RobotTile: React.FC<RobotTileProps> = ({
                   className="h-8 w-8 text-gray-300 hover:text-white"
                   onClick={() => onConfigure(robot.name)}
                   aria-label="Configure"
+                  data-tour="robot-configure"
                 >
                   <Settings className="w-4 h-4" />
                 </Button>
@@ -102,7 +103,7 @@ const RobotTile: React.FC<RobotTileProps> = ({
       {robot && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="w-full">
+            <div className="w-full" data-tour="robot-teleop">
               <Button
                 onClick={() => onTeleop(robot)}
                 disabled={teleopDisabled}

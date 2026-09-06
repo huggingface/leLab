@@ -108,9 +108,14 @@ const SingleTabGuard = ({ children }: { children: ReactNode }) => {
     recompute();
   }, [recompute]);
 
+  // A non-primary tab renders only the blocker, not `children`. Anything the
+  // app mounts as a descendant (a Radix modal that sets `pointer-events: none`
+  // on `body`, the onboarding welcome dialog and `?` launcher) would otherwise
+  // sit behind this overlay and, in the modal case, kill the "Use this tab"
+  // button along with the rest of the page.
   return (
     <>
-      {children}
+      {isPrimary && children}
       {!isPrimary && (
         <div
           className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm"

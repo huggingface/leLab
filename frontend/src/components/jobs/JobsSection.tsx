@@ -245,7 +245,7 @@ const JobsSection: React.FC = () => {
     untrackedHubInactive.length;
 
   return (
-    <section className="space-y-6">
+    <section className="space-y-6" data-tour="jobs-section">
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-lg font-semibold text-white">Jobs</h2>
         <div className="flex items-center gap-2">

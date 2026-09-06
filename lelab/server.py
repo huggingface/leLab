@@ -378,11 +378,15 @@ def hf_auth_login(body: HfLoginBody):
 
 
 @app.get("/datasets")
-def datasets_list():
+def datasets_list(scope: str = "all"):
     """List datasets available to the user — Hub-owned + local cache.
 
-    Each entry carries a `source` field: "local", "hub", or "both".
+    Each entry carries a `source` field: "local", "hub", or "both". Pass
+    `scope=local` for a local-only listing (a pure filesystem scan, no Hub
+    call) — for lightweight pollers that only need what exists on disk.
     """
+    if scope == "local":
+        return dataset_browser.list_local_datasets_with_source()
     return dataset_browser.list_all_datasets()
 
 
