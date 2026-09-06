@@ -34,8 +34,8 @@ function App() {
               <UrdfProvider>
                 <DragAndDropProvider>
                   <BrowserRouter>
-                    <OnboardingProvider>
-                      <SingleTabGuard>
+                    <SingleTabGuard>
+                      <OnboardingProvider>
                         <TeleopStopNotice />
                         <UpdateNotice />
                         <Routes>
@@ -51,9 +51,9 @@ function App() {
 
                           <Route path="*" element={<NotFound />} />
                         </Routes>
-                      </SingleTabGuard>
-                      <Toaster />
-                    </OnboardingProvider>
+                      </OnboardingProvider>
+                    </SingleTabGuard>
+                    <Toaster />
                   </BrowserRouter>
                 </DragAndDropProvider>
               </UrdfProvider>
