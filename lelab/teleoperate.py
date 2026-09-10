@@ -28,25 +28,6 @@ from .utils.devices import safe_disconnect_device
 
 logger = logging.getLogger(__name__)
 
-# sts3215 motor resolution; lerobot's _normalize uses (resolution - 1).
-_STS3215_MAX_RES = 4095
-
-# SO-101 URDF (so101_new_calib.urdf) is authored with the all-zeros pose at the
-# arm's sleep position, not the "middle of range" pose where calibration's
-# set_half_turn_homings is performed. To make the URDF track the real arm:
-#   URDF_value = sign * (motor_normalized_deg - motor_at_urdf_zero_deg)
-# where motor_at_urdf_zero_deg = (urdf_zero_ticks - mid) * 360 / max_res, and
-# `urdf_zero_ticks` is the raw Present_Position when the robot is at sleep.
-# That tick value is a property of the SO-101 mechanics + URDF design, so it's
-# constant across calibrations as long as the user pressed ENTER at the "middle
-# of range" pose during set_half_turn_homings.
-# Joints not listed here use lerobot's default convention (URDF = motor).
-_SO101_URDF_CORRECTIONS = {
-    # motor_name: (sign, urdf_zero_present_position_ticks)
-    "shoulder_lift": (+1, 3252),
-    "elbow_flex": (+1, 1029),
-}
-
 # Global variables for teleoperation state
 teleoperation_active = False
 teleoperation_thread: threading.Thread | None = None
@@ -67,6 +48,13 @@ def get_joint_positions_from_robot(robot) -> dict[str, float]:
     """
     Extract current joint positions from the robot and convert to URDF joint format.
 
+    lerobot drives the SO-101 with ``use_degrees=True`` by default, so each
+    ``observation["<motor>.pos"]`` is already the joint angle in degrees relative
+    to the calibration center — which is also the URDF's zero pose. The URDF
+    joint value is therefore just that angle converted to radians, for every
+    joint. (The gripper reports 0–100 rather than degrees, but that range lands
+    inside the Jaw limit, matching the open/closed sweep.)
+
     Args:
         robot: The robot instance (SO101Follower)
 
@@ -84,7 +72,6 @@ def get_joint_positions_from_robot(robot) -> dict[str, float]:
 
     try:
         observation = robot.get_observation()
-        calibration = robot.calibration or {}
 
         joint_positions: dict[str, float] = {}
         debug_rows = []
@@ -95,20 +82,9 @@ def get_joint_positions_from_robot(robot) -> dict[str, float]:
                 joint_positions[urdf_joint_name] = 0.0
                 continue
 
-            raw_deg = observation[motor_key]
-            angle_degrees = raw_deg
-            correction = _SO101_URDF_CORRECTIONS.get(motor_name)
-            if correction is not None and motor_name in calibration:
-                sign, urdf_zero_ticks = correction
-                cal = calibration[motor_name]
-                mid = (cal.range_min + cal.range_max) / 2
-                motor_at_urdf_zero = (urdf_zero_ticks - mid) * 360 / _STS3215_MAX_RES
-                angle_degrees = sign * (raw_deg - motor_at_urdf_zero)
-
+            angle_degrees = observation[motor_key]
             joint_positions[urdf_joint_name] = angle_degrees * math.pi / 180.0
-            debug_rows.append(
-                f"{motor_name:14s} raw={raw_deg:+8.2f}° → {urdf_joint_name:11s} = {angle_degrees:+8.2f}°"
-            )
+            debug_rows.append(f"{motor_name:14s} {angle_degrees:+8.2f}° → {urdf_joint_name:11s}")
 
         # Throttled debug print (~once per second at 20 Hz broadcast).
         now = time.time()

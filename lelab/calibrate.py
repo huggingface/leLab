@@ -42,6 +42,28 @@ from .utils.devices import safe_disconnect_device
 
 logger = logging.getLogger(__name__)
 
+# Feetech sts3215 Present_Position readings are 12-bit (0-4095). A reading at or
+# below 0, or at/above this loose ceiling, is a bad frame (disconnected motor or
+# an encoder wrap-around) rather than a real joint position, so it's filtered out
+# everywhere a raw position is consumed.
+_MIN_VALID_POSITION = 0
+_MAX_VALID_POSITION = 5000
+
+# A single-frame jump larger than this is the encoder wrapping past 0/4095
+# (a ~4096-step delta), not real motion — see CalibrationDiscontinuityError.
+_MAX_POSITION_JUMP = 2000
+
+# A recorded min..max sweep smaller than this many encoder steps means the joint
+# barely moved; the user is warned their range of motion looks insufficient.
+_MIN_CALIBRATION_RANGE = 100
+
+
+def _is_valid_position(pos: float) -> bool:
+    """True when a raw Present_Position reading sits within the plausible encoder
+    range, filtering out 0/negative/extreme bad frames before they pollute the
+    recorded min/max."""
+    return _MIN_VALID_POSITION < pos < _MAX_VALID_POSITION
+
 
 class CalibrationDiscontinuityError(Exception):
     """Raised when a motor position reading jumps across the encoder wrap-around.
@@ -124,7 +146,7 @@ class CalibrationManager:
 
                         for motor, pos in positions.items():
                             # Filter out invalid readings (0, negative, or extreme values)
-                            if pos <= 0 or pos >= 5000:
+                            if not _is_valid_position(pos):
                                 continue  # Skip invalid readings
 
                             if motor not in self.status.recorded_ranges:
@@ -350,7 +372,7 @@ class CalibrationManager:
                 # Validate initial positions
                 valid_positions = {}
                 for motor, pos in positions.items():
-                    if pos > 0 and pos < 5000:  # Valid range
+                    if _is_valid_position(pos):
                         valid_positions[motor] = pos
 
                 if len(valid_positions) == len(positions):  # All positions are valid
@@ -407,7 +429,7 @@ class CalibrationManager:
                     valid_positions = {}
                     for motor, pos in positions.items():
                         # Filter out clearly invalid readings (0, negative, or extreme values)
-                        if pos > 0 and pos < 5000:  # Reasonable range for motor positions
+                        if _is_valid_position(pos):
                             valid_positions[motor] = pos
                         else:
                             logger.debug(f"Filtered invalid position for {motor}: {pos}")
@@ -415,7 +437,10 @@ class CalibrationManager:
                     # Only update if we have valid readings
                     if valid_positions:
                         for motor, pos in valid_positions.items():
-                            if motor in prev_positions and abs(pos - prev_positions[motor]) > 2000:
+                            if (
+                                motor in prev_positions
+                                and abs(pos - prev_positions[motor]) > _MAX_POSITION_JUMP
+                            ):
                                 raise CalibrationDiscontinuityError(
                                     "Motor discontinuity detected. Make sure to start "
                                     "the calibration with the robot in a middle position "
@@ -457,7 +482,7 @@ class CalibrationManager:
         insufficient_range = []
         for motor in self._mins:
             range_diff = self._maxes[motor] - self._mins[motor]
-            if range_diff < 100:  # Less than 100 motor steps seems insufficient
+            if range_diff < _MIN_CALIBRATION_RANGE:
                 insufficient_range.append(f"{motor}: {range_diff}")
 
         if insufficient_range:

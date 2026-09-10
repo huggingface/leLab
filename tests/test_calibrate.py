@@ -15,6 +15,30 @@
 
 from __future__ import annotations
 
+import pytest
+
+
+@pytest.mark.parametrize(
+    "pos,expected",
+    [
+        (-5, False),  # negative — bad frame
+        (0, False),  # lower bound is exclusive (old check: pos > 0)
+        (1, True),
+        (100, True),
+        (2000, True),
+        (4095, True),  # encoder max
+        (4999, True),
+        (5000, False),  # upper bound is exclusive (old check: pos < 5000)
+        (6000, False),  # extreme — bad frame
+    ],
+)
+def test_is_valid_position_boundaries(pos, expected) -> None:
+    """Pins the plausible-encoder-range filter that replaced three duplicated
+    inline `pos > 0 and pos < 5000` checks. Boundaries are exclusive on both ends."""
+    from lelab.calibrate import _is_valid_position
+
+    assert _is_valid_position(pos) is expected
+
 
 def test_calibration_status_defaults_to_idle() -> None:
     from lelab.calibrate import CalibrationStatus

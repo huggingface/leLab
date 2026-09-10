@@ -19,3 +19,19 @@ export async function listDatasets(
     action: "List datasets",
   });
 }
+
+/**
+ * Local-cache datasets only — a pure filesystem scan on the backend, with no
+ * Hugging Face Hub call. For lightweight callers (e.g. the onboarding poll)
+ * that only need to know what exists on disk.
+ */
+export async function listLocalDatasets(
+  baseUrl: string,
+  fetcher: Fetcher,
+  signal?: AbortSignal,
+): Promise<DatasetItem[]> {
+  return apiRequest<DatasetItem[]>(baseUrl, fetcher, "/datasets?scope=local", {
+    signal,
+    action: "List local datasets",
+  });
+}

@@ -119,7 +119,11 @@ def test_check_update_available(monkeypatch):
         if path.endswith("/commits/HEAD"):
             return {"sha": "def456"}
         if "/compare/" in path:
-            return {"ahead_by": 7, "html_url": "https://github.com/huggingface/leLab/compare/abc123...def456"}
+            return {
+                "status": "ahead",
+                "ahead_by": 7,
+                "html_url": "https://github.com/huggingface/leLab/compare/abc123...def456",
+            }
         return None
 
     monkeypatch.setattr(update, "_github_json", fake_github)
@@ -130,6 +134,69 @@ def test_check_update_available(monkeypatch):
     assert status["compare_url"].endswith("abc123...def456")
     assert "git+https://github.com/huggingface/leLab.git" in status["update_command"]
     assert status["can_auto_update"] is True
+
+
+def test_check_diverged_does_not_nag(monkeypatch):
+    """A rewritten/force-pushed default branch reads as 'diverged'. Offering an
+    in-place --force reinstall there would silently discard the local commits,
+    so we must not flag an update."""
+    monkeypatch.setattr(
+        update,
+        "get_installed_source",
+        lambda: {"commit": "abc123", "owner": "huggingface", "repo": "leLab"},
+    )
+
+    def fake_github(path: str):
+        if path.endswith("/commits/HEAD"):
+            return {"sha": "def456"}
+        if "/compare/" in path:
+            return {"status": "diverged", "ahead_by": 3, "behind_by": 2}
+        return None
+
+    monkeypatch.setattr(update, "_github_json", fake_github)
+    status = update.check_for_update()
+    assert status["update_available"] is False
+
+
+def test_check_install_ahead_of_remote_does_not_nag(monkeypatch):
+    """If the installed commit is ahead of the default branch, compare reports
+    'behind' (head=latest is behind base=installed). There is nothing to update
+    to, so stay silent."""
+    monkeypatch.setattr(
+        update,
+        "get_installed_source",
+        lambda: {"commit": "abc123", "owner": "huggingface", "repo": "leLab"},
+    )
+
+    def fake_github(path: str):
+        if path.endswith("/commits/HEAD"):
+            return {"sha": "def456"}
+        if "/compare/" in path:
+            return {"status": "behind", "ahead_by": 0, "behind_by": 5}
+        return None
+
+    monkeypatch.setattr(update, "_github_json", fake_github)
+    status = update.check_for_update()
+    assert status["update_available"] is False
+
+
+def test_check_compare_unavailable_does_not_nag(monkeypatch):
+    """HEAD differs but the compare call fails (e.g. the installed commit is no
+    longer in the repo). Without proof the install is behind, stay silent."""
+    monkeypatch.setattr(
+        update,
+        "get_installed_source",
+        lambda: {"commit": "abc123", "owner": "huggingface", "repo": "leLab"},
+    )
+
+    def fake_github(path: str):
+        if path.endswith("/commits/HEAD"):
+            return {"sha": "def456"}
+        return None  # compare unreachable
+
+    monkeypatch.setattr(update, "_github_json", fake_github)
+    status = update.check_for_update()
+    assert status["update_available"] is False
 
 
 def test_check_github_unreachable_is_silent(monkeypatch):

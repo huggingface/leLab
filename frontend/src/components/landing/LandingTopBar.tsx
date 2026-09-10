@@ -1,5 +1,6 @@
 import React from "react";
 import HfAuthChip from "./HfAuthChip";
+import TourLauncher from "@/components/onboarding/TourLauncher";
 
 const LandingTopBar: React.FC = () => {
   return (
@@ -15,7 +16,10 @@ const LandingTopBar: React.FC = () => {
             LeLab
           </span>
         </div>
-        <HfAuthChip />
+        <div className="flex items-center gap-2">
+          <TourLauncher variant="inline" />
+          <HfAuthChip />
+        </div>
       </div>
     </header>
   );

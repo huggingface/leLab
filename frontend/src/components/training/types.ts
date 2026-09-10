@@ -41,6 +41,16 @@ export interface TrainingConfig {
 
   // Advanced configuration
   use_policy_training_preset: boolean;
+
+  // GR00T-specific configuration (only used when policy_type === "groot").
+  dataset_image_transforms_enable?: boolean;
+  policy_base_model_path?: string;
+  policy_embodiment_tag?: string;
+  policy_chunk_size?: number;
+  policy_n_action_steps?: number;
+  policy_use_relative_actions?: boolean;
+  policy_relative_exclude_joints?: string[];
+  policy_use_bf16?: boolean;
 }
 
 export interface TrainingStatus {

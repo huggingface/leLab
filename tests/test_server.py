@@ -160,6 +160,44 @@ def _install_fake_pygrabber(monkeypatch: pytest.MonkeyPatch, filter_graph_cls) -
     monkeypatch.setitem(sys.modules, "pygrabber.dshow_graph", module)
 
 
+def _install_fake_comtypes(
+    monkeypatch: pytest.MonkeyPatch,
+    co_initialize,
+    co_uninitialize,
+) -> None:
+    import sys
+    import types
+
+    module = types.ModuleType("comtypes")
+    module.CoInitialize = co_initialize
+    module.CoUninitialize = co_uninitialize
+    monkeypatch.setitem(sys.modules, "comtypes", module)
+
+
+def test_windows_cameras_initializes_com_in_worker_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DirectShow is called only while COM is initialized for this thread."""
+    from lelab import server
+
+    events = []
+
+    class _FakeGraph:
+        def get_input_devices(self) -> list[str]:
+            events.append("enumerate")
+            return ["USB webcam"]
+
+    _install_fake_comtypes(
+        monkeypatch,
+        lambda: events.append("initialize"),
+        lambda: events.append("uninitialize"),
+    )
+    _install_fake_pygrabber(monkeypatch, _FakeGraph)
+
+    assert server._windows_cameras() == [
+        {"index": 0, "name": "USB webcam", "available": True},
+    ]
+    assert events == ["initialize", "enumerate", "uninitialize"]
+
+
 def test_windows_cameras_uses_real_directshow_names(monkeypatch: pytest.MonkeyPatch) -> None:
     """The Windows path returns pygrabber's real device names in index order so
     the frontend can match each camera to its browser deviceId (issues #12/#16).
@@ -248,3 +286,32 @@ def test_import_model_route_maps_value_error_to_400(client, monkeypatch) -> None
     resp = client.post("/jobs/import", json={"source": "/tmp/x"})
     assert resp.status_code == 400
     assert "No usable model" in resp.json()["detail"]
+
+
+def test_datasets_local_scope_skips_hub_merge(client, monkeypatch) -> None:
+    """`?scope=local` returns the local-only listing and never runs the
+    Hub-merging path (which would issue a Hugging Face API call)."""
+    from lelab import datasets as datasets_mod
+
+    local = [{"repo_id": "pusht", "last_modified": None, "private": False, "source": "local"}]
+
+    def boom() -> list:
+        raise AssertionError("list_all_datasets must not run for scope=local")
+
+    monkeypatch.setattr(datasets_mod, "list_local_datasets_with_source", lambda: local)
+    monkeypatch.setattr(datasets_mod, "list_all_datasets", boom)
+
+    resp = client.get("/datasets?scope=local")
+    assert resp.status_code == 200
+    assert resp.json() == local
+
+
+def test_datasets_default_scope_uses_merged_listing(client, monkeypatch) -> None:
+    from lelab import datasets as datasets_mod
+
+    merged = [{"repo_id": "x", "last_modified": None, "private": False, "source": "both"}]
+    monkeypatch.setattr(datasets_mod, "list_all_datasets", lambda: merged)
+
+    resp = client.get("/datasets")
+    assert resp.status_code == 200
+    assert resp.json() == merged

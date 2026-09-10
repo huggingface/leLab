@@ -21,6 +21,8 @@ branches here — the parts that matter for safety."""
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 
@@ -263,6 +265,38 @@ def test_handle_start_inference_blocked_when_already_active(monkeypatch) -> None
     assert "already active" in result["message"]
 
 
+def test_handle_start_inference_closes_log_when_popen_fails(monkeypatch, tmp_path) -> None:
+    """If Popen fails after the log file is opened, the handle must be closed,
+    not leaked — on Windows a leaked handle also keeps the log file locked."""
+    from lelab import rollout
+
+    monkeypatch.setattr(rollout, "setup_follower_calibration_file", lambda cfg: "robot_a")
+    monkeypatch.setattr(rollout, "_resolve_policy_path", lambda ref: str(tmp_path / "model"))
+
+    opened: list = []
+    real_open = rollout.Path.open
+
+    def tracking_open(self, *args, **kwargs):
+        handle = real_open(self, *args, **kwargs)
+        opened.append(handle)
+        return handle
+
+    monkeypatch.setattr(rollout.Path, "open", tracking_open)
+
+    def boom(*args, **kwargs):
+        raise OSError("simulated Popen failure")
+
+    monkeypatch.setattr(rollout.subprocess, "Popen", boom)
+
+    result = rollout.handle_start_inference(_stub_request())
+
+    assert result["success"] is False
+    assert result["status_code"] == 500
+    assert opened, "expected the inference log file to have been opened"
+    assert all(handle.closed for handle in opened), "log handle leaked on Popen failure"
+    assert rollout.inference_active is False
+
+
 def test_classify_outcome_ok_warns_and_fails() -> None:
     from lelab.rollout import _classify_outcome
 
@@ -280,11 +314,61 @@ def test_classify_outcome_ok_warns_and_fails() -> None:
     assert _classify_outcome(1, True, "DeviceNotConnectedError: follower is not connected") == "failed"
 
 
+def test_rollout_inference_args_uses_rtc_for_relative_action_policies(tmp_path) -> None:
+    from lelab.rollout import _rollout_inference_args
+
+    policy_dir = tmp_path / "pretrained_model"
+    policy_dir.mkdir()
+    (policy_dir / "config.json").write_text(
+        json.dumps({"type": "groot", "use_relative_actions": True, "n_action_steps": 16}),
+        encoding="utf-8",
+    )
+    assert _rollout_inference_args(str(policy_dir)) == [
+        "--inference.type=rtc",
+        "--inference.rtc.execution_horizon=16",
+        "--inference.queue_threshold=0",
+    ]
+
+
+def test_rollout_inference_args_omits_rtc_for_absolute_policies(tmp_path) -> None:
+    from lelab.rollout import _rollout_inference_args
+
+    policy_dir = tmp_path / "pretrained_model"
+    policy_dir.mkdir()
+    (policy_dir / "config.json").write_text(
+        json.dumps({"type": "act", "use_relative_actions": False}),
+        encoding="utf-8",
+    )
+    assert _rollout_inference_args(str(policy_dir)) == []
+
+
+def test_rollout_inference_args_uses_groot_chunk_default_when_missing(tmp_path) -> None:
+    from lelab.rollout import _rollout_inference_args
+
+    policy_dir = tmp_path / "pretrained_model"
+    policy_dir.mkdir()
+    (policy_dir / "config.json").write_text(
+        json.dumps({"type": "groot", "use_relative_actions": True}),
+        encoding="utf-8",
+    )
+    assert _rollout_inference_args(str(policy_dir)) == [
+        "--inference.type=rtc",
+        "--inference.rtc.execution_horizon=16",
+        "--inference.queue_threshold=0",
+    ]
+
+
 def test_friendly_hint_maps_common_failures() -> None:
     from lelab.rollout import _friendly_hint
 
     assert "gripper" in (_friendly_hint("Motor overload detected") or "").lower()
     assert "connect" in (_friendly_hint("Failed to connect to the follower") or "").lower()
+    assert (
+        "rtc"
+        in (
+            _friendly_hint("GrootPolicy.select_action does not support relative-action policies") or ""
+        ).lower()
+    )
     assert _friendly_hint("some unrecognised traceback") is None
     assert _friendly_hint(None) is None
 
