@@ -12,6 +12,12 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: rebuild-frontend-dist
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -19,6 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
         with:
+          ref: main
           lfs: true
           persist-credentials: false
       - uses: actions/setup-node@v7.0.0
@@ -34,19 +41,24 @@ jobs:
       - name: Build
         working-directory: frontend
         run: npm run build
-      - name: Commit dist if changed
+      # Requires Actions > General > Allow GitHub Actions to create and approve pull requests.
+      - name: Open or update dist pull request
+        id: dist-pr
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8
+        with:
+          branch: automation/frontend-dist
+          base: main
+          add-paths: frontend/dist
+          commit-message: "ci: rebuild frontend/dist"
+          title: "ci: rebuild frontend/dist"
+          body: |
+            Rebuild the frontend bundle shipped with Python installations from main.
+
+            Merge this PR after the required checks and review to distribute the latest UI.
+      # GITHUB_TOKEN-created PRs do not trigger pull_request workflows.
+      # Dispatch the required check explicitly on the generated branch.
+      - name: Run required quality check on dist pull request
+        if: steps.dist-pr.outputs.pull-request-number
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git config user.name "github-actions[bot]"
-          if [[ -n "$(git status --porcelain frontend/dist)" ]]; then
-            git add frontend/dist
-            git commit -m "ci: rebuild frontend/dist [skip ci]"
-            # gh reads GH_TOKEN from the env; `gh auth login` would refuse
-            # to run while it is set.
-            gh auth setup-git
-            git push origin "HEAD:${GITHUB_REF_NAME}"
-          else
-            echo "frontend/dist already up to date"
-          fi
+        run: gh workflow run quality.yml --ref automation/frontend-dist
