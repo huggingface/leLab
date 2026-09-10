@@ -25,7 +25,7 @@ lelab          # uvicorn on :8000, serves built frontend at /, opens browser
 lelab --dev    # spawns Vite dev (:8080) + uvicorn --reload (:8000), opens browser to :8080
 ```
 
-When `frontend/**` (excluding `frontend/dist/**`) changes on `main`, [`.github/workflows/build_frontend.yml`](.github/workflows/build_frontend.yml) auto-rebuilds `frontend/dist/` and commits it back. You can still build locally before committing if you want to test the production bundle, but it's no longer required. `lelab --dev` serves directly from Vite, no rebuild needed.
+Frontend PRs must include the rebuilt `frontend/dist/` bundle: use Node.js 22 and run `cd frontend && npm ci && npm run build`, then commit `dist/` alongside the source changes. The required [Quality workflow](.github/workflows/quality.yml) rebuilds and rejects stale bundles before merge. `lelab --dev` serves directly from Vite, so development itself needs no rebuild.
 
 Run the Python tests with `pytest` (config in [pyproject.toml](pyproject.toml); install dev deps via `pip install -e ".[test]"`). Tests live in [tests/](tests/) and cover request schemas, pure helpers, and idle/mutex branches of the feature handlers — subprocess/thread happy paths and HF Jobs integration are deliberately not unit-tested. Lint with `ruff check` / `ruff format` (config in [pyproject.toml](pyproject.toml)). There is no Python build step; for end-to-end validation, run `lelab` and exercise endpoints (curl or via the frontend).
 
