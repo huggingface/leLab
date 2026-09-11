@@ -85,6 +85,7 @@ const InferenceModal: React.FC<Props> = ({
   const [selectedStep, setSelectedStep] = useState<number | null>(initialStep);
   const [task, setTask] = useState("");
   const [durationS, setDurationS] = useState(60);
+  const [cameraFps, setCameraFps] = useState(DEFAULT_FPS);
   const [submitting, setSubmitting] = useState(false);
 
   const [policyConfig, setPolicyConfig] = useState<PolicyConfigSummary | null>(null);
@@ -222,7 +223,7 @@ const InferenceModal: React.FC<Props> = ({
         camera_index: idx,
         width: dims.width,
         height: dims.height,
-        fps: DEFAULT_FPS,
+        fps: cameraFps,
       };
     }
     try {
@@ -352,6 +353,20 @@ const InferenceModal: React.FC<Props> = ({
                 value={durationS}
                 onChange={(v) => {
                   if (v !== undefined) setDurationS(v);
+                }}
+                className="bg-gray-800 border-gray-700 text-white"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="cameraFps" className="text-sm font-medium text-gray-300">
+                Camera FPS
+              </Label>
+              <NumberInput
+                id="cameraFps"
+                min={1}
+                value={cameraFps}
+                onChange={(v) => {
+                  if (v !== undefined) setCameraFps(v);
                 }}
                 className="bg-gray-800 border-gray-700 text-white"
               />
