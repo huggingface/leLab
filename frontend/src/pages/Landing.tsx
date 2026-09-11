@@ -43,6 +43,7 @@ const Landing = () => {
   const [numEpisodes, setNumEpisodes] = useState(5);
   const [episodeTimeS, setEpisodeTimeS] = useState(60);
   const [resetTimeS, setResetTimeS] = useState(15);
+  const [recordingFps, setRecordingFps] = useState(30);
   const [streamingEncoding, setStreamingEncoding] = useState(true);
   const [cameras, setCameras] = useState<CameraConfig[]>([]);
 
@@ -74,7 +75,10 @@ const Landing = () => {
   }, []);
 
   const openRecordingModal = () => {
-    setCameras(selectedRecord ? [...(selectedRecord.cameras ?? [])] : []);
+    const robotCameras = selectedRecord ? [...(selectedRecord.cameras ?? [])] : [];
+    setCameras(robotCameras);
+    const cameraFps = robotCameras.find((c) => c.fps)?.fps;
+    setRecordingFps(cameraFps ?? 30);
     setShowRecordingModal(true);
   };
 
@@ -207,7 +211,7 @@ const Landing = () => {
       num_episodes: numEpisodes,
       episode_time_s: episodeTimeS,
       reset_time_s: resetTimeS,
-      fps: 30,
+      fps: recordingFps,
       video: true,
       push_to_hub: false,
       resume: false,
@@ -313,6 +317,8 @@ const Landing = () => {
         setEpisodeTimeS={setEpisodeTimeS}
         resetTimeS={resetTimeS}
         setResetTimeS={setResetTimeS}
+        recordingFps={recordingFps}
+        setRecordingFps={setRecordingFps}
         streamingEncoding={streamingEncoding}
         setStreamingEncoding={setStreamingEncoding}
         cameras={cameras}

@@ -38,6 +38,8 @@ interface RecordingModalProps {
   setEpisodeTimeS: (value: number) => void;
   resetTimeS: number;
   setResetTimeS: (value: number) => void;
+  recordingFps: number;
+  setRecordingFps: (value: number) => void;
   streamingEncoding: boolean;
   setStreamingEncoding: (value: boolean) => void;
   cameras: CameraConfig[];
@@ -60,6 +62,8 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
   setEpisodeTimeS,
   resetTimeS,
   setResetTimeS,
+  recordingFps,
+  setRecordingFps,
   streamingEncoding,
   setStreamingEncoding,
   cameras,
@@ -194,6 +198,27 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
                     }}
                     className="bg-gray-800 border-gray-700 text-white"
                   />
+                </div>
+                <div className="space-y-2">
+                  <Label
+                    htmlFor="recordingFps"
+                    className="text-sm font-medium text-gray-300"
+                  >
+                    Recording FPS
+                  </Label>
+                  <NumberInput
+                    id="recordingFps"
+                    min="1"
+                    value={recordingFps}
+                    onChange={(v) => {
+                      if (v !== undefined) setRecordingFps(v);
+                    }}
+                    className="bg-gray-800 border-gray-700 text-white"
+                  />
+                  <p className="text-xs text-gray-500">
+                    Must match the cameras&apos; own fps below, or recording
+                    will fail.
+                  </p>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
