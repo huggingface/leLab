@@ -1,5 +1,18 @@
+export interface SshConnectionConfig {
+  host: string;
+  port: number;
+  username: string;
+  ssh_key_path?: string;
+  remote_workdir: string;
+  remote_python_cmd: string;
+}
+
 export interface TrainingConfig {
-  target: { runner: "local" | "hf_cloud"; flavor?: string };
+  target: {
+    runner: "local" | "hf_cloud" | "ssh_remote";
+    flavor?: string;
+    ssh?: SshConnectionConfig;
+  };
 
   // Dataset configuration
   dataset_repo_id: string;
