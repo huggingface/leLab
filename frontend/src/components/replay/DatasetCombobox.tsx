@@ -14,7 +14,7 @@ interface Props {
   onChange: (repoId: string | null) => void;
 }
 
-const REPO_ID_RE = /^[\w.\-]+\/[\w.\-]+$/;
+const REPO_ID_RE = /^[\w.-]+\/[\w.-]+$/;
 
 const DatasetCombobox: React.FC<Props> = ({ datasets, loading, value, onChange }) => {
   const [open, setOpen] = React.useState(false);

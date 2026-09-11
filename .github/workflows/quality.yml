@@ -50,10 +50,11 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Verify committed frontend bundle
+      - name: Verify frontend tests and committed bundle
         working-directory: frontend
         run: |
           npm ci
+          npm test
           npm run build
           if [[ -n "$(git status --porcelain -- dist)" ]]; then
             git diff --stat -- dist
