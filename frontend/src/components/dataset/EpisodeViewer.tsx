@@ -121,6 +121,8 @@ const EpisodeViewer: React.FC<EpisodeViewerProps> = ({ repoId, detail, onNavigat
     if (!v) return;
     // Loop inside this episode's window rather than running on into the next
     // episode's footage, which shares the file.
+    // At file end, let onEnded rewind and resume after the browser pauses.
+    if (v.ended) return;
     if (v.currentTime >= toTs) {
       v.currentTime = fromTs;
       setCurrentFrame(0);
@@ -273,6 +275,12 @@ const EpisodeViewer: React.FC<EpisodeViewerProps> = ({ repoId, detail, onNavigat
             muted
             onLoadedMetadata={handleLoadedMetadata}
             onTimeUpdate={handleTimeUpdate}
+            onEnded={(e) => {
+              const v = e.currentTarget;
+              v.currentTime = fromTs;
+              setCurrentFrame(0);
+              void v.play().catch(() => setPlaying(false));
+            }}
             onPlay={() => setPlaying(true)}
             onPause={() => setPlaying(false)}
           />

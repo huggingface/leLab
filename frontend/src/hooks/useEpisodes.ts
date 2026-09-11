@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useApi } from "@/contexts/ApiContext";
 import {
   EpisodeDetail,
@@ -14,16 +14,18 @@ export const useEpisodes = (repoId: string | null) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(() => {
+  useEffect(() => {
+    setData(null);
+    setError(null);
     if (!repoId) {
-      setData(null);
-      setError(null);
+      setLoading(false);
       return;
     }
+    const controller = new AbortController();
     setLoading(true);
-    setError(null);
-    listEpisodes(baseUrl, fetchWithHeaders, repoId)
+    listEpisodes(baseUrl, fetchWithHeaders, repoId, controller.signal)
       .then((r) => {
+        if (controller.signal.aborted) return;
         // The backend reports a readable dataset it couldn't parse as
         // success:false rather than an HTTP error, so check the flag too.
         if (!r.success) {
@@ -34,17 +36,19 @@ export const useEpisodes = (repoId: string | null) => {
         setData(r);
       })
       .catch((e) => {
+        if (controller.signal.aborted) return;
         setData(null);
         setError(e instanceof Error ? e.message : "Could not read dataset");
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
   }, [baseUrl, fetchWithHeaders, repoId]);
 
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  return { data, loading, error, refresh };
+  // Effects run after render: do not let the new dataset auto-select an
+  // episode from the old list before this effect clears it.
+  return { data: data?.repo_id === repoId ? data : null, loading, error };
 };
 
 /** One episode's detail. Either arg null → idle. */
