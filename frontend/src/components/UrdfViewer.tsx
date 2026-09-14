@@ -13,6 +13,7 @@ import { useUrdf } from "@/hooks/useUrdf";
 import { useRealTimeJoints } from "@/hooks/useRealTimeJoints";
 import {
   createUrdfViewer,
+  fitGridToRobot,
   setupMeshLoader,
   setupJointHighlighting,
   setupModelLoading,
@@ -190,6 +191,11 @@ const UrdfViewer: React.FC = () => {
 
         // Get the maximum dimension to ensure the entire robot is visible
         const maxDim = Math.max(size.x, size.y, size.z);
+
+        // Rescale the ground grid to this robot's actual unit scale — it
+        // starts as a 1x1 placeholder since it's created before any model
+        // is loaded (see createUrdfViewer).
+        fitGridToRobot(viewer, center, boundingBox.min.y, maxDim);
 
         // Position camera to see the center of the model
         viewer.camera.position.copy(center);
