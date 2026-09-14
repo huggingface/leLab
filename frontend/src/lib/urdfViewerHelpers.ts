@@ -6,6 +6,7 @@ import {
   Color,
   AmbientLight,
   DirectionalLight,
+  GridHelper,
   Scene,
 } from "three";
 import { toast } from "@/components/ui/sonner";
@@ -31,6 +32,9 @@ export interface URDFViewerElement extends HTMLElement {
   up: string;
   scene: Scene;
 }
+
+/** Object3D.name of the ground grid added in createUrdfViewer, for lookup by fitGridToRobot. */
+export const FLOOR_GRID_NAME = "leLab-floor-grid";
 
 /**
  * Creates and configures a URDF viewer element
@@ -66,10 +70,50 @@ export function createUrdfViewer(
   directionalLight.castShadow = true;
   viewer.scene.add(directionalLight);
 
+  // Ground grid, for a sense of scale and distance while teleoperating.
+  // Added directly to `scene` (not `world`), which stays in three.js's
+  // native Y-up frame regardless of the URDF's own up axis — `_setUp` on the
+  // viewer element compensates for that by rotating `world` instead, so a
+  // GridHelper here (built flat in the XZ plane) needs no rotation of its
+  // own to lie under the robot. Sized to a 1x1 unit placeholder at creation;
+  // `fitGridToRobot` rescales and repositions it once a model's bounding box
+  // is known, since that can be any real-world unit depending on the URDF.
+  const grid = new GridHelper(1, 10, 0x6b6b7a, 0x44424f);
+  grid.name = FLOOR_GRID_NAME;
+  viewer.scene.add(grid);
+
   // Camera position is no longer adjusted automatically to prevent auto-zooming.
   // The user can control the view with the mouse.
 
   return viewer;
+}
+
+/**
+ * Rescale and reposition the ground grid to sit under a newly-loaded robot.
+ *
+ * The grid is built at a fixed 1x1 size since createUrdfViewer runs before
+ * any model exists, so it has no sense of the URDF's unit scale — this call
+ * (made once the robot's bounding box is known, alongside the existing
+ * camera auto-fit) is what actually sizes it. `center`/`minY`/`maxDim` are
+ * passed in rather than recomputed so callers that already have a bounding
+ * box (fitRobotToView) don't compute it twice.
+ */
+export function fitGridToRobot(
+  viewer: URDFViewerElement,
+  center: Vector3,
+  minY: number,
+  maxDim: number
+): void {
+  const grid = viewer.scene.getObjectByName(FLOOR_GRID_NAME);
+  if (!grid) return;
+
+  // Framed a few grid-widths wider than the robot so it reads as a floor
+  // rather than a tight box drawn around the model.
+  const size = Math.max(maxDim * 4, 0.01);
+  grid.scale.setScalar(size);
+  // A hair below the robot's lowest point avoids z-fighting with anything
+  // (a gripper, a mounting plate) that sits flush with its own base.
+  grid.position.set(center.x, minY - size * 0.001, center.z);
 }
 
 /**
