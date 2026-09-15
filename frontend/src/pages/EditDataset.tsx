@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { AlertCircle, ArrowLeft, Database, Loader2, Upload } from "lucide-react";
+import { AlertCircle, ArrowLeft, Database, GitMerge, Loader2, Upload } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -11,6 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import EpisodeList from "@/components/dataset/EpisodeList";
 import EpisodeViewer from "@/components/dataset/EpisodeViewer";
+import MergeDatasetsDialog from "@/components/dataset/MergeDatasetsDialog";
 import { useDatasets } from "@/hooks/useDatasets";
 import { useEpisodeDetail, useEpisodes } from "@/hooks/useEpisodes";
 import { formatDuration } from "@/lib/datasetApi";
@@ -33,12 +34,14 @@ const EditDataset = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const { datasets, loading: datasetsLoading } = useDatasets();
+  const { datasets, loading: datasetsLoading, refresh: refreshDatasets } = useDatasets();
   // A Hub-only dataset has no videos on disk to decode.
   const localDatasets = useMemo(
     () => datasets.filter((d) => d.source === "local" || d.source === "both"),
     [datasets],
   );
+
+  const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
 
   const repoId = searchParams.get("dataset");
   const episodeParam = searchParams.get("episode");
@@ -113,6 +116,17 @@ const EditDataset = () => {
                 </SelectContent>
               </Select>
             </div>
+            {localDatasets.length >= 2 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setMergeDialogOpen(true)}
+                className="h-9 gap-1.5 border-gray-800 bg-gray-950 text-xs text-gray-300 hover:bg-gray-900"
+              >
+                <GitMerge className="h-3.5 w-3.5" />
+                Merge
+              </Button>
+            )}
             {/* Picking a dataset now lands here rather than on /upload, so the
                 upload + delete flow hangs off the page you browse from. */}
             {repoId && (
@@ -137,6 +151,17 @@ const EditDataset = () => {
             )}
           </div>
         </div>
+
+        <MergeDatasetsDialog
+          open={mergeDialogOpen}
+          onOpenChange={setMergeDialogOpen}
+          datasets={localDatasets}
+          initialRepoId={repoId}
+          onMerged={(outputRepoId) => {
+            refreshDatasets();
+            setDataset(outputRepoId);
+          }}
+        />
 
         {!repoId && (
           <div className="rounded-lg border border-gray-800 bg-gray-950 p-10 text-center">

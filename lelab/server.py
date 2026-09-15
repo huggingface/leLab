@@ -391,6 +391,12 @@ def datasets_list(scope: str = "all"):
     return dataset_browser.list_all_datasets()
 
 
+@app.post("/merge-datasets")
+def merge_datasets(request: dataset_browser.MergeDatasetsRequest):
+    """Merge several local datasets into one new local dataset."""
+    return dataset_browser.handle_merge_datasets(request.dataset_repo_ids, request.output_repo_id)
+
+
 @app.get("/dataset-episodes")
 def dataset_episodes(repo_id: str):
     """List the episodes of a local dataset."""

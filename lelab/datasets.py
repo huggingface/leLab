@@ -19,11 +19,18 @@ from pathlib import Path
 from typing import Any
 
 from huggingface_hub.errors import HfHubHTTPError
+from pydantic import BaseModel
 
 from . import episode_media
+from .dataset_repair import DatasetRepairError, repair_local_dataset
 from .utils.hf_auth import cached_whoami, shared_hf_api
 
 logger = logging.getLogger(__name__)
+
+
+class MergeDatasetsRequest(BaseModel):
+    dataset_repo_ids: list[str]
+    output_repo_id: str
 
 
 def _lerobot_cache_root() -> Path:
@@ -171,6 +178,74 @@ def list_all_datasets() -> list[dict[str, Any]]:
     out = list(merged.values())
     out.sort(key=lambda d: d["last_modified"] or "", reverse=True)
     return out
+
+
+def _resolve_new_dataset_dir(repo_id: str) -> Path:
+    """Resolve `repo_id` to a not-yet-existing directory inside the cache root.
+
+    Same traversal guard as `handle_delete_dataset` (lelab/record.py): the
+    resolved target must stay strictly inside the cache root.
+    """
+    root = _lerobot_cache_root()
+    try:
+        target = (root / repo_id).resolve()
+    except (ValueError, OSError) as e:
+        raise ValueError(f"Invalid dataset name: {repo_id}") from e
+    if target == root or root not in target.parents:
+        raise ValueError(f"Invalid dataset name: {repo_id}")
+    return target
+
+
+def handle_merge_datasets(dataset_repo_ids: list[str], output_repo_id: str) -> dict[str, Any]:
+    """Merge several local datasets into one new local dataset.
+
+    Wraps lerobot's `dataset_tools.merge_datasets`, which concatenates the
+    source datasets' videos and data files under a new repo_id. Each source
+    dataset is loaded (repairing an unfinalized recording first) and the
+    result is written to disk; nothing is pushed to the Hub.
+    """
+    repo_ids = [r.strip() for r in dataset_repo_ids if r.strip()]
+    if len(repo_ids) < 2:
+        return {"success": False, "message": "Select at least two datasets to merge"}
+
+    output_repo_id = (output_repo_id or "").strip()
+    if not output_repo_id:
+        return {"success": False, "message": "Enter a name for the merged dataset"}
+
+    try:
+        output_dir = _resolve_new_dataset_dir(output_repo_id)
+    except ValueError as e:
+        return {"success": False, "message": str(e)}
+    if output_dir.exists():
+        return {"success": False, "message": f"{output_repo_id} already exists locally"}
+
+    from lerobot.datasets import LeRobotDataset
+    from lerobot.datasets.dataset_tools import merge_datasets as lerobot_merge_datasets
+
+    loaded = []
+    for repo_id in repo_ids:
+        try:
+            repair_local_dataset(repo_id)
+            loaded.append(LeRobotDataset(repo_id))
+        except DatasetRepairError as e:
+            return {"success": False, "message": f"Could not repair {repo_id}: {e}"}
+        except Exception as e:
+            logger.warning(f"Could not load {repo_id} for merge: {e}")
+            return {"success": False, "message": f"Could not load {repo_id}: {e}"}
+
+    try:
+        merged = lerobot_merge_datasets(loaded, output_repo_id=output_repo_id, output_dir=output_dir)
+    except Exception as e:
+        logger.error(f"Failed to merge {repo_ids} into {output_repo_id}: {e}")
+        return {"success": False, "message": f"Failed to merge datasets: {e}"}
+
+    logger.info(f"Merged {repo_ids} into {output_repo_id}")
+    return {
+        "success": True,
+        "message": f"Merged {len(loaded)} datasets into {output_repo_id}",
+        "output_repo_id": output_repo_id,
+        "num_episodes": merged.num_episodes,
+    }
 
 
 # ── episode browsing ────────────────────────────────────────────────────────
