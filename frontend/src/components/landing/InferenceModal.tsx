@@ -27,6 +27,7 @@ import {
   JobCheckpoint,
   PolicyConfigSummary,
   getCheckpointPolicyConfig,
+  getCustomPolicyConfig,
   listJobCheckpoints,
 } from "@/lib/checkpointsApi";
 import { startInference } from "@/lib/inferenceApi";
@@ -87,6 +88,12 @@ const InferenceModal: React.FC<Props> = ({
   const [durationS, setDurationS] = useState(60);
   const [submitting, setSubmitting] = useState(false);
 
+  // A checkpoint from this job's training runs, or a free-typed ref (a local
+  // checkpoint directory — e.g. from a third-party lerobot_policy_<name>
+  // plugin — or a raw Hub ref) for a policy that isn't tied to a LeLab job.
+  const [useCustomPolicy, setUseCustomPolicy] = useState(false);
+  const [customPolicyRef, setCustomPolicyRef] = useState("");
+
   const [policyConfig, setPolicyConfig] = useState<PolicyConfigSummary | null>(null);
   const [policyConfigLoading, setPolicyConfigLoading] = useState(false);
   const [policyConfigError, setPolicyConfigError] = useState<string | null>(null);
@@ -118,11 +125,28 @@ const InferenceModal: React.FC<Props> = ({
   }, [open, baseUrl, fetchWithHeaders, jobId]);
 
 
-  // Load policy config when step changes.
+  // Load policy config when the active checkpoint/ref changes. Shared by
+  // both sources (job checkpoint vs. a free-typed custom ref) so the camera
+  // binding reset stays consistent either way.
+  const applyPolicyConfig = (cfg: PolicyConfigSummary) => {
+    setPolicyConfig(cfg);
+    // Reset camera bindings to one entry per expected camera name.
+    // Preserve any prior selection that's still relevant.
+    setCameraBindings((prev) => {
+      const next: Record<string, number | null> = {};
+      for (const name of Object.keys(cfg.image_features)) {
+        next[name] = prev[name] ?? null;
+      }
+      return next;
+    });
+  };
+
   useEffect(() => {
-    if (!open || selectedStep == null) {
-      setPolicyConfig(null);
-      setPolicyConfigError(null);
+    if (!open || useCustomPolicy || selectedStep == null) {
+      if (!useCustomPolicy) {
+        setPolicyConfig(null);
+        setPolicyConfigError(null);
+      }
       return;
     }
     let cancelled = false;
@@ -130,17 +154,7 @@ const InferenceModal: React.FC<Props> = ({
     setPolicyConfigError(null);
     getCheckpointPolicyConfig(baseUrl, fetchWithHeaders, jobId, selectedStep)
       .then((cfg) => {
-        if (cancelled) return;
-        setPolicyConfig(cfg);
-        // Reset camera bindings to one entry per expected camera name.
-        // Preserve any prior selection that's still relevant.
-        setCameraBindings((prev) => {
-          const next: Record<string, number | null> = {};
-          for (const name of Object.keys(cfg.image_features)) {
-            next[name] = prev[name] ?? null;
-          }
-          return next;
-        });
+        if (!cancelled) applyPolicyConfig(cfg);
       })
       .catch((e) => {
         if (cancelled) return;
@@ -153,7 +167,42 @@ const InferenceModal: React.FC<Props> = ({
     return () => {
       cancelled = true;
     };
-  }, [open, baseUrl, fetchWithHeaders, jobId, selectedStep]);
+     
+  }, [open, useCustomPolicy, baseUrl, fetchWithHeaders, jobId, selectedStep]);
+
+  // Debounced: a custom ref can trigger a Hub download, so don't fire on
+  // every keystroke.
+  useEffect(() => {
+    if (!open || !useCustomPolicy) return;
+    const ref = customPolicyRef.trim();
+    if (!ref) {
+      setPolicyConfig(null);
+      setPolicyConfigError(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      setPolicyConfigLoading(true);
+      setPolicyConfigError(null);
+      getCustomPolicyConfig(baseUrl, fetchWithHeaders, ref)
+        .then((cfg) => {
+          if (!cancelled) applyPolicyConfig(cfg);
+        })
+        .catch((e) => {
+          if (cancelled) return;
+          setPolicyConfig(null);
+          setPolicyConfigError(e instanceof Error ? e.message : String(e));
+        })
+        .finally(() => {
+          if (!cancelled) setPolicyConfigLoading(false);
+        });
+    }, 500);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+     
+  }, [open, useCustomPolicy, customPolicyRef, baseUrl, fetchWithHeaders]);
 
   // If the selected robot has cameras whose names match a policy-expected
   // camera, auto-bind them. Prefer matching by browser device_id (stable
@@ -184,8 +233,9 @@ const InferenceModal: React.FC<Props> = ({
     });
   }, [policyConfig, robot, availableCameras]);
 
-  const selectedRef =
-    selectedStep != null
+  const selectedRef = useCustomPolicy
+    ? customPolicyRef.trim() || null
+    : selectedStep != null
       ? checkpoints.find((c) => c.step === selectedStep)?.ref ?? null
       : null;
 
@@ -302,10 +352,36 @@ const InferenceModal: React.FC<Props> = ({
           </div>
 
           <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-white border-b border-gray-700 pb-2">
-              Checkpoint
-            </h3>
-            {checkpoints.length === 0 ? (
+            <div className="flex items-center justify-between border-b border-gray-700 pb-2">
+              <h3 className="text-lg font-semibold text-white">Checkpoint</h3>
+              <button
+                type="button"
+                onClick={() => setUseCustomPolicy((v) => !v)}
+                className="text-xs text-gray-400 underline decoration-dotted hover:text-gray-200"
+              >
+                {useCustomPolicy ? "Pick from this job's checkpoints" : "Use a custom policy path or ref"}
+              </button>
+            </div>
+            {useCustomPolicy ? (
+              <div className="space-y-2">
+                <Label htmlFor="customPolicyRef" className="text-sm font-medium text-gray-300">
+                  Policy path or Hub ref
+                </Label>
+                <Input
+                  id="customPolicyRef"
+                  value={customPolicyRef}
+                  onChange={(e) => setCustomPolicyRef(e.target.value)}
+                  placeholder="/path/to/pretrained_model or user/repo@root"
+                  className="bg-gray-800 border-gray-700 text-white"
+                />
+                <p className="text-xs text-gray-500">
+                  A local checkpoint directory (e.g. from a third-party
+                  lerobot_policy_&lt;name&gt; plugin, installed in this environment) or
+                  a Hub ref (<code>user/repo@root</code> or{" "}
+                  <code>user/repo@checkpoints/000050</code>).
+                </p>
+              </div>
+            ) : checkpoints.length === 0 ? (
               <Alert className="bg-amber-900/40 border-amber-700 text-amber-100">
                 <AlertTriangle className="h-4 w-4" />
                 <AlertDescription>

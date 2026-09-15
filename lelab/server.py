@@ -64,6 +64,7 @@ from .record import (
 )
 from .rollout import (
     InferenceRequest,
+    handle_get_policy_config,
     handle_inference_status,
     handle_start_inference,
     handle_stop_inference,
@@ -324,6 +325,19 @@ def teleoperation_status():
 def get_joint_positions():
     """Get current robot joint positions"""
     return handle_get_joint_positions()
+
+
+@app.get("/policy-config")
+def policy_config(policy_ref: str):
+    """UX-relevant slice of a policy config for a ref that isn't tied to a
+    LeLab training job: a local checkpoint dir or a Hub ref in the same
+    shape /start-inference accepts. Used for custom/plugin policies."""
+    try:
+        return handle_get_policy_config(policy_ref)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/start-inference")
