@@ -14,16 +14,25 @@
 
 import base64
 import logging
+import re
+import shutil
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from huggingface_hub.errors import HfHubHTTPError
 
+from lerobot.datasets import LeRobotDataset
+from lerobot.datasets.dataset_tools import merge_datasets
+
 from . import episode_media
 from .utils.hf_auth import cached_whoami, shared_hf_api
 
 logger = logging.getLogger(__name__)
+
+LOCAL_DATASET_NAMESPACE = "local"
+_DATASET_NAME_RE = re.compile(r"[A-Za-z0-9._-]+$")
 
 
 def _lerobot_cache_root() -> Path:
@@ -171,6 +180,52 @@ def list_all_datasets() -> list[dict[str, Any]]:
     out = list(merged.values())
     out.sort(key=lambda d: d["last_modified"] or "", reverse=True)
     return out
+
+
+def handle_merge_local_datasets(source_repo_ids: list[str], output_name: str) -> dict[str, Any]:
+    """Merge local datasets into a new local dataset without touching sources."""
+    source_repo_ids = [repo_id.strip() for repo_id in source_repo_ids]
+    if len(source_repo_ids) < 2:
+        raise ValueError("Select at least two local datasets to merge")
+    if len(set(source_repo_ids)) != len(source_repo_ids):
+        raise ValueError("Select each source dataset only once")
+
+    output_name = output_name.strip()
+    if not _DATASET_NAME_RE.fullmatch(output_name):
+        raise ValueError("Output name may contain only letters, numbers, '.', '_' and '-'")
+
+    output_repo_id = f"{LOCAL_DATASET_NAMESPACE}/{output_name}"
+    cache_root = _lerobot_cache_root()
+    output_dir = (cache_root / output_repo_id).resolve()
+    if cache_root not in output_dir.parents:
+        raise ValueError("Invalid output dataset path")
+    if output_dir.exists():
+        raise ValueError(f"A local dataset already exists at {output_repo_id}")
+
+    source_dirs = [episode_media.resolve_dataset_dir(repo_id) for repo_id in source_repo_ids]
+    datasets = [
+        LeRobotDataset(repo_id=repo_id, root=source_dir)
+        for repo_id, source_dir in zip(source_repo_ids, source_dirs, strict=True)
+    ]
+
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging_parent = Path(tempfile.mkdtemp(prefix=f".{output_name}.merge-", dir=output_dir.parent))
+    staging_output = staging_parent / "dataset"
+    try:
+        merged = merge_datasets(datasets, output_repo_id=output_repo_id, output_dir=staging_output)
+        staging_output.rename(output_dir)
+    except Exception:
+        shutil.rmtree(staging_parent, ignore_errors=True)
+        raise
+    else:
+        shutil.rmtree(staging_parent, ignore_errors=True)
+
+    return {
+        "success": True,
+        "repo_id": output_repo_id,
+        "num_episodes": merged.num_episodes,
+        "total_frames": merged.num_frames,
+    }
 
 
 # ── episode browsing ────────────────────────────────────────────────────────
