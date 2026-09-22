@@ -37,6 +37,8 @@ from .utils.devices import safe_disconnect_device
 
 logger = logging.getLogger(__name__)
 
+LOCAL_DATASET_NAMESPACE = "local"
+
 # Global variables for recording state
 recording_active = False
 recording_thread: threading.Thread | None = None
@@ -89,6 +91,22 @@ class UploadRequest(BaseModel):
 
 class DatasetInfoRequest(BaseModel):
     dataset_repo_id: str
+
+
+def _normalize_dataset_repo_id(repo_id: str) -> str:
+    """Return a LeRobot-compatible dataset ID while preserving Hub IDs.
+
+    The landing page deliberately accepts a bare dataset name while the user is
+    not authenticated. LeRobot still requires an ``owner/name`` ID for local
+    recordings, so local-only recordings use a reserved local namespace.
+    """
+    if "/" in repo_id:
+        namespace, name = repo_id.split("/", 1)
+        name = re.sub(r"[^A-Za-z0-9._-]", "_", name)
+        return f"{namespace}/{name}"
+
+    name = re.sub(r"[^A-Za-z0-9._-]", "_", repo_id)
+    return f"{LOCAL_DATASET_NAMESPACE}/{name}"
 
 
 def _platform_backend():
@@ -247,12 +265,7 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
         # recording over an invalid character. HF repo names allow only
         # [A-Za-z0-9._-]; everything else becomes "_".
         if request.dataset_repo_id:
-            if "/" in request.dataset_repo_id:
-                namespace, name = request.dataset_repo_id.split("/", 1)
-                name = re.sub(r"[^A-Za-z0-9._-]", "_", name)
-                request.dataset_repo_id = f"{namespace}/{name}"
-            else:
-                request.dataset_repo_id = re.sub(r"[^A-Za-z0-9._-]", "_", request.dataset_repo_id)
+            request.dataset_repo_id = _normalize_dataset_repo_id(request.dataset_repo_id)
         # Stamp the repo_id with a timestamp (matches lerobot-record CLI behavior),
         # so each session lands in a unique directory and the frontend gets the
         # final id back in the response and status payload.
