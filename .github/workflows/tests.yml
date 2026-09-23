@@ -15,8 +15,6 @@
 # This workflow runs the pytest suite on every PR and push to main.
 # Modeled on LeRobot's fast_tests.yml, collapsed to a single dependency tier.
 name: Tests
-permissions:
-  contents: read
 
 on:
   workflow_dispatch:
@@ -44,8 +42,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
+permissions: {}
+
 jobs:
   pytest:
+    permissions:
+      contents: read
     name: Pytest
     runs-on: ubuntu-latest
     steps:

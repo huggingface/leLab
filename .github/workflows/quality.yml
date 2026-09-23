@@ -14,8 +14,6 @@
 
 # This workflow handles linting, formatting, and static analysis checks for the codebase.
 name: Quality
-permissions:
-  contents: read
 
 on:
   workflow_dispatch:
@@ -31,8 +29,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
+permissions: {}
+
 jobs:
   pre-commit-checks:
+    permissions:
+      contents: read
     name: Run Pre-commit Hooks (Lint, Format & Static Analysis)
     runs-on: ubuntu-latest
     steps:
