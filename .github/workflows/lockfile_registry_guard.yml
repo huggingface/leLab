@@ -1,7 +1,5 @@
 name: Lockfile registry guard
 
-permissions:
-  contents: read
 
 # Fails fast if frontend/package-lock.json resolves packages from the internal
 # HF npm mirror (npm.registries.huggingface.tech). That mirror cannot serve the
@@ -21,8 +19,12 @@ on:
       - 'frontend/package-lock.json'
       - '.github/workflows/lockfile_registry_guard.yml'
 
+permissions: {}
+
 jobs:
   check:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
