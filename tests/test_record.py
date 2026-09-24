@@ -27,6 +27,18 @@ def test_recording_request_rejects_missing_required_fields() -> None:
         RecordingRequest()
 
 
+def test_normalize_dataset_repo_id_adds_local_namespace_for_bare_name() -> None:
+    from lelab.record import _normalize_dataset_repo_id
+
+    assert _normalize_dataset_repo_id("test recording") == "local/test_recording"
+
+
+def test_normalize_dataset_repo_id_preserves_hub_namespace() -> None:
+    from lelab.record import _normalize_dataset_repo_id
+
+    assert _normalize_dataset_repo_id("samuel-hills/test recording") == "samuel-hills/test_recording"
+
+
 def test_recording_status_handler_exposes_state_fields() -> None:
     from lelab.record import handle_recording_status
 
