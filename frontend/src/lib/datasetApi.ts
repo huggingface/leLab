@@ -71,6 +71,26 @@ export interface ThumbnailsResponse {
   thumbnails: Thumbnail[];
 }
 
+export interface MergeDatasetsResponse {
+  success: boolean;
+  message?: string;
+  output_repo_id?: string;
+  num_episodes?: number;
+}
+
+export async function mergeDatasets(
+  baseUrl: string,
+  fetcher: Fetcher,
+  datasetRepoIds: string[],
+  outputRepoId: string,
+): Promise<MergeDatasetsResponse> {
+  return apiRequest<MergeDatasetsResponse>(baseUrl, fetcher, "/merge-datasets", {
+    method: "POST",
+    body: { dataset_repo_ids: datasetRepoIds, output_repo_id: outputRepoId },
+    action: "Merge datasets",
+  });
+}
+
 export async function listEpisodes(
   baseUrl: string,
   fetcher: Fetcher,

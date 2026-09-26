@@ -135,6 +135,54 @@ def test_list_all_datasets_merges_hub_and_local(
     assert by_id["alice/aloha"]["source"] == "hub"
 
 
+# ── merging ──────────────────────────────────────────────────────────────
+#
+# The happy path (loading real LeRobotDataset objects and calling into
+# lerobot's dataset_tools.merge_datasets) isn't unit-tested here — like the
+# other subprocess/heavy-dependency paths in this codebase, it needs a real
+# recorded dataset. These cover the validation branches, which never touch
+# LeRobotDataset.
+
+
+def test_merge_datasets_requires_at_least_two(tmp_lerobot_home: Path) -> None:
+    from lelab.datasets import handle_merge_datasets
+
+    _make_dataset(tmp_lerobot_home, "solo")
+    result = handle_merge_datasets(["solo"], "merged")
+    assert result["success"] is False
+    assert "at least two" in result["message"]
+
+
+def test_merge_datasets_requires_output_name(tmp_lerobot_home: Path) -> None:
+    from lelab.datasets import handle_merge_datasets
+
+    _make_dataset(tmp_lerobot_home, "a")
+    _make_dataset(tmp_lerobot_home, "b")
+    result = handle_merge_datasets(["a", "b"], "   ")
+    assert result["success"] is False
+    assert "name" in result["message"]
+
+
+def test_merge_datasets_rejects_traversal_in_output_name(tmp_lerobot_home: Path) -> None:
+    from lelab.datasets import handle_merge_datasets
+
+    _make_dataset(tmp_lerobot_home, "a")
+    _make_dataset(tmp_lerobot_home, "b")
+    result = handle_merge_datasets(["a", "b"], "../escaped")
+    assert result["success"] is False
+    assert "Invalid dataset name" in result["message"]
+
+
+def test_merge_datasets_rejects_existing_output_name(tmp_lerobot_home: Path) -> None:
+    from lelab.datasets import handle_merge_datasets
+
+    _make_dataset(tmp_lerobot_home, "a")
+    _make_dataset(tmp_lerobot_home, "b")
+    result = handle_merge_datasets(["a", "b"], "a")
+    assert result["success"] is False
+    assert "already exists" in result["message"]
+
+
 # ── episode browsing ────────────────────────────────────────────────────────
 #
 # The handlers are covered end-to-end through the routes, so the query-param
