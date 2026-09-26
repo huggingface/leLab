@@ -782,7 +782,50 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
         # half-open device.
         current_robot = robot
 
+        # Every phase below calls `record_loop` with the same devices and
+        # pipelines and only `dataset`/`control_time_s` varying — collect the
+        # shared part once so each call site states just what differs.
+        loop_kwargs = {
+            "robot": robot,
+            "events": web_events,
+            "fps": cfg.dataset.fps,
+            "teleop_action_processor": teleop_action_processor,
+            "robot_action_processor": robot_action_processor,
+            "robot_observation_processor": robot_observation_processor,
+            "teleop": teleop,
+            "single_task": cfg.dataset.single_task,
+            "display_data": cfg.display_data,
+        }
+
+        # Settle before the very first episode. Every later episode is already
+        # preceded by the reset phase at the bottom of this loop — the same
+        # non-recording stretch, with the arm still following the leader — but
+        # without this the first episode starts writing frames the moment the
+        # devices come up, while the user is still moving into position.
+        settled_in = False
+
         while saved_episodes < cfg.dataset.num_episodes:
+            if not settled_in and cfg.dataset.reset_time_s > 0:
+                settled_in = True
+                current_phase = "resetting"
+                phase_start_time = time.time()
+                logger.info("Starting reset phase before the first episode")
+                print("🔄 STATUS CHANGE: Starting reset phase before the first episode")
+
+                log_say("Get ready", cfg.play_sounds)
+                web_events["exit_early"] = False
+
+                # NOTE: no dataset - nothing is recorded before episode 1.
+                record_loop(**loop_kwargs, control_time_s=cfg.dataset.reset_time_s)
+
+                if web_events["exit_early"]:
+                    logger.info("🟡 RESET PHASE INTERRUPTED BY EXIT_EARLY - starting episode 1")
+                    web_events["exit_early"] = False
+
+                if web_events["stop_recording"]:
+                    logger.info("🛑 STOP RECORDING requested before the first episode - ending session")
+                    break
+
             # RECORDING PHASE - with dataset (matches original record.py exactly)
             current_phase = "recording"
             phase_start_time = time.time()
@@ -798,19 +841,7 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
             web_events["_exit_early_triggered"] = False
             logger.info(f"Recording phase - calling record_loop with events: {web_events}")
 
-            record_loop(
-                robot=robot,
-                events=web_events,
-                fps=cfg.dataset.fps,
-                teleop_action_processor=teleop_action_processor,
-                robot_action_processor=robot_action_processor,
-                robot_observation_processor=robot_observation_processor,
-                teleop=teleop,
-                dataset=dataset,
-                control_time_s=cfg.dataset.episode_time_s,
-                single_task=cfg.dataset.single_task,
-                display_data=cfg.display_data,
-            )
+            record_loop(**loop_kwargs, dataset=dataset, control_time_s=cfg.dataset.episode_time_s)
 
             logger.info(f"Recording phase completed - events state: {web_events}")
 
@@ -855,20 +886,8 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
                 web_events["exit_early"] = False
                 logger.info(f"Reset phase - calling record_loop with events: {web_events}")
 
-                record_loop(
-                    robot=robot,
-                    events=web_events,
-                    fps=cfg.dataset.fps,
-                    teleop_action_processor=teleop_action_processor,
-                    robot_action_processor=robot_action_processor,
-                    robot_observation_processor=robot_observation_processor,
-                    teleop=teleop,
-                    # NOTE: NO dataset parameter here - matches LeRobot CLI exactly
-                    # This means NO recording happens during reset phase
-                    control_time_s=cfg.dataset.reset_time_s,
-                    single_task=cfg.dataset.single_task,
-                    display_data=cfg.display_data,
-                )
+                # NOTE: no dataset - matches LeRobot CLI exactly, nothing is recorded.
+                record_loop(**loop_kwargs, control_time_s=cfg.dataset.reset_time_s)
 
                 logger.info(f"Reset phase completed - events state: {web_events}")
 
@@ -925,20 +944,8 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
                 web_events["exit_early"] = False
                 logger.info(f"Reset phase - calling record_loop with events: {web_events}")
 
-                record_loop(
-                    robot=robot,
-                    events=web_events,
-                    fps=cfg.dataset.fps,
-                    teleop_action_processor=teleop_action_processor,
-                    robot_action_processor=robot_action_processor,
-                    robot_observation_processor=robot_observation_processor,
-                    teleop=teleop,
-                    # NOTE: NO dataset parameter here - matches LeRobot CLI exactly
-                    # This means NO recording happens during reset phase
-                    control_time_s=cfg.dataset.reset_time_s,
-                    single_task=cfg.dataset.single_task,
-                    display_data=cfg.display_data,
-                )
+                # NOTE: no dataset - matches LeRobot CLI exactly, nothing is recorded.
+                record_loop(**loop_kwargs, control_time_s=cfg.dataset.reset_time_s)
 
                 logger.info(f"Reset phase completed - events state: {web_events}")
 
