@@ -182,6 +182,31 @@ def test_list_imported_hub_empty_when_no_model() -> None:
     assert _list_imported_hub(FakeApi(), "user/repo") == []
 
 
+def test_summarize_policy_config_extracts_visual_features_and_task_flag() -> None:
+    from lelab.jobs import summarize_policy_config
+
+    cfg = {
+        "type": "smolvla",
+        "input_features": {
+            "observation.images.top": {"type": "VISUAL", "shape": [3, 224, 224]},
+            "observation.state": {"type": "STATE", "shape": [6]},
+        },
+    }
+    result = summarize_policy_config(cfg)
+    assert result == {
+        "policy_type": "smolvla",
+        "image_features": {"top": {"height": 224, "width": 224}},
+        "requires_task": True,
+    }
+
+
+def test_summarize_policy_config_unknown_type_does_not_require_task() -> None:
+    from lelab.jobs import summarize_policy_config
+
+    result = summarize_policy_config({"type": "act", "input_features": {}})
+    assert result["requires_task"] is False
+
+
 def test_read_checkpoint_config_local_reads_config_json(tmp_path) -> None:
     from lelab.jobs import JobCheckpoint, _read_checkpoint_config
 

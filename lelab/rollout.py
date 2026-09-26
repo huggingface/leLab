@@ -154,6 +154,22 @@ def _read_policy_config(policy_path: str) -> dict[str, Any]:
         return {}
 
 
+def handle_get_policy_config(policy_ref: str) -> dict[str, Any]:
+    """UX-relevant slice of a policy ref's config.json, without it needing to
+    come from a LeLab training job — a local checkpoint directory (e.g. one
+    produced by a third-party `lerobot_policy_<name>` plugin) or a Hub ref in
+    the same shape /start-inference accepts. Mirrors
+    `JobRegistry.get_policy_config_summary`, which covers job checkpoints.
+    """
+    from .jobs import summarize_policy_config
+
+    policy_path = _resolve_policy_path(policy_ref)
+    cfg = _read_policy_config(policy_path)
+    if not cfg:
+        raise FileNotFoundError(f"No config.json found for policy ref {policy_ref!r}")
+    return summarize_policy_config(cfg)
+
+
 def _rollout_inference_args(policy_path: str) -> list[str]:
     """Return extra lerobot-rollout flags for policies that reject sync inference.
 

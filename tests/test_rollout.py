@@ -164,6 +164,54 @@ def test_resolve_policy_path_resolves_hub_root_ref(monkeypatch, tmp_path) -> Non
     assert result == str(fake_root)
 
 
+def test_handle_get_policy_config_reads_local_checkpoint(tmp_path) -> None:
+    """A local checkpoint dir — e.g. from a third-party lerobot_policy_<name>
+    plugin — gets the same UX-relevant summary as a job checkpoint."""
+    import json
+
+    from lelab.rollout import handle_get_policy_config
+
+    pretrained = tmp_path / "pretrained_model"
+    pretrained.mkdir()
+    (pretrained / "config.json").write_text(
+        json.dumps(
+            {
+                "type": "my_plugin_policy",
+                "input_features": {
+                    "observation.images.wrist": {"type": "VISUAL", "shape": [3, 480, 640]},
+                    "observation.state": {"type": "STATE", "shape": [6]},
+                },
+            }
+        )
+    )
+
+    result = handle_get_policy_config(str(pretrained))
+
+    assert result["policy_type"] == "my_plugin_policy"
+    assert result["image_features"] == {"wrist": {"height": 480, "width": 640}}
+    # Not in the hardcoded language-conditioned allowlist — a genuine
+    # limitation for plugin types that do need a task string, not something
+    # this fix tries to solve.
+    assert result["requires_task"] is False
+
+
+def test_handle_get_policy_config_raises_when_config_missing(tmp_path) -> None:
+    from lelab.rollout import handle_get_policy_config
+
+    empty_dir = tmp_path / "pretrained_model"
+    empty_dir.mkdir()
+
+    with pytest.raises(FileNotFoundError):
+        handle_get_policy_config(str(empty_dir))
+
+
+def test_handle_get_policy_config_raises_on_unparsable_ref() -> None:
+    from lelab.rollout import handle_get_policy_config
+
+    with pytest.raises(ValueError, match="Unrecognised policy ref"):
+        handle_get_policy_config("not-a-real-ref-no-at-sign")
+
+
 def test_format_cameras_arg_empty_yields_empty_braces() -> None:
     from lelab.rollout import _format_cameras_arg
 

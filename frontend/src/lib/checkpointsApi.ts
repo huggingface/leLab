@@ -41,3 +41,21 @@ export async function getCheckpointPolicyConfig(
     { signal, action: "Load policy config" },
   );
 }
+
+/**
+ * Same policy-config summary, for a ref that isn't tied to a LeLab training
+ * job — a local checkpoint directory (e.g. from a third-party
+ * `lerobot_policy_<name>` plugin) or a raw Hub ref.
+ */
+export async function getCustomPolicyConfig(
+  baseUrl: string,
+  fetcher: Fetcher,
+  policyRef: string,
+  signal?: AbortSignal,
+): Promise<PolicyConfigSummary> {
+  const qs = new URLSearchParams({ policy_ref: policyRef });
+  return apiRequest<PolicyConfigSummary>(baseUrl, fetcher, `/policy-config?${qs}`, {
+    signal,
+    action: "Load policy config",
+  });
+}

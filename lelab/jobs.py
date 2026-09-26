@@ -615,6 +615,35 @@ def _read_checkpoint_config(ckpt: JobCheckpoint) -> dict[str, object]:
         return json.load(f)
 
 
+def summarize_policy_config(cfg: dict[str, object]) -> dict[str, object]:
+    """Reduce a pretrained_model/config.json to the UX-relevant slice: policy
+    type, expected camera names + their height/width, and whether the policy
+    needs a --task string.
+
+    Shared by job-checkpoint inference (`get_policy_config_summary`) and
+    inference against a policy ref that isn't tied to a LeLab training job
+    (`rollout.handle_get_policy_config`) — same config shape either way.
+    """
+    policy_type = cfg.get("type")
+    image_features: dict[str, dict[str, int]] = {}
+    for full_name, feat in (cfg.get("input_features") or {}).items():
+        if feat.get("type") != "VISUAL":
+            continue
+        shape = feat.get("shape") or []
+        if len(shape) != 3:
+            continue
+        _channels, height, width = shape
+        # The policy keys are 'observation.images.<name>'; the rollout CLI
+        # takes just the suffix.
+        name = full_name.split(".")[-1]
+        image_features[name] = {"height": int(height), "width": int(width)}
+    return {
+        "policy_type": policy_type,
+        "image_features": image_features,
+        "requires_task": policy_type in _LANGUAGE_CONDITIONED_POLICY_TYPES,
+    }
+
+
 def _generate_job_id(policy_type: str, dataset_repo_id: str) -> str:
     """Build a sortable, collision-free job id from policy type and dataset slug."""
     from .train import _SLUG_RE
@@ -1069,25 +1098,7 @@ class JobRegistry:
         match = next((c for c in ckpts if c.step == step), None)
         if match is None:
             raise FileNotFoundError(f"No checkpoint at step {step} for job {record.id}")
-        cfg = _read_checkpoint_config(match)
-        policy_type = cfg.get("type")
-        image_features: dict[str, dict[str, int]] = {}
-        for full_name, feat in (cfg.get("input_features") or {}).items():
-            if feat.get("type") != "VISUAL":
-                continue
-            shape = feat.get("shape") or []
-            if len(shape) != 3:
-                continue
-            _channels, height, width = shape
-            # The policy keys are 'observation.images.<name>'; the rollout CLI
-            # takes just the suffix.
-            name = full_name.split(".")[-1]
-            image_features[name] = {"height": int(height), "width": int(width)}
-        return {
-            "policy_type": policy_type,
-            "image_features": image_features,
-            "requires_task": policy_type in _LANGUAGE_CONDITIONED_POLICY_TYPES,
-        }
+        return summarize_policy_config(_read_checkpoint_config(match))
 
     def delete(self, job_id: str) -> None:
         with self._lock:
