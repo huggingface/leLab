@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { AlertCircle, ArrowLeft, Database, Loader2, Upload } from "lucide-react";
+import { AlertCircle, ArrowLeft, Database, Loader2, Merge, Upload } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -11,9 +11,13 @@ import {
 import { Button } from "@/components/ui/button";
 import EpisodeList from "@/components/dataset/EpisodeList";
 import EpisodeViewer from "@/components/dataset/EpisodeViewer";
+import MergeDatasetsDialog from "@/components/dataset/MergeDatasetsDialog";
+import { useApi } from "@/contexts/ApiContext";
 import { useDatasets } from "@/hooks/useDatasets";
 import { useEpisodeDetail, useEpisodes } from "@/hooks/useEpisodes";
+import { useToast } from "@/hooks/use-toast";
 import { formatDuration } from "@/lib/datasetApi";
+import { mergeLocalDatasets } from "@/lib/replayApi";
 
 const Stat: React.FC<{ label: string; value: string }> = ({ label, value }) => (
   <span className="flex items-baseline gap-1.5">
@@ -33,7 +37,10 @@ const EditDataset = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const { datasets, loading: datasetsLoading } = useDatasets();
+  const { datasets, loading: datasetsLoading, refresh } = useDatasets();
+  const { baseUrl, fetchWithHeaders } = useApi();
+  const { toast } = useToast();
+  const [mergeOpen, setMergeOpen] = useState(false);
   // A Hub-only dataset has no videos on disk to decode.
   const localDatasets = useMemo(
     () => datasets.filter((d) => d.source === "local" || d.source === "both"),
@@ -62,6 +69,12 @@ const EditDataset = () => {
     return api ? { ...params, api } : params;
   };
   const setDataset = (next: string) => setSearchParams(withApi({ dataset: next }));
+  const handleMerge = async (sourceRepoIds: string[], outputName: string) => {
+    const result = await mergeLocalDatasets(baseUrl, fetchWithHeaders, sourceRepoIds, outputName);
+    refresh();
+    setDataset(result.repo_id);
+    toast({ title: "Datasets merged", description: `${result.num_episodes} episodes are ready to browse.` });
+  };
   const setEpisode = (next: number) => {
     if (!repoId) return;
     setSearchParams(withApi({ dataset: repoId, episode: String(next) }));
@@ -113,6 +126,15 @@ const EditDataset = () => {
                 </SelectContent>
               </Select>
             </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setMergeOpen(true)}
+              className="h-9 gap-1.5 border-gray-800 bg-gray-950 text-xs text-gray-300 hover:bg-gray-900"
+            >
+              <Merge className="h-3.5 w-3.5" />
+              Merge
+            </Button>
             {/* Picking a dataset now lands here rather than on /upload, so the
                 upload + delete flow hangs off the page you browse from. */}
             {repoId && (
@@ -206,6 +228,12 @@ const EditDataset = () => {
           </>
         )}
       </div>
+      <MergeDatasetsDialog
+        datasets={datasets}
+        open={mergeOpen}
+        onOpenChange={setMergeOpen}
+        onMerge={handleMerge}
+      />
     </div>
   );
 };
