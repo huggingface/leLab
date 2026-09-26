@@ -46,6 +46,86 @@ def test_handle_stop_recording_when_idle_returns_dict(tmp_lerobot_home) -> None:
     assert isinstance(result, dict)
 
 
+def test_resolve_dataset_dir_rejects_traversal(tmp_lerobot_home) -> None:
+    from lelab.record import _resolve_dataset_dir
+
+    assert _resolve_dataset_dir("../../etc") is None
+    assert _resolve_dataset_dir(".") is None
+
+
+def test_resolve_dataset_dir_accepts_nested_repo_id(tmp_lerobot_home) -> None:
+    from lelab.record import _resolve_dataset_dir
+
+    target = _resolve_dataset_dir("alice/pusht")
+    assert target == tmp_lerobot_home / "alice" / "pusht"
+
+
+def test_handle_delete_dataset_rejects_traversal(tmp_lerobot_home) -> None:
+    from lelab.record import DatasetInfoRequest, handle_delete_dataset
+
+    result = handle_delete_dataset(DatasetInfoRequest(dataset_repo_id="../../etc"))
+    assert result["success"] is False
+
+
+def test_handle_delete_dataset_reports_missing(tmp_lerobot_home) -> None:
+    from lelab.record import DatasetInfoRequest, handle_delete_dataset
+
+    result = handle_delete_dataset(DatasetInfoRequest(dataset_repo_id="nope/nope"))
+    assert result["success"] is False
+
+
+def test_handle_delete_dataset_removes_directory(tmp_lerobot_home) -> None:
+    from lelab.record import DatasetInfoRequest, handle_delete_dataset
+
+    dataset_dir = tmp_lerobot_home / "alice" / "pusht"
+    (dataset_dir / "meta").mkdir(parents=True)
+    (dataset_dir / "meta" / "info.json").write_text("{}")
+
+    result = handle_delete_dataset(DatasetInfoRequest(dataset_repo_id="alice/pusht"))
+    assert result["success"] is True
+    assert not dataset_dir.exists()
+
+
+def test_cleanup_failed_recording_removes_empty_new_dataset(tmp_lerobot_home) -> None:
+    from lelab.record import _cleanup_failed_recording
+
+    dataset_dir = tmp_lerobot_home / "alice" / "pusht"
+    (dataset_dir / "meta").mkdir(parents=True)
+    (dataset_dir / "meta" / "info.json").write_text("{}")
+
+    _cleanup_failed_recording("alice/pusht", resume=False, saved_episodes=0)
+    assert not dataset_dir.exists()
+
+
+def test_cleanup_failed_recording_keeps_dataset_with_saved_episodes(tmp_lerobot_home) -> None:
+    from lelab.record import _cleanup_failed_recording
+
+    dataset_dir = tmp_lerobot_home / "alice" / "pusht"
+    (dataset_dir / "meta").mkdir(parents=True)
+    (dataset_dir / "meta" / "info.json").write_text("{}")
+
+    _cleanup_failed_recording("alice/pusht", resume=False, saved_episodes=2)
+    assert dataset_dir.exists()
+
+
+def test_cleanup_failed_recording_keeps_resumed_dataset(tmp_lerobot_home) -> None:
+    from lelab.record import _cleanup_failed_recording
+
+    dataset_dir = tmp_lerobot_home / "alice" / "pusht"
+    (dataset_dir / "meta").mkdir(parents=True)
+    (dataset_dir / "meta" / "info.json").write_text("{}")
+
+    _cleanup_failed_recording("alice/pusht", resume=True, saved_episodes=0)
+    assert dataset_dir.exists()
+
+
+def test_cleanup_failed_recording_tolerates_missing_dir(tmp_lerobot_home) -> None:
+    from lelab.record import _cleanup_failed_recording
+
+    # No dataset dir was ever created (e.g. failure before LeRobotDataset.create()) — no-op, no crash.
+    _cleanup_failed_recording("alice/never-created", resume=False, saved_episodes=0)
+
+
 def test_create_record_config_pins_dshow_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     """On Windows, recording must use the DSHOW backend so a camera_index opens
     the same device /available-cameras enumerated (via pygrabber, DSHOW order).

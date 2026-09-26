@@ -331,6 +331,7 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
                     "dataset_repo_id": request.dataset_repo_id,
                     "saved_episodes": saved_episodes,
                 }
+                _cleanup_failed_recording(request.dataset_repo_id, request.resume, saved_episodes)
             finally:
                 if current_phase != "error":
                     current_phase = "completed"
@@ -573,19 +574,54 @@ def handle_get_dataset_info(request: DatasetInfoRequest) -> dict[str, Any]:
         }
 
 
+def _resolve_dataset_dir(repo_id: str):
+    """Resolve `repo_id` to a path strictly inside the local dataset cache, or None.
+
+    Shared traversal guard for anything that deletes a dataset directory by
+    repo_id coming from a request rather than a local scan. Uses
+    `episode_media.lerobot_cache_root()`, which reads the cache root from the
+    environment at call time rather than importing lerobot's `HF_LEROBOT_HOME`
+    constant (frozen at import, so it wouldn't see a root set after startup).
+    """
+    from . import episode_media
+
+    root = episode_media.lerobot_cache_root()
+    target = (root / repo_id).resolve()
+    if target == root or root not in target.parents:
+        return None
+    return target
+
+
+def _cleanup_failed_recording(dataset_repo_id: str, resume: bool, saved_episodes: int) -> None:
+    """Remove a dataset dir a failed recording created but never saved into.
+
+    A dataset dir is written (meta/info.json etc.) as soon as recording
+    starts, before the first episode is captured. If the session errors out
+    before saving anything and wasn't resuming an existing dataset, that dir
+    is an empty leftover the failure produced, not a partial recording worth
+    keeping — remove it instead of leaving it in the local cache and dataset
+    picker. Best-effort: logs and swallows failures rather than masking the
+    original recording error.
+    """
+    if resume or saved_episodes != 0 or not dataset_repo_id:
+        return
+    target = _resolve_dataset_dir(dataset_repo_id)
+    if target is None or not target.exists():
+        return
+    try:
+        shutil.rmtree(target)
+        logger.info(f"Removed empty dataset directory {target} after a failed recording")
+    except Exception as e:
+        logger.warning(f"Could not remove empty dataset directory {target}: {e}")
+
+
 def handle_delete_dataset(request: DatasetInfoRequest) -> dict[str, Any]:
     """Remove a recorded dataset's directory from local disk."""
     global last_recording_info
-    from pathlib import Path
-
-    from lerobot.utils.constants import HF_LEROBOT_HOME
 
     repo_id = request.dataset_repo_id
-    root = Path(HF_LEROBOT_HOME).resolve()
-    target = (root / repo_id).resolve()
-
-    # Reject path traversal: target must stay strictly inside HF_LEROBOT_HOME.
-    if target == root or root not in target.parents:
+    target = _resolve_dataset_dir(repo_id)
+    if target is None:
         return {"success": False, "message": "Invalid dataset path"}
 
     if not target.exists():
