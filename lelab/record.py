@@ -284,6 +284,8 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
             recording_start_time = time.time()
             current_episode = 1
             saved_episodes = 0
+            existing_dir = _resolve_dataset_dir(request.dataset_repo_id) if request.dataset_repo_id else None
+            dir_preexisted = existing_dir is not None and existing_dir.exists()
 
             try:
                 logger.info(
@@ -331,7 +333,9 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
                     "dataset_repo_id": request.dataset_repo_id,
                     "saved_episodes": saved_episodes,
                 }
-                _cleanup_failed_recording(request.dataset_repo_id, request.resume, saved_episodes)
+                _cleanup_failed_recording(
+                    request.dataset_repo_id, request.resume, saved_episodes, dir_preexisted
+                )
             finally:
                 if current_phase != "error":
                     current_phase = "completed"
@@ -592,7 +596,9 @@ def _resolve_dataset_dir(repo_id: str):
     return target
 
 
-def _cleanup_failed_recording(dataset_repo_id: str, resume: bool, saved_episodes: int) -> None:
+def _cleanup_failed_recording(
+    dataset_repo_id: str, resume: bool, saved_episodes: int, dir_preexisted: bool
+) -> None:
     """Remove a dataset dir a failed recording created but never saved into.
 
     A dataset dir is written (meta/info.json etc.) as soon as recording
@@ -602,8 +608,13 @@ def _cleanup_failed_recording(dataset_repo_id: str, resume: bool, saved_episodes
     keeping — remove it instead of leaving it in the local cache and dataset
     picker. Best-effort: logs and swallows failures rather than masking the
     original recording error.
+
+    `dir_preexisted` is whether the dir already existed before this attempt
+    started. The dataset name only has second resolution, so a collision makes
+    `LeRobotDataset.create()` fail with FileExistsError on a dir this attempt
+    doesn't own — never delete it.
     """
-    if resume or saved_episodes != 0 or not dataset_repo_id:
+    if resume or dir_preexisted or saved_episodes != 0 or not dataset_repo_id:
         return
     target = _resolve_dataset_dir(dataset_repo_id)
     if target is None or not target.exists():

@@ -93,7 +93,7 @@ def test_cleanup_failed_recording_removes_empty_new_dataset(tmp_lerobot_home) ->
     (dataset_dir / "meta").mkdir(parents=True)
     (dataset_dir / "meta" / "info.json").write_text("{}")
 
-    _cleanup_failed_recording("alice/pusht", resume=False, saved_episodes=0)
+    _cleanup_failed_recording("alice/pusht", resume=False, saved_episodes=0, dir_preexisted=False)
     assert not dataset_dir.exists()
 
 
@@ -104,7 +104,7 @@ def test_cleanup_failed_recording_keeps_dataset_with_saved_episodes(tmp_lerobot_
     (dataset_dir / "meta").mkdir(parents=True)
     (dataset_dir / "meta" / "info.json").write_text("{}")
 
-    _cleanup_failed_recording("alice/pusht", resume=False, saved_episodes=2)
+    _cleanup_failed_recording("alice/pusht", resume=False, saved_episodes=2, dir_preexisted=False)
     assert dataset_dir.exists()
 
 
@@ -115,15 +115,51 @@ def test_cleanup_failed_recording_keeps_resumed_dataset(tmp_lerobot_home) -> Non
     (dataset_dir / "meta").mkdir(parents=True)
     (dataset_dir / "meta" / "info.json").write_text("{}")
 
-    _cleanup_failed_recording("alice/pusht", resume=True, saved_episodes=0)
+    _cleanup_failed_recording("alice/pusht", resume=True, saved_episodes=0, dir_preexisted=False)
     assert dataset_dir.exists()
+
+
+def test_cleanup_failed_recording_keeps_preexisting_dir(tmp_lerobot_home) -> None:
+    from lelab.record import _cleanup_failed_recording
+
+    # Second-resolution name collision: create() raised FileExistsError on a dir
+    # this attempt doesn't own, so its contents must survive.
+    dataset_dir = tmp_lerobot_home / "alice" / "pusht"
+    (dataset_dir / "meta").mkdir(parents=True)
+    (dataset_dir / "meta" / "info.json").write_text("{}")
+
+    _cleanup_failed_recording("alice/pusht", resume=False, saved_episodes=0, dir_preexisted=True)
+    assert (dataset_dir / "meta" / "info.json").exists()
+
+
+def test_resolve_dataset_dir_follows_hf_home_when_lerobot_home_unset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    from lelab.record import _resolve_dataset_dir
+
+    monkeypatch.delenv("HF_LEROBOT_HOME", raising=False)
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+
+    assert _resolve_dataset_dir("alice/pusht") == (tmp_path / "lerobot" / "alice" / "pusht").resolve()
+
+
+def test_cleanup_failed_recording_uses_hf_home_cache(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from lelab.record import _cleanup_failed_recording
+
+    monkeypatch.delenv("HF_LEROBOT_HOME", raising=False)
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    dataset_dir = tmp_path / "lerobot" / "alice" / "pusht"
+    (dataset_dir / "meta").mkdir(parents=True)
+
+    _cleanup_failed_recording("alice/pusht", resume=False, saved_episodes=0, dir_preexisted=False)
+    assert not dataset_dir.exists()
 
 
 def test_cleanup_failed_recording_tolerates_missing_dir(tmp_lerobot_home) -> None:
     from lelab.record import _cleanup_failed_recording
 
     # No dataset dir was ever created (e.g. failure before LeRobotDataset.create()) — no-op, no crash.
-    _cleanup_failed_recording("alice/never-created", resume=False, saved_episodes=0)
+    _cleanup_failed_recording("alice/never-created", resume=False, saved_episodes=0, dir_preexisted=False)
 
 
 def test_create_record_config_pins_dshow_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
