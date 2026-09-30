@@ -68,9 +68,17 @@ def lerobot_cache_root() -> Path:
     Reads the environment at call time rather than importing lerobot's
     ``HF_LEROBOT_HOME`` constant, which is frozen at import. Same source of
     truth as ``datasets._lerobot_cache_root``, and it keeps this module free of
-    a torch-pulling import it doesn't otherwise need.
+    a torch-pulling import it doesn't otherwise need. Mirrors lerobot's
+    resolution: ``HF_LEROBOT_HOME``, else ``$HF_HOME/lerobot``, where ``HF_HOME``
+    defaults to ``$XDG_CACHE_HOME/huggingface`` (``~/.cache/huggingface``).
     """
-    return Path(os.environ.get("HF_LEROBOT_HOME", "~/.cache/huggingface/lerobot")).expanduser().resolve()
+    explicit = os.environ.get("HF_LEROBOT_HOME")
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    hf_home = os.environ.get("HF_HOME")
+    if not hf_home:
+        hf_home = os.path.join(os.environ.get("XDG_CACHE_HOME") or "~/.cache", "huggingface")
+    return (Path(hf_home).expanduser() / "lerobot").resolve()
 
 
 def resolve_dataset_dir(repo_id: str) -> Path:
