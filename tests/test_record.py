@@ -155,6 +155,55 @@ def test_cleanup_failed_recording_uses_hf_home_cache(monkeypatch: pytest.MonkeyP
     assert not dataset_dir.exists()
 
 
+def test_dataset_dir_preexisted_defaults_true_when_probe_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_lerobot_home
+) -> None:
+    from lelab import record
+
+    def boom(repo_id):
+        raise OSError("Too many levels of symbolic links")
+
+    monkeypatch.setattr(record, "_resolve_dataset_dir", boom)
+    assert record._dataset_dir_preexisted("alice/pusht") is True
+
+
+def test_worker_releases_active_state_when_path_probe_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_lerobot_home
+) -> None:
+    from unittest.mock import MagicMock
+
+    from lelab import record
+
+    def boom(repo_id):
+        raise OSError("Too many levels of symbolic links")
+
+    def fail_recording(cfg, events):
+        raise RuntimeError("recording failed")
+
+    monkeypatch.setattr(record, "_resolve_dataset_dir", boom)
+    monkeypatch.setattr(record, "create_record_config", lambda request: MagicMock())
+    monkeypatch.setattr(record, "record_with_web_events", fail_recording)
+
+    request = record.RecordingRequest(
+        leader_port="/dev/null",
+        follower_port="/dev/null",
+        leader_config="l",
+        follower_config="f",
+        dataset_repo_id="alice/pusht",
+        single_task="t",
+    )
+    result = record.handle_start_recording(request)
+    assert result["success"] is True
+    record.recording_thread.join(timeout=10)
+
+    assert not record.recording_thread.is_alive()
+    assert record.recording_active is False
+    # The next start isn't rejected as "already active".
+    assert record.handle_start_recording(request)["success"] is True
+    record.recording_thread.join(timeout=10)
+    assert record.recording_active is False
+
+
 def test_cleanup_failed_recording_tolerates_missing_dir(tmp_lerobot_home) -> None:
     from lelab.record import _cleanup_failed_recording
 

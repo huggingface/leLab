@@ -284,10 +284,12 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
             recording_start_time = time.time()
             current_episode = 1
             saved_episodes = 0
-            existing_dir = _resolve_dataset_dir(request.dataset_repo_id) if request.dataset_repo_id else None
-            dir_preexisted = existing_dir is not None and existing_dir.exists()
+            # Assume the dir isn't ours until the probe says otherwise, so a
+            # failing probe can never make cleanup delete existing data.
+            dir_preexisted = True
 
             try:
+                dir_preexisted = _dataset_dir_preexisted(request.dataset_repo_id)
                 logger.info(
                     "Recording session started: dataset=%s task=%r episodes=%d",
                     request.dataset_repo_id,
@@ -594,6 +596,18 @@ def _resolve_dataset_dir(repo_id: str):
     if target == root or root not in target.parents:
         return None
     return target
+
+
+def _dataset_dir_preexisted(dataset_repo_id: str) -> bool:
+    """Whether the dataset dir already exists; True (conservative) if it can't be probed."""
+    if not dataset_repo_id:
+        return False
+    try:
+        target = _resolve_dataset_dir(dataset_repo_id)
+        return target is not None and target.exists()
+    except Exception as e:
+        logger.warning(f"Could not probe dataset directory for {dataset_repo_id}: {e}")
+        return True
 
 
 def _cleanup_failed_recording(
