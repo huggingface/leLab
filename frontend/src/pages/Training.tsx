@@ -134,7 +134,6 @@ const ConfigurationMode: React.FC = () => {
     wandb_enable: false,
     wandb_mode: "online",
     wandb_disable_artifact: false,
-    policy_device: "cuda",
     policy_use_amp: false,
     optimizer_type: "adam",
     use_policy_training_preset: true,

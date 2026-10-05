@@ -37,6 +37,8 @@ from typing import Any
 
 from pydantic import BaseModel, field_validator
 
+from lerobot.utils.device_utils import auto_select_torch_device
+
 from .camera_config import lerobot_camera_settings, validate_camera_rotations
 from .utils.config import setup_follower_calibration_file
 
@@ -100,20 +102,6 @@ def _pump_stdout(proc: subprocess.Popen, log_handle) -> None:
     finally:
         with contextlib.suppress(Exception):
             log_handle.close()
-
-
-def _detect_device() -> str:
-    """cuda → mps → cpu, picked once at start time."""
-    try:
-        import torch
-
-        if torch.cuda.is_available():
-            return "cuda"
-        if torch.backends.mps.is_available():
-            return "mps"
-    except Exception:
-        pass
-    return "cpu"
 
 
 def _resolve_policy_path(policy_ref: str) -> str:
@@ -345,7 +333,7 @@ def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
             "lerobot.scripts.lerobot_rollout",
             "--strategy.type=base",
             f"--policy.path={policy_path}",
-            f"--policy.device={_detect_device()}",
+            f"--policy.device={auto_select_torch_device().type}",
             "--robot.type=so101_follower",
             f"--robot.port={request.follower_port}",
             f"--robot.id={follower_id}",

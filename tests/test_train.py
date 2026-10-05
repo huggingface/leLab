@@ -137,7 +137,9 @@ def test_cloud_target_emits_job_flags_and_skips_push_to_hub() -> None:
 
     # push_to_hub is requested, but for a cloud target lerobot's submit_to_hf owns the
     # model repo and _pod_forwarded_args drops --policy.* — so we must NOT emit them.
-    req = TrainingRequest(dataset_repo_id="x", policy_push_to_hub=True, policy_repo_id="me/x")
+    req = TrainingRequest(
+        dataset_repo_id="x", policy_push_to_hub=True, policy_repo_id="me/x", policy_device="mps"
+    )
     cmd = build_training_command(
         req, "/tmp/out", job_target=JobTarget(runner="hf_cloud", flavor="a10g-small")
     )
@@ -145,6 +147,8 @@ def test_cloud_target_emits_job_flags_and_skips_push_to_hub() -> None:
     assert _arg_value(cmd, "--job.tags") == '["lelab"]'
     assert "--policy.push_to_hub" not in cmd
     assert "--policy.repo_id" not in cmd
+    # submit_to_hf resets policy.device so the pod picks its own device.
+    assert "--policy.device" not in cmd
     # An absolute host output_dir would be baked into the staged config and crash the
     # pod (mkdir /Users ...); checkpoints go to the Hub repo, so it must be omitted.
     assert "--output_dir" not in cmd
@@ -175,6 +179,23 @@ def test_local_target_keeps_push_to_hub() -> None:
     assert _arg_value(cmd, "--policy.push_to_hub") == "true"
     assert _arg_value(cmd, "--policy.repo_id") == "me/x"
     assert "--job.target" not in cmd
+
+
+def test_local_run_uses_detected_device_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    import torch
+
+    import lelab.train as train
+
+    monkeypatch.setattr(train, "auto_select_torch_device", lambda: torch.device("mps"))
+    cmd = train.build_training_command(train.TrainingRequest(dataset_repo_id="x"), "/tmp/out")
+    assert _arg_value(cmd, "--policy.device") == "mps"
+
+
+def test_local_run_keeps_explicit_device() -> None:
+    from lelab.train import TrainingRequest, build_training_command
+
+    cmd = build_training_command(TrainingRequest(dataset_repo_id="x", policy_device="cpu"), "/tmp/out")
+    assert _arg_value(cmd, "--policy.device") == "cpu"
 
 
 def test_groot_policy_flags_are_emitted_only_for_groot() -> None:

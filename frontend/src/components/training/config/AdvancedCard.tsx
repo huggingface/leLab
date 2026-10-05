@@ -56,25 +56,31 @@ const AdvancedCard: React.FC<ConfigComponentProps> = ({ config, updateConfig }) 
           <section className="space-y-4">
             <SectionHeading>Policy</SectionHeading>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <Label htmlFor="policy_device" className="text-slate-300">
-                  Device
-                </Label>
-                <Select
-                  value={config.policy_device || 'cuda'}
-                  onValueChange={(value) => updateConfig('policy_device', value)}
-                >
-                  <SelectTrigger id="policy_device" className="bg-slate-900 border-slate-600 text-white rounded-lg">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="bg-slate-800 border-slate-600 text-white">
-                    <SelectItem value="cuda">CUDA (GPU)</SelectItem>
-                    <SelectItem value="cpu">CPU</SelectItem>
-                    <SelectItem value="mps">MPS (Apple Silicon)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex items-center space-x-3 pt-6">
+              {/* An HF Jobs pod picks its own device, so this only applies locally. */}
+              {config.target.runner === 'local' && (
+                <div>
+                  <Label htmlFor="policy_device" className="text-slate-300">
+                    Device
+                  </Label>
+                  <Select
+                    value={config.policy_device ?? 'auto'}
+                    onValueChange={(value) =>
+                      updateConfig('policy_device', value === 'auto' ? undefined : value)
+                    }
+                  >
+                    <SelectTrigger id="policy_device" className="bg-slate-900 border-slate-600 text-white rounded-lg">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-slate-800 border-slate-600 text-white">
+                      <SelectItem value="auto">Auto</SelectItem>
+                      <SelectItem value="cpu">CPU</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              <div
+                className={`flex items-center space-x-3 ${config.target.runner === 'local' ? 'pt-6' : ''}`}
+              >
                 <Switch
                   id="policy_use_amp"
                   checked={config.policy_use_amp}

@@ -61,50 +61,6 @@ def test_inference_request_has_expected_defaults() -> None:
     assert req.duration_s == 60
 
 
-def test_detect_device_returns_cpu_when_neither_cuda_nor_mps(monkeypatch: pytest.MonkeyPatch) -> None:
-    import torch
-
-    from lelab.rollout import _detect_device
-
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
-    assert _detect_device() == "cpu"
-
-
-def test_detect_device_prefers_cuda_over_mps(monkeypatch: pytest.MonkeyPatch) -> None:
-    import torch
-
-    from lelab.rollout import _detect_device
-
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
-    assert _detect_device() == "cuda"
-
-
-def test_detect_device_falls_back_to_mps_when_no_cuda(monkeypatch: pytest.MonkeyPatch) -> None:
-    import torch
-
-    from lelab.rollout import _detect_device
-
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
-    assert _detect_device() == "mps"
-
-
-def test_detect_device_returns_cpu_when_torch_probe_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The function wraps both probes in a broad try/except — if torch is
-    broken at runtime we still need a sensible fallback."""
-    import torch
-
-    from lelab.rollout import _detect_device
-
-    def _boom() -> bool:
-        raise RuntimeError("simulated torch.cuda failure")
-
-    monkeypatch.setattr(torch.cuda, "is_available", _boom)
-    assert _detect_device() == "cpu"
-
-
 def test_resolve_policy_path_returns_local_dir_unchanged(tmp_path) -> None:
     from lelab.rollout import _resolve_policy_path
 
