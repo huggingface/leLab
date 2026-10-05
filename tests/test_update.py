@@ -217,7 +217,8 @@ def test_run_update_no_source(monkeypatch):
 
 
 def test_update_command_for_uv_tool_install(monkeypatch):
-    """Standard `uv tool install` setup updates the tool in place with --force."""
+    """Standard `uv tool install` setup updates the tool in place with --force
+    and keeps `hf` on PATH."""
     monkeypatch.setattr(update.shutil, "which", lambda name: "/usr/bin/uv")
     monkeypatch.setattr(update, "_is_uv_tool_install", lambda: True)
     cmd = update._build_update_cmd("huggingface", "leLab")
@@ -226,6 +227,8 @@ def test_update_command_for_uv_tool_install(monkeypatch):
         "tool",
         "install",
         "--force",
+        "--with-executables-from",
+        "huggingface_hub",
         "git+https://github.com/huggingface/leLab.git",
     ]
 
