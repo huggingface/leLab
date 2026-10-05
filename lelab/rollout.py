@@ -301,8 +301,8 @@ def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
     global inference_active, _inference_proc, _inference_started_at
     global _inference_rollout_started_at, _inference_meta
 
-    # Mutex with teleop and recording: all three drive the same serial bus.
-    from . import record as _record, teleoperate as _teleoperate
+    # Mutex with teleop, recording and replay: they all drive the same serial bus.
+    from . import record as _record, replay as _replay, teleoperate as _teleoperate
 
     with _state_lock:
         if _teleoperate.teleoperation_active:
@@ -316,6 +316,12 @@ def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
                 "success": False,
                 "status_code": 409,
                 "message": "Recording is currently active. Stop it first.",
+            }
+        if _replay.replay_active:
+            return {
+                "success": False,
+                "status_code": 409,
+                "message": "Replay is currently active. Stop it first.",
             }
         if inference_active:
             return {

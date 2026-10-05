@@ -118,7 +118,7 @@ def handle_start_teleoperation(request: TeleoperateRequest, websocket_manager=No
     """
     global teleoperation_active, teleoperation_thread, current_robot, current_teleop
 
-    from . import record as _record, rollout as _rollout
+    from . import record as _record, replay as _replay, rollout as _rollout
 
     with _state_lock:
         if teleoperation_active:
@@ -127,6 +127,8 @@ def handle_start_teleoperation(request: TeleoperateRequest, websocket_manager=No
             return {"success": False, "message": "Recording is currently active. Stop it first."}
         if _rollout.inference_active:
             return {"success": False, "message": "Inference is currently active. Stop it first."}
+        if _replay.replay_active:
+            return {"success": False, "message": "Replay is currently active. Stop it first."}
         teleoperation_active = True
 
     robot = None

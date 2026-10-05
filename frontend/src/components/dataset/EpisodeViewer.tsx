@@ -15,6 +15,7 @@ import { useApi } from "@/contexts/ApiContext";
 import { EpisodeDetail, frameUrl, videoUrl } from "@/lib/datasetApi";
 import FilmStrip from "./FilmStrip";
 import MotionTrace from "./MotionTrace";
+import ReplayButton from "./ReplayButton";
 
 const RATES = [0.5, 1, 2] as const;
 type Rate = (typeof RATES)[number];
@@ -160,6 +161,18 @@ const EpisodeViewer: React.FC<EpisodeViewerProps> = ({ repoId, detail, onNavigat
     }
   }, []);
 
+  // The arm replays at the recording's speed; run the footage alongside it.
+  const playFromStart = useCallback(() => {
+    const v = driverRef.current;
+    if (!v) return;
+    setRate(1);
+    seekToFrame(0);
+    void v.play().then(
+      () => setPlaying(true),
+      () => setPlaying(false),
+    );
+  }, [seekToFrame]);
+
   // Keep the element's rate in step with the pills across re-renders and
   // camera swaps.
   useEffect(() => {
@@ -229,19 +242,26 @@ const EpisodeViewer: React.FC<EpisodeViewerProps> = ({ repoId, detail, onNavigat
           </Button>
         )}
 
-        <div className="ml-auto flex rounded-md border border-gray-800 bg-gray-950 p-0.5">
-          {RATES.map((r) => (
-            <button
-              key={r}
-              type="button"
-              onClick={() => setRate(r)}
-              className={`rounded px-2.5 py-1 text-xs font-medium tabular-nums transition ${
-                r === rate ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-200"
-              }`}
-            >
-              {r}x
-            </button>
-          ))}
+        <div className="ml-auto flex items-center gap-2">
+          <ReplayButton
+            repoId={repoId}
+            episodeIndex={detail.episode_index}
+            onStart={playFromStart}
+          />
+          <div className="flex rounded-md border border-gray-800 bg-gray-950 p-0.5">
+            {RATES.map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setRate(r)}
+                className={`rounded px-2.5 py-1 text-xs font-medium tabular-nums transition ${
+                  r === rate ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-200"
+                }`}
+              >
+                {r}x
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

@@ -251,7 +251,7 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
         phase_start_time, \
         last_recording_info
 
-    from . import rollout as _rollout, teleoperate as _teleoperate
+    from . import replay as _replay, rollout as _rollout, teleoperate as _teleoperate
 
     # Claim the active flag under the lock so two concurrent starts can't both
     # pass the precondition check.
@@ -262,6 +262,8 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
             return {"success": False, "message": "Teleoperation is currently active. Stop it first."}
         if _rollout.inference_active:
             return {"success": False, "message": "Inference is currently active. Stop it first."}
+        if _replay.replay_active:
+            return {"success": False, "message": "Replay is currently active. Stop it first."}
         recording_active = True
         recording_thread = None
         recording_events = None
