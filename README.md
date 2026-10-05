@@ -63,6 +63,21 @@ A page will automatically open in your browser and you are ready to go.
   </table>
 </div>
 
+## Camera rotation
+
+If a camera is mounted upside down or sideways, select its **Rotation** in the camera setup on the Calibration page.
+Choose 0°, 90°, 180°, or 270° clockwise. For an upside-down wrist camera, choose 180°.
+
+LeLab saves the rotation for each camera. Setup and teleoperation previews, recorded frames, and inference use the selected rotation.
+Profiles without a rotation setting use 0°.
+
+The resolution setting describes the camera's capture resolution. A 90° or 270° rotation swaps the output dimensions.
+For example, a 640 × 480 capture becomes a 480 × 640 observation. The preview shows the complete rotated frame.
+
+Before inference, select the same rotation used for the training dataset. Check it again if you change the camera binding.
+Checkpoint image dimensions do not establish image orientation. For example, 0° and 180° have the same dimensions.
+The setting applies to new observations; it does not change existing recordings or checkpoints.
+
 ## Resources
 
 - **[LeRobot](https://github.com/huggingface/lerobot):** the underlying library — go here for everything beyond the UI.

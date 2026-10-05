@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { NumberInput } from "@/components/ui/number-input";
-import { Camera, Plus, X, VideoOff, RefreshCw, ChevronRight } from "lucide-react";
+import { Camera, Plus, X, RefreshCw, ChevronRight } from "lucide-react";
 import {
   Collapsible,
   CollapsibleContent,
@@ -18,7 +18,10 @@ import {
 } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
 import { useAvailableCameras } from "@/hooks/useAvailableCameras";
-import { useCameraStream } from "@/hooks/useCameraStream";
+import BrowserCameraPreview from "@/components/control/BrowserCameraPreview";
+import CameraRotationSelect from "@/components/control/CameraRotationSelect";
+import { CameraConfig, cameraRotation, cameraRotationError, rotatedDimensions } from "@/lib/cameraConfig";
+export type { CameraConfig } from "@/lib/cameraConfig";
 
 // Sentinels distinguish "leave unset" (auto-detect / platform default) from an
 // explicit choice. Radix Select disallows an empty-string value, so we map these
@@ -36,19 +39,6 @@ const BACKEND_OPTIONS = [
   "AVFOUNDATION",
   "MSMF",
 ];
-
-export interface CameraConfig {
-  id: string;
-  name: string;
-  type: string;
-  camera_index?: number; // cv2 index — what the recorder opens
-  device_id: string; // Browser deviceId matched to the cv2 index by AVFoundation localizedName
-  width: number;
-  height: number;
-  fps?: number;
-  fourcc?: string; // 4-char OpenCV pixel format (e.g. "MJPG"); undefined = auto-detect
-  backend?: string; // Cv2Backends name (e.g. "AVFOUNDATION"); undefined = platform default
-}
 
 interface CameraConfigurationProps {
   cameras: CameraConfig[];
@@ -150,6 +140,7 @@ const CameraConfiguration: React.FC<CameraConfigurationProps> = ({
       width: 640,
       height: 480,
       fps: 30,
+      rotation: 0,
     };
 
     onCamerasChange([...cameras, newCamera]);
@@ -346,35 +337,19 @@ const CameraPreview: React.FC<CameraPreviewProps> = ({
   onRemove,
   onUpdate,
 }) => {
-  const { videoRef, hasError: streamError } = useCameraStream(
-    camera.device_id,
-    paused
-  );
-  const showVideo = !paused && camera.device_id && !streamError;
+  const rotationError = cameraRotationError(camera);
+  const rotation = rotationError ? null : cameraRotation(camera.rotation);
+  const output = rotation === null ? null : rotatedDimensions(camera.width, camera.height, rotation);
   return (
     <div className="bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
-      <div className="aspect-[4/3] bg-gray-800 relative">
-        {showVideo ? (
-          <video
-            ref={videoRef}
-            autoPlay
-            muted
-            playsInline
-            className="w-full h-full object-cover"
-          />
-        ) : (
-          <div className="w-full h-full flex flex-col items-center justify-center">
-            <VideoOff className="w-8 h-8 text-gray-500 mb-2" />
-            <span className="text-gray-500 text-sm">
-              {paused
-                ? "Preview paused"
-                : camera.device_id
-                ? "Preview failed"
-                : "No browser match"}
-            </span>
-          </div>
-        )}
-      </div>
+      <BrowserCameraPreview
+        deviceId={camera.device_id}
+        paused={paused}
+        rotation={camera.rotation}
+        width={camera.width}
+        height={camera.height}
+        fallback={paused ? "Preview paused" : camera.device_id ? undefined : "No browser match"}
+      />
 
       {/* Camera Info */}
       <div className="p-3 space-y-2">
@@ -392,12 +367,15 @@ const CameraPreview: React.FC<CameraPreviewProps> = ({
           )}
         </div>
 
+        {rotationError && <p role="alert" className="text-xs text-red-400">{rotationError} Select a valid rotation.</p>}
         {readOnly ? (
           <p className="text-xs text-gray-400">
-            {camera.width}×{camera.height}
+            {output ? `${output.width}×${output.height} · ${rotation}° clockwise` : "Invalid rotation"}
             {camera.fps ? ` · ${camera.fps} fps` : ""}
           </p>
         ) : (
+        <>
+        <CameraRotationSelect rotation={rotation} onChange={(value) => onUpdate({ rotation: value })} />
         <Collapsible>
           <CollapsibleTrigger className="group flex items-center gap-1.5 text-xs font-medium text-gray-300 hover:text-white transition-colors">
             <ChevronRight className="w-3.5 h-3.5 transition-transform group-data-[state=open]:rotate-90" />
@@ -406,7 +384,7 @@ const CameraPreview: React.FC<CameraPreviewProps> = ({
           <CollapsibleContent className="pt-2 space-y-2">
             <div className="grid grid-cols-1 gap-2 text-xs text-gray-400">
               <div className="flex items-center gap-2">
-                <span className="w-16">Resolution:</span>
+                <span className="w-16">Capture:</span>
                 <div className="flex items-center gap-1">
                   <NumberInput
                     value={camera.width}
@@ -511,6 +489,7 @@ const CameraPreview: React.FC<CameraPreviewProps> = ({
             </div>
           </CollapsibleContent>
         </Collapsible>
+        </>
         )}
       </div>
     </div>

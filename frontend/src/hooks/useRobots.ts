@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useApi } from "@/contexts/ApiContext";
 import { useToast } from "@/hooks/use-toast";
-import type { CameraConfig } from "@/components/recording/CameraConfiguration";
+import { CameraConfig, cameraConfigurationError, loadCameraConfigs } from "@/lib/cameraConfig";
 
 export interface RobotRecord {
   name: string;
@@ -54,7 +54,12 @@ export const useRobots = () => {
         const data = await res.json();
         if (cancelled) return;
         const next: Record<string, RobotRecord> = {};
-        for (const r of data.robots ?? []) next[r.name] = r;
+        for (const r of data.robots ?? []) {
+          const cameras = loadCameraConfigs(r.cameras ?? []);
+          const error = cameraConfigurationError(cameras);
+          next[r.name] = { ...r, cameras };
+          if (error) toast({ title: "Invalid camera rotation", description: `${r.name}: ${error}`, variant: "destructive" });
+        }
         setRecords(next);
         // Drop the selection if the underlying record vanished (deleted from another tab)
         setSelectedName((prev) => (prev && prev in next ? prev : null));
@@ -70,7 +75,7 @@ export const useRobots = () => {
     return () => {
       cancelled = true;
     };
-  }, [baseUrl, fetchWithHeaders, location.key]);
+  }, [baseUrl, fetchWithHeaders, location.key, toast]);
 
   // Persist selection to localStorage
   useEffect(() => {

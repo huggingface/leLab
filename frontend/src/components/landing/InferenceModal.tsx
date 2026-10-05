@@ -25,6 +25,7 @@ import {
 import { startInference } from "@/lib/inferenceApi";
 import CheckpointDropdown from "@/components/jobs/CheckpointDropdown";
 import { useCameraBindings } from "@/hooks/useCameraBindings";
+import { cameraConfigurationError } from "@/lib/cameraConfig";
 import CameraBindings from "./CameraBindings";
 
 interface Props {
@@ -116,16 +117,19 @@ const InferenceModal: React.FC<Props> = ({
       ? checkpoints.find((c) => c.step === selectedStep)?.ref ?? null
       : null;
 
+  const cameraError = robot ? cameraConfigurationError(robot.cameras ?? []) : null;
+
   const canStart =
     !!robot &&
     robot.is_clean &&
+    !cameraError &&
     selectedRef != null &&
     !!policyConfig &&
     cameraBindings.allBound &&
     !submitting;
 
   const handleStart = async () => {
-    if (!robot || selectedRef == null || !policyConfig) return;
+    if (!robot || selectedRef == null || !policyConfig || cameraError) return;
     // Setting submitting=true makes every CameraPreview drop its
     // browser stream — required so the rollout subprocess can open the
     // same camera index via OpenCV without colliding on the device.
@@ -263,7 +267,12 @@ const InferenceModal: React.FC<Props> = ({
             <h3 className="text-lg font-semibold text-white border-b border-gray-700 pb-2">
               Cameras
             </h3>
-            {policyConfigLoading ? (
+            {cameraError ? (
+              <Alert className="bg-red-900/40 border-red-700 text-red-100">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>{cameraError} Correct the camera settings in Calibration.</AlertDescription>
+              </Alert>
+            ) : policyConfigLoading ? (
               <div className="flex items-center gap-2 text-sm text-slate-400">
                 <Loader2 className="w-4 h-4 animate-spin" />
                 Reading policy config…
@@ -283,12 +292,15 @@ const InferenceModal: React.FC<Props> = ({
               <div className="space-y-3">
                 <p className="text-xs text-gray-500">
                   Bind a physical camera to each name the policy was trained
-                  with. Resolution comes from the checkpoint.
+                  with. Resolution comes from the checkpoint. Use the same
+                  rotation as the training data.
                 </p>
                 <CameraBindings
                   imageFeatures={policyConfig.image_features}
                   bindings={cameraBindings.bindings}
                   onBind={cameraBindings.bind}
+                  rotationFor={cameraBindings.rotationFor}
+                  onRotate={cameraBindings.setRotation}
                   availableCameras={cameraBindings.availableCameras}
                   paused={submitting}
                 />

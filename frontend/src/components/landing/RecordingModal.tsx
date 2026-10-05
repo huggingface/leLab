@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/collapsible";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertTriangle, CheckCircle, ChevronDown } from "lucide-react";
+import { cameraConfigurationError } from "@/lib/cameraConfig";
 import CameraConfiguration, {
   CameraConfig,
 } from "@/components/recording/CameraConfiguration";
@@ -253,7 +254,8 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
             </div>
 
             {appendTo ? (
-              Object.keys(appendTo.imageFeatures).length > 0 && (
+              Object.keys(appendTo.imageFeatures).length > 0 &&
+              !(robot && cameraConfigurationError(robot.cameras ?? [])) && (
                 <div className="space-y-4">
                   <h3 className="text-lg font-semibold text-white border-b border-gray-700 pb-2">
                     Cameras
@@ -266,6 +268,8 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
                     imageFeatures={appendTo.imageFeatures}
                     bindings={cameraBindings.bindings}
                     onBind={cameraBindings.bind}
+                    rotationFor={cameraBindings.rotationFor}
+                    onRotate={cameraBindings.setRotation}
                     availableCameras={cameraBindings.availableCameras}
                     paused={false}
                   />

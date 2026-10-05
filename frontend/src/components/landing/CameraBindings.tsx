@@ -1,5 +1,4 @@
 import React from "react";
-import { VideoOff } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -10,38 +9,16 @@ import {
 } from "@/components/ui/select";
 import { AvailableCamera } from "@/hooks/useAvailableCameras";
 import { ImageFeatures } from "@/lib/checkpointsApi";
-import { useCameraStream } from "@/hooks/useCameraStream";
-
-const CameraThumbnail: React.FC<{ deviceId: string; paused: boolean }> = ({
-  deviceId,
-  paused,
-}) => {
-  const { videoRef, hasError } = useCameraStream(deviceId, paused);
-  if (paused || hasError || !deviceId) {
-    return (
-      <div className="w-32 h-24 bg-gray-800 rounded border border-gray-700 flex flex-col items-center justify-center">
-        <VideoOff className="w-5 h-5 text-gray-500 mb-1" />
-        <span className="text-[10px] text-gray-500">
-          {paused ? "Released" : "No preview"}
-        </span>
-      </div>
-    );
-  }
-  return (
-    <video
-      ref={videoRef}
-      autoPlay
-      muted
-      playsInline
-      className="w-32 h-24 object-cover rounded border border-gray-700 bg-black"
-    />
-  );
-};
+import BrowserCameraPreview from "@/components/control/BrowserCameraPreview";
+import CameraRotationSelect from "@/components/control/CameraRotationSelect";
+import { CameraRotation, rotatedDimensions } from "@/lib/cameraConfig";
 
 interface CameraBindingsProps {
   imageFeatures: ImageFeatures;
   bindings: Record<string, number | null>;
   onBind: (name: string, index: number) => void;
+  rotationFor: (name: string) => CameraRotation;
+  onRotate: (name: string, rotation: CameraRotation) => void;
   availableCameras: AvailableCamera[];
   /** Drop the previews so the backend can open the same devices. */
   paused: boolean;
@@ -52,6 +29,8 @@ const CameraBindings: React.FC<CameraBindingsProps> = ({
   imageFeatures,
   bindings,
   onBind,
+  rotationFor,
+  onRotate,
   availableCameras,
   paused,
 }) => (
@@ -60,8 +39,10 @@ const CameraBindings: React.FC<CameraBindingsProps> = ({
       const value = bindings[name];
       const bound =
         value != null ? availableCameras.find((c) => c.index === value) : undefined;
+      const rotation = rotationFor(name);
+      const capture = rotatedDimensions(dims.width, dims.height, rotation);
       return (
-        <div key={name} className="flex items-center gap-3">
+        <div key={name} className="flex flex-wrap items-center gap-3">
           <div className="flex-1">
             <Label className="text-sm font-medium text-gray-200">{name}</Label>
             <p className="text-xs text-gray-500">
@@ -89,7 +70,19 @@ const CameraBindings: React.FC<CameraBindingsProps> = ({
               )}
             </SelectContent>
           </Select>
-          <CameraThumbnail deviceId={bound?.deviceId ?? ""} paused={paused} />
+          <CameraRotationSelect
+            rotation={rotation}
+            disabled={!bound || paused}
+            onChange={(angle) => onRotate(name, angle)}
+          />
+          <BrowserCameraPreview
+            deviceId={bound?.deviceId ?? ""}
+            paused={paused}
+            rotation={rotation}
+            width={capture.width}
+            height={capture.height}
+            className="w-32 rounded border border-gray-700"
+          />
         </div>
       );
     })}

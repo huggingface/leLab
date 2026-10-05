@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { useHfAuth } from "@/contexts/HfAuthContext";
 import { RobotRecord } from "@/hooks/useRobots";
-import { CameraConfig } from "@/components/recording/CameraConfiguration";
+import { CameraConfig, cameraConfigurationError, serializeCameras } from "@/lib/cameraConfig";
 import { useCameraBindings } from "@/hooks/useCameraBindings";
 import { ImageFeatures } from "@/lib/checkpointsApi";
 
@@ -60,7 +60,7 @@ export const useRecording = (robot: RobotRecord | null) => {
 
   // A bound camera keeps the capture settings the robot gives that device, as
   // in a new recording.
-  const captureSettings = (index: number) => {
+  const captureSettings = (index: number | undefined) => {
     const robotCams = robot?.cameras ?? [];
     const deviceId = cameraBindings.availableCameras.find((c) => c.index === index)?.deviceId;
     const cam =
@@ -75,6 +75,15 @@ export const useRecording = (robot: RobotRecord | null) => {
   const onStart = async () => {
     // Start stays disabled until a calibrated robot is selected.
     if (!robot) return;
+    const cameraError = cameraConfigurationError(robot.cameras ?? []);
+    if (cameraError) {
+      toast({
+        title: "Invalid camera rotation",
+        description: `${cameraError} Correct the camera settings in Calibration.`,
+        variant: "destructive",
+      });
+      return;
+    }
     if ((!appendTo && !datasetName) || !singleTask) {
       toast({
         title: "Missing dataset details",
@@ -117,32 +126,7 @@ export const useRecording = (robot: RobotRecord | null) => {
             { ...cam, ...captureSettings(cam.camera_index) },
           ]),
         )
-      : cameras.reduce(
-          (acc, cam) => {
-            acc[cam.name] = {
-              type: cam.type,
-              camera_index: cam.camera_index,
-              width: cam.width,
-              height: cam.height,
-              fps: cam.fps,
-              ...(cam.fourcc ? { fourcc: cam.fourcc } : {}),
-              ...(cam.backend ? { backend: cam.backend } : {}),
-            };
-            return acc;
-          },
-          {} as Record<
-            string,
-            {
-              type: string;
-              camera_index?: number;
-              width: number;
-              height: number;
-              fps?: number;
-              fourcc?: string;
-              backend?: string;
-            }
-          >,
-        );
+      : serializeCameras(cameras);
 
     const recordingConfig = {
       leader_port: robot.leader_port,

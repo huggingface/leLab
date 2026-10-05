@@ -21,7 +21,7 @@ import traceback
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from lerobot.configs.dataset import DatasetRecordConfig
 from lerobot.datasets import LeRobotDataset
@@ -31,6 +31,7 @@ from lerobot.robots.so_follower import SO101FollowerConfig
 from lerobot.scripts.lerobot_record import RecordConfig
 from lerobot.teleoperators.so_leader import SO101LeaderConfig
 
+from .camera_config import lerobot_camera_settings, validate_camera_rotations
 from .episode_media import UnreadableDatasetError, ensure_episode_index
 from .utils.config import setup_calibration_files, with_lelab_tag
 from .utils.devices import safe_disconnect_device
@@ -79,8 +80,13 @@ class RecordingRequest(BaseModel):
     private: bool = False
     resume: bool = False
     streaming_encoding: bool = True
-    cameras: dict = {}
+    cameras: dict[str, dict[str, Any]] = {}
     test_mode: bool = False  # Skip robot connection for testing
+
+    @field_validator("cameras")
+    @classmethod
+    def validate_rotations(cls, cameras: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        return validate_camera_rotations(cameras)
 
 
 class UploadRequest(BaseModel):
@@ -137,7 +143,7 @@ def _build_camera_configs(cameras: dict, default_backend) -> dict:
     `backend` (a Cv2Backends name) and `fourcc` (a 4-char code) are optional per
     camera; when omitted they fall back to `default_backend` and auto-detect.
     """
-    from lerobot.cameras.configs import Cv2Backends
+    from lerobot.cameras.configs import Cv2Backends, Cv2Rotation
     from lerobot.cameras.opencv import OpenCVCameraConfig
 
     camera_configs: dict = {}
@@ -151,20 +157,22 @@ def _build_camera_configs(cameras: dict, default_backend) -> dict:
         backend_name = camera_data.get("backend")
         backend = Cv2Backends[backend_name] if backend_name else default_backend
         fourcc = camera_data.get("fourcc") or None
+        settings = lerobot_camera_settings(camera_data)
 
         camera_configs[camera_name] = OpenCVCameraConfig(
             index_or_path=camera_data.get("camera_index", 0),
             backend=backend,
             fps=camera_data.get("fps"),
-            width=camera_data.get("width"),
-            height=camera_data.get("height"),
+            width=settings.get("width"),
+            height=settings.get("height"),
+            rotation=Cv2Rotation(settings.get("rotation", 0)),
             fourcc=fourcc,
         )
         logger.info(
             f"✅ CAMERA CONFIG: {camera_name} -> OpenCVCameraConfig("
             f"index={camera_data.get('camera_index')}, backend={backend.name}, "
             f"{camera_data.get('width')}x{camera_data.get('height')}@{camera_data.get('fps')}fps, "
-            f"fourcc={fourcc})"
+            f"fourcc={fourcc}, rotation={camera_data.get('rotation', 0)})"
         )
     return camera_configs
 

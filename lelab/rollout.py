@@ -35,8 +35,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
+from .camera_config import lerobot_camera_settings, validate_camera_rotations
 from .utils.config import setup_follower_calibration_file
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,11 @@ class InferenceRequest(BaseModel):
     task: str = ""
     cameras: dict[str, dict[str, Any]] = {}
     duration_s: int = 60
+
+    @field_validator("cameras")
+    @classmethod
+    def validate_rotations(cls, cameras: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        return validate_camera_rotations(cameras)
 
 
 inference_active: bool = False
@@ -188,13 +194,14 @@ def _rollout_inference_args(policy_path: str) -> list[str]:
 
 
 def _format_cameras_arg(cameras: dict[str, dict[str, Any]]) -> str:
-    """Convert {name: {type, camera_index, width, height, fps}} into
+    """Convert native camera settings into
     lerobot's CLI dict syntax. The frontend key `camera_index` is
     remapped to lerobot's `index_or_path`."""
     parts = []
     for name, cfg in cameras.items():
+        settings = lerobot_camera_settings(cfg)
         remapped = {
-            ("index_or_path" if k == "camera_index" else k): v for k, v in cfg.items() if v is not None
+            ("index_or_path" if k == "camera_index" else k): v for k, v in settings.items() if v is not None
         }
         body = ", ".join(f"{k}: {v}" for k, v in remapped.items())
         parts.append(f"{name}: {{{body}}}")

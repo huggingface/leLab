@@ -37,7 +37,11 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
+import RecordingCameraFeed from "@/components/control/RecordingCameraFeed";
+import { CameraRequest, recordingCameraWindows } from "@/lib/cameraConfig";
+
 interface RecordingConfig {
+  cameras?: Record<string, CameraRequest>;
   leader_port: string;
   follower_port: string;
   leader_config: string;
@@ -122,20 +126,6 @@ const Recording = () => {
   const [leaveError, setLeaveError] = useState<string | null>(null);
 
   // --- Camera preview layout -------------------------------------------------
-  // Aspect ratio (width / height) of the configured cameras, used to size the
-  // preview windows without letterboxing. Falls back to 4:3 if unknown.
-  const cameraAspect = useMemo(() => {
-    const cams = (recordingConfig as unknown as { cameras?: unknown })?.cameras;
-    const list = Array.isArray(cams)
-      ? cams
-      : cams && typeof cams === "object"
-      ? Object.values(cams as Record<string, unknown>)
-      : [];
-    const first = list[0] as { width?: number; height?: number } | undefined;
-    if (first?.width && first?.height) return first.width / first.height;
-    return 4 / 3;
-  }, [recordingConfig]);
-
   // Measure the space left for the camera windows (via ResizeObserver, so it
   // re-fits on any viewport change) to size them as large as possible while
   // keeping the whole page within one screen (no scroll).
@@ -154,26 +144,9 @@ const Recording = () => {
     }
   }, []);
 
-  // Pick the column count and per-window pixel size that maximizes the video
-  // area within the measured space, given the camera count and aspect ratio.
-  const cameraCount = backendStatus?.cameras?.length ?? 0;
-  const cameraWindow = useMemo(() => {
-    const { w, h } = cameraArea;
-    if (!cameraCount || w <= 0 || h <= 0) return { width: 0, height: 0 };
-    const gap = 12; // matches the grid's gap-3
-    let best = { width: 0, height: 0, area: -1 };
-    for (let cols = 1; cols <= cameraCount; cols++) {
-      const rows = Math.ceil(cameraCount / cols);
-      const cellW = (w - gap * (cols - 1)) / cols;
-      const cellH = (h - gap * (rows - 1)) / rows;
-      if (cellW <= 0 || cellH <= 0) continue;
-      const width = Math.min(cellW, cellH * cameraAspect);
-      const height = width / cameraAspect;
-      const area = width * height;
-      if (area > best.area) best = { width, height, area };
-    }
-    return { width: Math.floor(best.width), height: Math.floor(best.height) };
-  }, [cameraArea, cameraCount, cameraAspect]);
+  const cameraWindows = useMemo(() => recordingCameraWindows(
+    backendStatus?.cameras ?? [], recordingConfig?.cameras ?? {}, cameraArea,
+  ), [backendStatus?.cameras, recordingConfig?.cameras, cameraArea]);
 
   const toggleMute = useCallback(() => {
     setMutedState((prev) => {
@@ -827,7 +800,7 @@ const Recording = () => {
                 className="flex-1 min-h-0 flex flex-wrap gap-3 justify-center content-center overflow-hidden mb-3"
               >
                 {backendStatus.cameras.map((name) => (
-                  <CameraFeed
+                  <RecordingCameraFeed
                     key={name}
                     baseUrl={baseUrl}
                     name={name}
@@ -835,8 +808,8 @@ const Recording = () => {
                       currentPhase === "recording" ||
                       currentPhase === "resetting"
                     }
-                    width={cameraWindow.width}
-                    height={cameraWindow.height}
+                    width={cameraWindows[name]?.width ?? 0}
+                    height={cameraWindows[name]?.height ?? 0}
                   />
                 ))}
               </div>
@@ -924,78 +897,6 @@ const Recording = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
-  );
-};
-
-interface CameraFeedProps {
-  baseUrl: string;
-  name: string;
-  // False during the preparing phase: show an empty slot until the camera is
-  // connected and streaming. True once recording/resetting, when frames flow.
-  live: boolean;
-  // Pixel size computed by the parent to fit the available space. The box is
-  // sized to the camera's aspect ratio, so the video fills it without letterbox.
-  width: number;
-  height: number;
-}
-
-// Renders one recording camera's window at an explicit size. During preparing it
-// shows an empty placeholder; once live it plays the backend MJPEG stream. The
-// browser renders a `multipart/x-mixed-replace` response natively in an <img>,
-// so we just point it at /camera-feed/{name}. If the stream errors before frames
-// flow (camera still warming up), retry with a cache-busting key after a delay.
-const CameraFeed: React.FC<CameraFeedProps> = ({
-  baseUrl,
-  name,
-  live,
-  width,
-  height,
-}) => {
-  const [reloadKey, setReloadKey] = useState(0);
-  const [hasError, setHasError] = useState(false);
-  const retryRef = useRef<number | null>(null);
-
-  const src = `${baseUrl}/camera-feed/${encodeURIComponent(name)}?k=${reloadKey}`;
-
-  useEffect(() => {
-    return () => {
-      if (retryRef.current) window.clearTimeout(retryRef.current);
-    };
-  }, []);
-
-  const handleError = useCallback(() => {
-    setHasError(true);
-    if (retryRef.current) window.clearTimeout(retryRef.current);
-    retryRef.current = window.setTimeout(() => {
-      setHasError(false);
-      setReloadKey((k) => k + 1);
-    }, 1500);
-  }, []);
-
-  // 0 before the first measurement; skip rendering a zero-size box.
-  if (width <= 0 || height <= 0) return null;
-
-  return (
-    <div
-      style={{ width, height }}
-      className="relative bg-gray-900 rounded-lg border border-gray-700 overflow-hidden flex items-center justify-center"
-    >
-      {!live ? (
-        <span className="text-gray-500 text-sm">Getting ready…</span>
-      ) : hasError ? (
-        <span className="text-gray-500 text-sm">Connecting feed…</span>
-      ) : (
-        <img
-          src={src}
-          alt={`${name} live feed`}
-          onError={handleError}
-          className="w-full h-full object-cover"
-        />
-      )}
-      <span className="absolute bottom-2 left-2 px-2 py-0.5 rounded bg-black/60 text-sm text-gray-200">
-        {name}
-      </span>
     </div>
   );
 };

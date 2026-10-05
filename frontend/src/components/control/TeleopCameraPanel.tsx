@@ -33,6 +33,9 @@ const TeleopCameraPanel: React.FC = () => {
     key: c.id,
     name: c.name,
     deviceId: c.device_id,
+    rotation: c.rotation,
+    width: c.width,
+    height: c.height,
   }));
 
   return (
@@ -72,6 +75,9 @@ const TeleopCameraPanel: React.FC = () => {
                 key={`${feed.key}:${reloadKey}`}
                 deviceId={feed.deviceId}
                 label={feed.name}
+                rotation={feed.rotation}
+                width={feed.width}
+                height={feed.height}
               />
             ))}
           </div>

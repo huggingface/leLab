@@ -1,17 +1,12 @@
 import { Fetcher, apiRequest } from "./apiClient";
+import { CameraRequest } from "./cameraConfig";
 
 export interface StartInferenceRequest {
   follower_port: string;
   follower_config: string;
   policy_ref: string;
   task: string;
-  cameras: Record<string, {
-    type: string;
-    camera_index?: number;
-    width: number;
-    height: number;
-    fps?: number;
-  }>;
+  cameras: Record<string, CameraRequest>;
   duration_s: number;
 }
 

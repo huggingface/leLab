@@ -41,9 +41,8 @@ import PortDetectionButton from "@/components/ui/PortDetectionButton";
 import PortDetectionModal from "@/components/ui/PortDetectionModal";
 import { useApi } from "@/contexts/ApiContext";
 import { isMotorRangeComplete } from "@/lib/calibrationTargets";
-import CameraConfiguration, {
-  CameraConfig,
-} from "@/components/recording/CameraConfiguration";
+import CameraConfiguration from "@/components/recording/CameraConfiguration";
+import { CameraConfig, loadCameraConfigs, cameraConfigurationError } from "@/lib/cameraConfig";
 
 const DISCONTINUITY_ERROR_PREFIX = "Motor discontinuity detected";
 
@@ -136,17 +135,21 @@ const Calibration = () => {
           ? r.leader_port || ""
           : r.follower_port || ""
       );
-      setCameras(r.cameras ?? []);
+      const loaded = loadCameraConfigs(r.cameras ?? []);
+      setCameras(loaded);
+      const cameraError = cameraConfigurationError(loaded);
+      if (cameraError) toast({ title: "Invalid camera rotation", description: cameraError, variant: "destructive" });
     })();
     return () => {
       cancelled = true;
     };
-  }, [robotName, fetchRobot]);
+  }, [robotName, fetchRobot, toast]);
 
   // Persist camera changes back to the robot record (debounced).
   const handleCamerasChange = (next: CameraConfig[]) => {
-    setCameras(next);
-    if (!robotName) return;
+    const normalized = loadCameraConfigs(next);
+    setCameras(normalized);
+    if (!robotName || cameraConfigurationError(normalized)) return;
     if (cameraSaveTimerRef.current) {
       clearTimeout(cameraSaveTimerRef.current);
     }
@@ -157,7 +160,7 @@ const Calibration = () => {
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ cameras: next }),
+            body: JSON.stringify({ cameras: normalized }),
           }
         );
       } catch (e) {
