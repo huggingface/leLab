@@ -170,6 +170,8 @@ def _build_camera_configs(cameras: dict, default_backend) -> dict:
 
 def create_record_config(request: RecordingRequest) -> RecordConfig:
     """Create a RecordConfig from the recording request"""
+    from lerobot.utils.constants import HF_LEROBOT_HOME
+
     # Setup calibration files
     leader_config_name, follower_config_name = setup_calibration_files(
         request.leader_config, request.follower_config
@@ -195,6 +197,9 @@ def create_record_config(request: RecordingRequest) -> RecordConfig:
     # Create dataset config
     dataset_config = DatasetRecordConfig(
         repo_id=request.dataset_repo_id,
+        # LeRobot's create() defaults to this directory, but resume() refuses
+        # root=None, so spell it out for both.
+        root=HF_LEROBOT_HOME / request.dataset_repo_id,
         single_task=request.single_task,
         num_episodes=request.num_episodes,
         episode_time_s=request.episode_time_s,
@@ -271,6 +276,8 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
         # final id back in the response and status payload.
         if not request.resume and request.dataset_repo_id:
             request.dataset_repo_id = f"{request.dataset_repo_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        if request.resume:
+            repair_local_dataset(request.dataset_repo_id)
 
         logger.info(f"Starting recording for dataset: {request.dataset_repo_id}")
         logger.info(f"Task: {request.single_task}")
@@ -673,7 +680,6 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
     Implement recording with phase tracking - exactly mirrors original record() function behavior
     """
     import time
-    from pathlib import Path
 
     from lerobot.common.control_utils import (
         sanity_check_dataset_name,
@@ -684,7 +690,6 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
     from lerobot.robots import make_robot_from_config
     from lerobot.scripts.lerobot_record import record_loop
     from lerobot.teleoperators import make_teleoperator_from_config
-    from lerobot.utils.constants import HF_LEROBOT_HOME
     from lerobot.utils.feature_utils import hw_to_dataset_features
     from lerobot.utils.utils import log_say
 
@@ -701,10 +706,9 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
 
     if cfg.resume:
         num_cameras = len(robot.cameras) if hasattr(robot, "cameras") else 0
-        resume_root = Path(HF_LEROBOT_HOME) / cfg.dataset.repo_id
         dataset = LeRobotDataset.resume(
             cfg.dataset.repo_id,
-            root=resume_root,
+            root=cfg.dataset.root,
             batch_encoding_size=cfg.dataset.video_encoding_batch_size,
             rgb_encoder=cfg.dataset.rgb_encoder,
             depth_encoder=cfg.dataset.depth_encoder,

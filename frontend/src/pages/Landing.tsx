@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronsUpDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -33,18 +33,9 @@ const Landing = () => {
 
   const { datasets, loading: datasetsLoading } = useDatasets();
 
-  const rec = useRecording(selectedRecord);
+  const recording = useRecording(selectedRecord);
 
   const navigate = useNavigate();
-
-  useEffect(() => {
-    return () => {
-      if (rec.releaseStreamsRef.current) {
-        console.log("🧹 Landing page: Cleaning up camera streams on unmount");
-        rec.releaseStreamsRef.current();
-      }
-    };
-  }, []);
 
   const handleTrainingClick = () => navigate("/training");
 
@@ -107,7 +98,7 @@ const Landing = () => {
                 loading={datasetsLoading}
                 onPickExisting={handlePickExisting}
                 onOpenCustom={handleOpenCustom}
-                onCreateNew={rec.openForNew}
+                onCreateNew={recording.openForNew}
               >
                 <Button
                   variant="outline"
@@ -153,28 +144,7 @@ const Landing = () => {
         dismissible={!ON_SPACE}
       />
 
-      <RecordingModal
-        open={rec.showModal}
-        onOpenChange={rec.onOpenChange}
-        robot={selectedRecord}
-        resumeRepoId={rec.resumeRepoId}
-        datasetName={rec.datasetName}
-        setDatasetName={rec.setDatasetName}
-        singleTask={rec.singleTask}
-        setSingleTask={rec.setSingleTask}
-        numEpisodes={rec.numEpisodes}
-        setNumEpisodes={rec.setNumEpisodes}
-        episodeTimeS={rec.episodeTimeS}
-        setEpisodeTimeS={rec.setEpisodeTimeS}
-        resetTimeS={rec.resetTimeS}
-        setResetTimeS={rec.setResetTimeS}
-        streamingEncoding={rec.streamingEncoding}
-        setStreamingEncoding={rec.setStreamingEncoding}
-        cameras={rec.cameras}
-        setCameras={rec.setCameras}
-        onStart={rec.startRecording}
-        releaseStreamsRef={rec.releaseStreamsRef}
-      />
+      <RecordingModal {...recording.modalProps} />
     </div>
   );
 };

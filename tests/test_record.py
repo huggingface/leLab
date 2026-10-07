@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 
+import shutil
+
 import pytest
 
 
@@ -131,3 +133,52 @@ def test_build_camera_configs_skips_non_opencv_type() -> None:
     configs = _build_camera_configs(cameras, Cv2Backends.ANY)
 
     assert configs == {}
+
+
+def _resume_request(repo_id: str):
+    from lelab.record import RecordingRequest
+
+    return RecordingRequest(
+        leader_port="/dev/leader",
+        follower_port="/dev/follower",
+        leader_config="leader",
+        follower_config="follower",
+        dataset_repo_id=repo_id,
+        single_task="pick",
+        resume=True,
+    )
+
+
+def test_resume_reopens_the_dataset_in_the_local_cache(
+    tmp_lerobot_home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import lelab.record as record
+    from lerobot.datasets import LeRobotDataset
+    from tests.test_dataset_repair import EPISODES, _record
+
+    _record("local/ds", video=False)
+    monkeypatch.setattr(record, "setup_calibration_files", lambda leader, follower: ("leader", "follower"))
+
+    config = record.create_record_config(_resume_request("local/ds"))
+    dataset = LeRobotDataset.resume(config.dataset.repo_id, root=config.dataset.root)
+    assert dataset.meta.total_episodes == EPISODES
+
+
+def test_resume_refuses_an_unrecoverable_dataset_before_the_robot(
+    tmp_lerobot_home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import lelab.record as record
+    from tests.test_dataset_repair import _record
+
+    root = _record("local/ds", video=False)
+    shutil.rmtree(root / "meta" / "episodes")
+    for path in (root / "data").rglob("*.parquet"):
+        path.write_bytes(b"PAR1 truncated")
+    monkeypatch.setattr(
+        record, "create_record_config", lambda request: pytest.fail("reached the robot setup")
+    )
+
+    result = record.handle_start_recording(_resume_request("local/ds"))
+    assert result["success"] is False
+    assert "Re-record it" in result["message"]
+    assert record.recording_active is False

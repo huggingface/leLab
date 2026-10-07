@@ -29,21 +29,6 @@ FRAMES = 5
 FPS = 10
 
 
-@pytest.fixture
-def lerobot_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point LeRobot's dataset cache at a tmp dir.
-
-    HF_LEROBOT_HOME is read from the environment once at import time and then
-    copied into the modules that use it, so every binding has to be patched —
-    the env var alone is too late by the time a test runs.
-    """
-    home = tmp_path / "lerobot"
-    home.mkdir()
-    monkeypatch.setattr("lerobot.utils.constants.HF_LEROBOT_HOME", home)
-    monkeypatch.setattr("lerobot.datasets.dataset_metadata.HF_LEROBOT_HOME", home)
-    return home
-
-
 def _record(repo_id: str, *, video: bool, episodes: int = EPISODES) -> Path:
     """Write a small finished dataset and return its root."""
     from lerobot.datasets import LeRobotDataset
@@ -85,13 +70,13 @@ def test_chunk_file_rejects_unexpected_layout() -> None:
         _chunk_file(Path("data/whatever.parquet"))
 
 
-def test_absent_dataset_is_left_to_the_normal_hub_path(lerobot_home: Path) -> None:
+def test_absent_dataset_is_left_to_the_normal_hub_path(tmp_lerobot_home: Path) -> None:
     from lelab.dataset_repair import repair_local_dataset
 
     assert repair_local_dataset("someone/never-recorded") is None
 
 
-def test_readable_dataset_is_not_touched(lerobot_home: Path) -> None:
+def test_readable_dataset_is_not_touched(tmp_lerobot_home: Path) -> None:
     from lelab.dataset_repair import repair_local_dataset
 
     _record(REPO_ID, video=False)
@@ -100,7 +85,7 @@ def test_readable_dataset_is_not_touched(lerobot_home: Path) -> None:
 
 
 @pytest.mark.parametrize("repo_id", ["../escape", "repair_test/../../escape", "/etc"])
-def test_repo_id_cannot_escape_the_cache_directory(lerobot_home: Path, repo_id: str) -> None:
+def test_repo_id_cannot_escape_the_cache_directory(tmp_lerobot_home: Path, repo_id: str) -> None:
     from lelab.dataset_repair import DatasetRepairError, repair_local_dataset
 
     with pytest.raises(DatasetRepairError, match="Invalid dataset id"):
@@ -108,7 +93,7 @@ def test_repo_id_cannot_escape_the_cache_directory(lerobot_home: Path, repo_id: 
 
 
 @pytest.mark.parametrize("video", [False, True])
-def test_missing_episode_index_is_rebuilt_from_the_data_files(lerobot_home: Path, video: bool) -> None:
+def test_missing_episode_index_is_rebuilt_from_the_data_files(tmp_lerobot_home: Path, video: bool) -> None:
     from lelab.dataset_repair import repair_local_dataset
     from lerobot.datasets import LeRobotDataset
 
@@ -134,7 +119,7 @@ def test_missing_episode_index_is_rebuilt_from_the_data_files(lerobot_home: Path
         assert tuple(last["observation.images.cam"].shape) == (3, 32, 32)
 
 
-def test_repair_is_idempotent(lerobot_home: Path) -> None:
+def test_repair_is_idempotent(tmp_lerobot_home: Path) -> None:
     from lelab.dataset_repair import repair_local_dataset
 
     root = _record(REPO_ID, video=False)
@@ -144,7 +129,7 @@ def test_repair_is_idempotent(lerobot_home: Path) -> None:
     assert repair_local_dataset(REPO_ID) is None
 
 
-def test_truncated_data_file_is_moved_out_of_the_readers_way(lerobot_home: Path) -> None:
+def test_truncated_data_file_is_moved_out_of_the_readers_way(tmp_lerobot_home: Path) -> None:
     from lelab.dataset_repair import repair_local_dataset
     from lerobot.datasets import LeRobotDataset
 
@@ -162,7 +147,7 @@ def test_truncated_data_file_is_moved_out_of_the_readers_way(lerobot_home: Path)
     assert LeRobotDataset(REPO_ID).num_episodes == EPISODES
 
 
-def test_episodes_without_video_lose_their_frames_and_stats_too(lerobot_home: Path) -> None:
+def test_episodes_without_video_lose_their_frames_and_stats_too(tmp_lerobot_home: Path) -> None:
     """An episode the videos don't cover is dropped from the index, so its rows
     and its contribution to stats.json have to go with it."""
     from lelab.dataset_repair import repair_local_dataset
@@ -195,7 +180,7 @@ def test_episodes_without_video_lose_their_frames_and_stats_too(lerobot_home: Pa
     assert repaired_stats["action"]["mean"] == reference_stats["action"]["mean"]
 
 
-def test_unrecoverable_dataset_reports_instead_of_hitting_the_hub(lerobot_home: Path) -> None:
+def test_unrecoverable_dataset_reports_instead_of_hitting_the_hub(tmp_lerobot_home: Path) -> None:
     from lelab.dataset_repair import DatasetRepairError, repair_local_dataset
 
     root = _record(REPO_ID, video=False)

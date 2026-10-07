@@ -1,4 +1,5 @@
 import { Fetcher, apiRequest } from "./apiClient";
+import { ImageFeatures } from "./checkpointsApi";
 
 export interface EpisodeSummary {
   episode_index: number;
@@ -15,7 +16,7 @@ export interface EpisodeListResponse {
   robot_type: string | null;
   total_episodes: number;
   total_frames: number | null;
-  cameras: string[];
+  image_features: ImageFeatures;
   episodes: EpisodeSummary[];
 }
 

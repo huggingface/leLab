@@ -11,14 +11,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { AlertTriangle, CheckCircle, Loader2, Play, VideoOff } from "lucide-react";
+import { AlertTriangle, CheckCircle, Loader2, Play } from "lucide-react";
 import { RobotRecord } from "@/hooks/useRobots";
 import { useApi } from "@/contexts/ApiContext";
 import { useToast } from "@/hooks/use-toast";
@@ -31,34 +24,8 @@ import {
 } from "@/lib/checkpointsApi";
 import { startInference } from "@/lib/inferenceApi";
 import CheckpointDropdown from "@/components/jobs/CheckpointDropdown";
-import { useAvailableCameras } from "@/hooks/useAvailableCameras";
-import { useCameraStream } from "@/hooks/useCameraStream";
-
-const CameraThumbnail: React.FC<{ deviceId: string; paused: boolean }> = ({
-  deviceId,
-  paused,
-}) => {
-  const { videoRef, hasError } = useCameraStream(deviceId, paused);
-  if (paused || hasError || !deviceId) {
-    return (
-      <div className="w-32 h-24 bg-gray-800 rounded border border-gray-700 flex flex-col items-center justify-center">
-        <VideoOff className="w-5 h-5 text-gray-500 mb-1" />
-        <span className="text-[10px] text-gray-500">
-          {paused ? "Released" : "No preview"}
-        </span>
-      </div>
-    );
-  }
-  return (
-    <video
-      ref={videoRef}
-      autoPlay
-      muted
-      playsInline
-      className="w-32 h-24 object-cover rounded border border-gray-700 bg-black"
-    />
-  );
-};
+import { useCameraBindings } from "@/hooks/useCameraBindings";
+import CameraBindings from "./CameraBindings";
 
 interface Props {
   open: boolean;
@@ -91,9 +58,7 @@ const InferenceModal: React.FC<Props> = ({
   const [policyConfigLoading, setPolicyConfigLoading] = useState(false);
   const [policyConfigError, setPolicyConfigError] = useState<string | null>(null);
 
-  // Per expected camera name → user-selected physical camera index (or null).
-  const [cameraBindings, setCameraBindings] = useState<Record<string, number | null>>({});
-  const { cameras: availableCameras } = useAvailableCameras({ enabled: open });
+  const cameraBindings = useCameraBindings(policyConfig?.image_features ?? null, robot, open);
 
   // Load checkpoints when modal opens.
   useEffect(() => {
@@ -132,15 +97,6 @@ const InferenceModal: React.FC<Props> = ({
       .then((cfg) => {
         if (cancelled) return;
         setPolicyConfig(cfg);
-        // Reset camera bindings to one entry per expected camera name.
-        // Preserve any prior selection that's still relevant.
-        setCameraBindings((prev) => {
-          const next: Record<string, number | null> = {};
-          for (const name of Object.keys(cfg.image_features)) {
-            next[name] = prev[name] ?? null;
-          }
-          return next;
-        });
       })
       .catch((e) => {
         if (cancelled) return;
@@ -155,53 +111,17 @@ const InferenceModal: React.FC<Props> = ({
     };
   }, [open, baseUrl, fetchWithHeaders, jobId, selectedStep]);
 
-  // If the selected robot has cameras whose names match a policy-expected
-  // camera, auto-bind them. Prefer matching by browser device_id (stable
-  // across cv2 index drift); fall back to the saved camera_index.
-  useEffect(() => {
-    if (!policyConfig) return;
-    const robotCams = robot?.cameras ?? [];
-    if (robotCams.length === 0 || availableCameras.length === 0) return;
-    setCameraBindings((prev) => {
-      let changed = false;
-      const next = { ...prev };
-      for (const policyName of Object.keys(policyConfig.image_features)) {
-        if (next[policyName] != null) continue;
-        const robotCam = robotCams.find(
-          (c) => c.name.toLowerCase() === policyName.toLowerCase(),
-        );
-        if (!robotCam) continue;
-        const live =
-          (robotCam.device_id &&
-            availableCameras.find((c) => c.deviceId === robotCam.device_id)) ||
-          availableCameras.find((c) => c.index === robotCam.camera_index);
-        if (live) {
-          next[policyName] = live.index;
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [policyConfig, robot, availableCameras]);
-
   const selectedRef =
     selectedStep != null
       ? checkpoints.find((c) => c.step === selectedStep)?.ref ?? null
       : null;
-
-  const expectedCameraNames = policyConfig
-    ? Object.keys(policyConfig.image_features)
-    : [];
-  const allCamerasBound = expectedCameraNames.every(
-    (name) => cameraBindings[name] != null,
-  );
 
   const canStart =
     !!robot &&
     robot.is_clean &&
     selectedRef != null &&
     !!policyConfig &&
-    allCamerasBound &&
+    cameraBindings.allBound &&
     !submitting;
 
   const handleStart = async () => {
@@ -211,27 +131,13 @@ const InferenceModal: React.FC<Props> = ({
     // same camera index via OpenCV without colliding on the device.
     setSubmitting(true);
     await new Promise((r) => setTimeout(r, 300));
-    const cameraDict: Record<string, {
-      type: string; camera_index?: number; width: number; height: number; fps?: number;
-    }> = {};
-    for (const [name, dims] of Object.entries(policyConfig.image_features)) {
-      const idx = cameraBindings[name];
-      if (idx == null) continue;
-      cameraDict[name] = {
-        type: "opencv",
-        camera_index: idx,
-        width: dims.width,
-        height: dims.height,
-        fps: DEFAULT_FPS,
-      };
-    }
     try {
       await startInference(baseUrl, fetchWithHeaders, {
         follower_port: robot.follower_port,
         follower_config: robot.follower_config,
         policy_ref: selectedRef,
         task,
-        cameras: cameraDict,
+        cameras: cameraBindings.toCameraDict(DEFAULT_FPS),
         duration_s: durationS,
       });
       onOpenChange(false);
@@ -245,11 +151,6 @@ const InferenceModal: React.FC<Props> = ({
       // Failure: bring the previews back so the user can adjust.
       setSubmitting(false);
     }
-  };
-
-  const onCameraBindingChange = (name: string, value: string) => {
-    const idx = Number(value);
-    setCameraBindings((prev) => ({ ...prev, [name]: idx }));
   };
 
   return (
@@ -374,7 +275,7 @@ const InferenceModal: React.FC<Props> = ({
                   Couldn't load policy config: {policyConfigError}
                 </AlertDescription>
               </Alert>
-            ) : !policyConfig ? null : expectedCameraNames.length === 0 ? (
+            ) : !policyConfig ? null : Object.keys(policyConfig.image_features).length === 0 ? (
               <p className="text-xs text-gray-500">
                 This policy doesn't use cameras.
               </p>
@@ -384,51 +285,13 @@ const InferenceModal: React.FC<Props> = ({
                   Bind a physical camera to each name the policy was trained
                   with. Resolution comes from the checkpoint.
                 </p>
-                {expectedCameraNames.map((name) => {
-                  const dims = policyConfig.image_features[name];
-                  const value = cameraBindings[name];
-                  const bound =
-                    value != null
-                      ? availableCameras.find((c) => c.index === value)
-                      : undefined;
-                  return (
-                    <div key={name} className="flex items-center gap-3">
-                      <div className="flex-1">
-                        <Label className="text-sm font-medium text-gray-200">
-                          {name}
-                        </Label>
-                        <p className="text-xs text-gray-500">
-                          {dims.width}×{dims.height}
-                        </p>
-                      </div>
-                      <Select
-                        value={value != null ? String(value) : undefined}
-                        onValueChange={(v) => onCameraBindingChange(name, v)}
-                      >
-                        <SelectTrigger className="bg-gray-800 border-gray-700 text-white w-56">
-                          <SelectValue placeholder="Select a camera" />
-                        </SelectTrigger>
-                        <SelectContent className="bg-gray-900 border-gray-700 text-white">
-                          {availableCameras.length === 0 ? (
-                            <div className="px-2 py-1.5 text-xs text-gray-500">
-                              No cameras detected
-                            </div>
-                          ) : (
-                            availableCameras.map((cam) => (
-                              <SelectItem
-                                key={cam.index}
-                                value={String(cam.index)}
-                              >
-                                #{cam.index} — {cam.name}
-                              </SelectItem>
-                            ))
-                          )}
-                        </SelectContent>
-                      </Select>
-                      <CameraThumbnail deviceId={bound?.deviceId ?? ""} paused={submitting} />
-                    </div>
-                  );
-                })}
+                <CameraBindings
+                  imageFeatures={policyConfig.image_features}
+                  bindings={cameraBindings.bindings}
+                  onBind={cameraBindings.bind}
+                  availableCameras={cameraBindings.availableCameras}
+                  paused={submitting}
+                />
               </div>
             )}
           </div>

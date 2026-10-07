@@ -40,11 +40,14 @@ def tmp_lerobot_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     Patches the module-level constants in `lelab.utils.config` so any code
     importing them through `from lelab.utils.config import LEADER_CONFIG_PATH`
     sees the redirected path. Also sets `HF_LEROBOT_HOME` env var for any
-    consumer (e.g. `lelab.datasets._lerobot_cache_root`) reading it directly.
+    consumer (e.g. `lelab.datasets._lerobot_cache_root`) reading it directly,
+    and patches the copies LeRobot made of it at import time.
     """
     cache = tmp_path / "lerobot"
     cache.mkdir()
     monkeypatch.setenv("HF_LEROBOT_HOME", str(cache))
+    monkeypatch.setattr("lerobot.utils.constants.HF_LEROBOT_HOME", cache)
+    monkeypatch.setattr("lerobot.datasets.dataset_metadata.HF_LEROBOT_HOME", cache)
 
     from lelab.utils import config as cfg
 

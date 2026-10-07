@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { AlertCircle, ArrowLeft, Database, Loader2, Upload } from "lucide-react";
+import { AlertCircle, ArrowLeft, Database, Disc, Loader2, Upload } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -11,9 +11,15 @@ import {
 import { Button } from "@/components/ui/button";
 import EpisodeList from "@/components/dataset/EpisodeList";
 import EpisodeViewer from "@/components/dataset/EpisodeViewer";
+import RecordingModal from "@/components/landing/RecordingModal";
 import { useDatasets } from "@/hooks/useDatasets";
 import { useEpisodeDetail, useEpisodes } from "@/hooks/useEpisodes";
+import { useRecording } from "@/hooks/useRecording";
+import { useRobots } from "@/hooks/useRobots";
 import { formatDuration } from "@/lib/datasetApi";
+
+// The robot_type LeRobot stores for the SO-101 follower.
+const FOLLOWER_ROBOT_TYPE = "so_follower";
 
 const Stat: React.FC<{ label: string; value: string }> = ({ label, value }) => (
   <span className="flex items-baseline gap-1.5">
@@ -51,6 +57,21 @@ const EditDataset = () => {
     loading: detailLoading,
     error: detailError,
   } = useEpisodeDetail(repoId, episodeIndex);
+
+  const { selectedRecord } = useRobots();
+  const recording = useRecording(selectedRecord);
+  // LeRobot only appends episodes recorded with the same robot at the same fps,
+  // and LeLab records with the SO-101 follower.
+  const appendTarget =
+    repoId && data?.success && data.fps && data.robot_type === FOLLOWER_ROBOT_TYPE
+      ? {
+          repoId,
+          numEpisodes: data.total_episodes,
+          fps: data.fps,
+          imageFeatures: data.image_features,
+        }
+      : null;
+  const lastTask = data?.episodes.at(-1)?.tasks[0] ?? "";
 
   // The URL owns which dataset/episode is open, so a reload or a pasted link
   // lands back in the same place. `api` is carried through rather than dropped:
@@ -135,6 +156,17 @@ const EditDataset = () => {
                 Upload
               </Button>
             )}
+            {appendTarget && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => recording.openToAppend(appendTarget, lastTask)}
+                className="h-9 gap-1.5 border-gray-800 bg-gray-950 text-xs text-gray-300 hover:bg-gray-900"
+              >
+                <Disc className="h-3.5 w-3.5 text-red-500" />
+                Record more
+              </Button>
+            )}
           </div>
         </div>
 
@@ -175,7 +207,7 @@ const EditDataset = () => {
               <Stat label="Frames" value={data.total_frames?.toLocaleString() ?? "—"} />
               <Stat label="FPS" value={String(data.fps ?? "—")} />
               <Stat label="Robot" value={data.robot_type ?? "—"} />
-              <Stat label="Cameras" value={data.cameras.join(", ") || "—"} />
+              <Stat label="Cameras" value={Object.keys(data.image_features).join(", ") || "—"} />
               {detail && <Stat label="This episode" value={formatDuration(detail.duration_s)} />}
             </div>
 
@@ -206,6 +238,8 @@ const EditDataset = () => {
           </>
         )}
       </div>
+
+      <RecordingModal {...recording.modalProps} />
     </div>
   );
 };

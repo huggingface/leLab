@@ -17,18 +17,22 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { AlertTriangle, CheckCircle, ChevronDown, Disc } from "lucide-react";
+import { AlertTriangle, CheckCircle, ChevronDown } from "lucide-react";
 import CameraConfiguration, {
   CameraConfig,
 } from "@/components/recording/CameraConfiguration";
 import { useHfAuth } from "@/contexts/HfAuthContext";
 import { RobotRecord } from "@/hooks/useRobots";
+import { AppendTarget } from "@/hooks/useRecording";
+import { useCameraBindings } from "@/hooks/useCameraBindings";
+import CameraBindings from "./CameraBindings";
 
 interface RecordingModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   robot: RobotRecord | null;
-  resumeRepoId: string | null;
+  appendTo: AppendTarget | null;
+  cameraBindings: ReturnType<typeof useCameraBindings>;
   datasetName: string;
   setDatasetName: (value: string) => void;
   singleTask: string;
@@ -51,7 +55,8 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
   open,
   onOpenChange,
   robot,
-  resumeRepoId,
+  appendTo,
+  cameraBindings,
   datasetName,
   setDatasetName,
   singleTask,
@@ -71,9 +76,8 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
 }) => {
   const { auth } = useHfAuth();
 
-  const resumeMode = resumeRepoId !== null;
-
-  const canStart = !!robot && robot.is_clean;
+  const canStart =
+    !!robot && robot.is_clean && (!appendTo || cameraBindings.allBound);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -85,12 +89,20 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
             </div>
           </div>
           <DialogTitle className="text-white text-center text-2xl font-bold">
-            {resumeMode ? "Continue Recording" : "Configure Recording"}
+            {appendTo ? "Record More Episodes" : "Configure Recording"}
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-6 py-4">
           <DialogDescription className="text-gray-400 text-base leading-relaxed text-center">
-            Pick a configured robot and dataset parameters for recording.
+            {appendTo ? (
+              <>
+                New episodes are added to{" "}
+                <span className="font-mono text-gray-300">{appendTo.repoId}</span>
+                , which has {appendTo.numEpisodes} so far.
+              </>
+            ) : (
+              "Pick a configured robot and dataset parameters for recording."
+            )}
           </DialogDescription>
 
           <div className="grid grid-cols-1 gap-6">
@@ -128,58 +140,46 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
               <h3 className="text-lg font-semibold text-white border-b border-gray-700 pb-2">
                 Dataset Configuration
               </h3>
-              {resumeMode && (
-                <Alert className="bg-blue-900/40 border-blue-700 text-blue-100">
-                  <Disc className="h-4 w-4" />
-                  <AlertDescription>
-                    New episodes will be appended to{" "}
-                    <strong className="font-mono">{resumeRepoId}</strong>. The
-                    setup must match the original recording exactly.
-                  </AlertDescription>
-                </Alert>
-              )}
               <div className="grid grid-cols-1 gap-4">
-                <div className="space-y-2">
-                  <Label
-                    htmlFor="datasetName"
-                    className="text-sm font-medium text-gray-300"
-                  >
-                    Dataset Name *
-                  </Label>
-                  <Input
-                    id="datasetName"
-                    value={datasetName}
-                    disabled={resumeMode}
-                    onChange={(e) =>
-                      setDatasetName(
-                        e.target.value.replace(/[^A-Za-z0-9._-]/g, "_")
-                      )
-                    }
-                    placeholder="my_dataset"
-                    className="bg-gray-800 border-gray-700 text-white disabled:opacity-60"
-                  />
-                  {!resumeMode && (
+                {!appendTo && (
+                  <div className="space-y-2">
+                    <Label
+                      htmlFor="datasetName"
+                      className="text-sm font-medium text-gray-300"
+                    >
+                      Dataset Name *
+                    </Label>
+                    <Input
+                      id="datasetName"
+                      value={datasetName}
+                      onChange={(e) =>
+                        setDatasetName(
+                          e.target.value.replace(/[^A-Za-z0-9._-]/g, "_")
+                        )
+                      }
+                      placeholder="my_dataset"
+                      className="bg-gray-800 border-gray-700 text-white"
+                    />
                     <p className="text-xs text-gray-500">
                       Letters, numbers, <code>.</code> <code>_</code>{" "}
                       <code>-</code> only — other characters become{" "}
                       <code>_</code>.
                     </p>
-                  )}
-                  {datasetName &&
-                    !resumeMode &&
-                    (auth.status === "authenticated" ? (
-                      <p className="text-xs text-gray-500">
-                        Will be saved as{" "}
-                        <span className="text-gray-300 font-mono">
-                          {auth.username}/{datasetName}
-                        </span>
-                      </p>
-                    ) : auth.status === "unauthenticated" ? (
-                      <p className="text-xs text-amber-400/80">
-                        Log in to Hugging Face to set the repository owner.
-                      </p>
-                    ) : null)}
-                </div>
+                    {datasetName &&
+                      (auth.status === "authenticated" ? (
+                        <p className="text-xs text-gray-500">
+                          Will be saved as{" "}
+                          <span className="text-gray-300 font-mono">
+                            {auth.username}/{datasetName}
+                          </span>
+                        </p>
+                      ) : auth.status === "unauthenticated" ? (
+                        <p className="text-xs text-amber-400/80">
+                          Log in to Hugging Face to set the repository owner.
+                        </p>
+                      ) : null)}
+                  </div>
+                )}
                 <div className="space-y-2">
                   <Label
                     htmlFor="singleTask"
@@ -200,7 +200,7 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
                     htmlFor="numEpisodes"
                     className="text-sm font-medium text-gray-300"
                   >
-                    {resumeMode ? "Episodes to add" : "Number of Episodes"}
+                    {appendTo ? "Episodes to Add" : "Number of Episodes"}
                   </Label>
                   <NumberInput
                     id="numEpisodes"
@@ -252,18 +252,39 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
               </div>
             </div>
 
-            <div className="space-y-3">
-              <CameraConfiguration
-                cameras={cameras}
-                onCamerasChange={setCameras}
-                releaseStreamsRef={releaseStreamsRef}
-                readOnly
-              />
-              <p className="text-xs text-gray-500">
-                These are the cameras set up for this robot. To add or change a
-                camera, configure it on the Calibration page.
-              </p>
-            </div>
+            {appendTo ? (
+              Object.keys(appendTo.imageFeatures).length > 0 && (
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold text-white border-b border-gray-700 pb-2">
+                    Cameras
+                  </h3>
+                  <p className="text-xs text-gray-500">
+                    Bind a physical camera to each camera the dataset was
+                    recorded with. Resolution comes from the dataset.
+                  </p>
+                  <CameraBindings
+                    imageFeatures={appendTo.imageFeatures}
+                    bindings={cameraBindings.bindings}
+                    onBind={cameraBindings.bind}
+                    availableCameras={cameraBindings.availableCameras}
+                    paused={false}
+                  />
+                </div>
+              )
+            ) : (
+              <div className="space-y-3">
+                <CameraConfiguration
+                  cameras={cameras}
+                  onCamerasChange={setCameras}
+                  releaseStreamsRef={releaseStreamsRef}
+                  readOnly
+                />
+                <p className="text-xs text-gray-500">
+                  These are the cameras set up for this robot. To add or change a
+                  camera, configure it on the Calibration page.
+                </p>
+              </div>
+            )}
 
             <Collapsible className="space-y-4 group">
               <CollapsibleTrigger className="flex items-center justify-between w-full text-lg font-semibold text-white border-b border-gray-700 pb-2">

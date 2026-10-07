@@ -153,7 +153,11 @@ def test_list_episodes_returns_rows(client: TestClient, browsable_dataset: str) 
     body = r.json()
     assert body["success"] is True
     assert body["fps"] == 10
-    assert body["cameras"] == ["top", "wrist"]
+    # Same shape as a checkpoint's image_features, so cameras bind the same way.
+    assert body["image_features"] == {
+        "top": {"height": 24, "width": 32},
+        "wrist": {"height": 24, "width": 32},
+    }
     assert [e["episode_index"] for e in body["episodes"]] == [0, 1, 2]
 
 

@@ -6,9 +6,12 @@ export interface JobCheckpoint {
   ref: string;
 }
 
+/** Camera name → the resolution a checkpoint was trained or a dataset recorded at. */
+export type ImageFeatures = Record<string, { height: number; width: number }>;
+
 export interface PolicyConfigSummary {
   policy_type: string | null;
-  image_features: Record<string, { height: number; width: number }>;
+  image_features: ImageFeatures;
   requires_task: boolean;
 }
 

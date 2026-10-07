@@ -27,7 +27,7 @@ function Probe({ repoId }: { repoId: string | null }) {
 function listing(repoId: string, first: number): EpisodeListResponse {
   return {
     success: true, repo_id: repoId, fps: 10, robot_type: "test",
-    total_episodes: 1, total_frames: 10, cameras: [],
+    total_episodes: 1, total_frames: 10, image_features: {},
     episodes: [{ episode_index: first, length: 10, duration_s: 1, tasks: [] }],
   };
 }

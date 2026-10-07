@@ -200,6 +200,13 @@ def handle_list_episodes(repo_id: str) -> dict[str, Any]:
             "message": f"{repo_id} has no episode index: the recording was interrupted before it finished writing.",
         }
 
+    # Video features are shaped [height, width, channels]. Recording more
+    # episodes must reuse these resolutions, as inference reuses a checkpoint's.
+    image_features = {}
+    for name in cameras:
+        height, width, _channels = info["features"][f"{episode_media.VIDEO_KEY_PREFIX}{name}"]["shape"]
+        image_features[name] = {"height": height, "width": width}
+
     return {
         "success": True,
         "repo_id": repo_id,
@@ -207,7 +214,7 @@ def handle_list_episodes(repo_id: str) -> dict[str, Any]:
         "robot_type": info.get("robot_type"),
         "total_episodes": info.get("total_episodes", len(rows)),
         "total_frames": info.get("total_frames"),
-        "cameras": cameras,
+        "image_features": image_features,
         "episodes": [
             {
                 "episode_index": r.episode_idx,
