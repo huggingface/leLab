@@ -27,7 +27,7 @@ from lerobot.utils.robot_utils import precise_sleep
 
 from . import episode_media
 from .utils.config import setup_follower_calibration_file
-from .utils.devices import safe_disconnect_device
+from .utils.devices import follower_lock, safe_disconnect_device
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +37,6 @@ replay_active = False
 replay_thread: threading.Thread | None = None
 replay_error: str | None = None
 _stop = threading.Event()
-# Guards the start path; the worker owns disconnect so stop() does not race.
-_state_lock = threading.Lock()
 
 
 class ReplayRequest(BaseModel):
@@ -64,7 +62,7 @@ def handle_start_replay(request: ReplayRequest) -> dict[str, Any]:
 
     from . import record as _record, rollout as _rollout, teleoperate as _teleoperate
 
-    with _state_lock:
+    with follower_lock:
         if replay_active:
             return {"success": False, "message": "A replay is already running"}
         if _record.recording_active:
@@ -129,10 +127,11 @@ def handle_stop_replay() -> dict[str, Any]:
 
     _stop.set()
     worker = replay_thread
-    if worker is not None and worker.is_alive():
+    if worker is not None:
         worker.join(timeout=5.0)
         if worker.is_alive():
             logger.warning("Replay worker did not exit within 5s")
+            return {"success": False, "message": "The replay has not released the arm yet"}
 
     return {"success": True, "message": "Replay stopped"}
 

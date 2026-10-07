@@ -65,6 +65,38 @@ const ReplayButton: React.FC<ReplayButtonProps> = ({ repoId, episodeIndex, onSta
     return () => clearInterval(timer);
   }, [phase, baseUrl, fetchWithHeaders, toast]);
 
+  // Back to Play only once the status poll sees the arm released.
+  const stop = async () => {
+    try {
+      const res = await apiRequest<ReplayResponse>(baseUrl, fetchWithHeaders, "/stop-replay", {
+        method: "POST",
+        action: "Stop",
+      });
+      if (!res.success) throw new Error(res.message);
+    } catch (e) {
+      toast({
+        title: "Could not stop the robot",
+        description: e instanceof Error ? e.message : String(e),
+        variant: "destructive",
+      });
+    }
+  };
+
+  // A running replay stays stoppable even once the robot is no longer selected.
+  if (phase === "playing") {
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={stop}
+        className="h-7 gap-1.5 border-red-900 bg-red-950/40 text-xs text-red-300 hover:bg-red-950 hover:text-red-200"
+      >
+        <Square className="h-3 w-3 fill-current" />
+        Stop robot
+      </Button>
+    );
+  }
+
   if (!robot?.is_clean) return null;
 
   const start = async () => {
@@ -92,33 +124,6 @@ const ReplayButton: React.FC<ReplayButtonProps> = ({ repoId, episodeIndex, onSta
       });
     }
   };
-
-  const stop = async () => {
-    try {
-      await apiRequest(baseUrl, fetchWithHeaders, "/stop-replay", { method: "POST", action: "Stop" });
-      setPhase("idle");
-    } catch (e) {
-      toast({
-        title: "Could not stop the robot",
-        description: e instanceof Error ? e.message : String(e),
-        variant: "destructive",
-      });
-    }
-  };
-
-  if (phase === "playing") {
-    return (
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={stop}
-        className="h-7 gap-1.5 border-red-900 bg-red-950/40 text-xs text-red-300 hover:bg-red-950 hover:text-red-200"
-      >
-        <Square className="h-3 w-3 fill-current" />
-        Stop robot
-      </Button>
-    );
-  }
 
   return (
     <Button

@@ -1,4 +1,4 @@
-"""Device cleanup helpers for LeRobot hardware wrappers.
+"""Device ownership and cleanup helpers for LeRobot hardware wrappers.
 
 Serial ports are a trust boundary on Windows: if a normal disconnect fails
 while disabling torque, the COM handle can stay open until the Python process
@@ -9,8 +9,13 @@ close the underlying port/cameras as a last resort.
 from __future__ import annotations
 
 import logging
+import threading
 from contextlib import suppress
 from typing import Any
+
+# Recording, teleoperation, inference and replay all drive the follower: each
+# start handler checks the others' flags and claims its own under this lock.
+follower_lock = threading.Lock()
 
 
 def safe_disconnect_device(device: Any, logger: logging.Logger, context: str = "cleanup") -> None:

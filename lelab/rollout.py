@@ -39,6 +39,7 @@ from pydantic import BaseModel, field_validator
 
 from .camera_config import lerobot_camera_settings, validate_camera_rotations
 from .utils.config import setup_follower_calibration_file
+from .utils.devices import follower_lock
 
 logger = logging.getLogger(__name__)
 
@@ -304,7 +305,7 @@ def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
     # Mutex with teleop, recording and replay: they all drive the same serial bus.
     from . import record as _record, replay as _replay, teleoperate as _teleoperate
 
-    with _state_lock:
+    with follower_lock, _state_lock:
         if _teleoperate.teleoperation_active:
             return {
                 "success": False,

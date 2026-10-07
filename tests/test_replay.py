@@ -117,6 +117,25 @@ def test_start_replay_reports_connection_failure(monkeypatch: pytest.MonkeyPatch
     assert replay.replay_active is False
 
 
+def test_stop_reports_a_replay_that_still_holds_the_arm(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+
+    import lelab.replay as replay
+
+    class _StuckWorker:
+        def join(self, timeout: float) -> None:
+            pass
+
+        def is_alive(self) -> bool:
+            return True
+
+    monkeypatch.setattr(replay, "replay_active", True)
+    monkeypatch.setattr(replay, "replay_thread", _StuckWorker())
+    monkeypatch.setattr(replay, "_stop", threading.Event())
+
+    assert replay.handle_stop_replay()["success"] is False
+
+
 def test_stop_replay_when_idle() -> None:
     from lelab.replay import handle_stop_replay
 
