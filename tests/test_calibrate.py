@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 
@@ -82,6 +84,198 @@ def test_calibration_manager_get_status_when_idle_returns_status_object() -> Non
     s = mgr.get_status()
     assert isinstance(s, CalibrationStatus)
     assert s.status == "idle"
+
+
+def test_get_status_does_not_read_motor_bus_while_recording() -> None:
+    """Status polling only returns the cache populated by the recording worker."""
+    from lelab.calibrate import CalibrationManager
+
+    class Bus:
+        def __init__(self) -> None:
+            self.sync_read_calls = 0
+
+        def sync_read(self, *_args, **_kwargs):
+            self.sync_read_calls += 1
+            raise AssertionError("get_status must not access the motor bus")
+
+    class Device:
+        def __init__(self) -> None:
+            self.bus = Bus()
+            self.is_connected = True
+
+    mgr = CalibrationManager()
+    mgr.device = Device()
+    mgr.status.status = "recording"
+    mgr.status.recorded_ranges = {
+        "joint": {"min": 100, "max": 300, "current": 200},
+    }
+
+    status = mgr.get_status()
+
+    assert mgr.device.bus.sync_read_calls == 0
+    assert status.recorded_ranges["joint"] == {"min": 100, "max": 300, "current": 200}
+
+
+def test_get_status_returns_independent_recorded_ranges_snapshot() -> None:
+    """A returned status snapshot does not change when the worker publishes again."""
+    from lelab.calibrate import CalibrationManager
+
+    mgr = CalibrationManager()
+    mgr.status.status = "recording"
+    mgr.status.recorded_ranges = {
+        "joint": {"min": 100, "max": 200, "current": 150},
+    }
+    mgr._mins = {"joint": 100}
+    mgr._maxes = {"joint": 300}
+
+    status = mgr.get_status()
+    mgr._cache_recorded_ranges({"joint": 250})
+
+    assert status.recorded_ranges["joint"] == {"min": 100, "max": 200, "current": 150}
+    assert mgr.get_status().recorded_ranges["joint"] == {
+        "min": 100,
+        "max": 300,
+        "current": 250,
+    }
+
+
+def test_status_polling_does_not_wait_for_recording_bus_read() -> None:
+    """A slow recording read does not block status polling."""
+    from lelab.calibrate import CalibrationManager
+
+    read_started = threading.Event()
+    release_read = threading.Event()
+    status_returned = threading.Event()
+
+    class Bus:
+        def __init__(self) -> None:
+            self.read_count = 0
+
+        def sync_read(self, *_args, **_kwargs):
+            self.read_count += 1
+            if self.read_count == 1:
+                return {"joint": 100}
+            read_started.set()
+            assert release_read.wait(timeout=10)
+            return {"joint": 300}
+
+    class Device:
+        def __init__(self) -> None:
+            self.bus = Bus()
+            self.is_connected = True
+
+    mgr = CalibrationManager()
+    mgr.device = Device()
+
+    recorder = threading.Thread(target=mgr._step_range_recording)
+    recorder.start()
+    assert read_started.wait(timeout=2)
+
+    polled_status = []
+
+    def poll_status() -> None:
+        polled_status.append(mgr.get_status())
+        status_returned.set()
+
+    poller = threading.Thread(target=poll_status)
+    poller.start()
+
+    try:
+        assert status_returned.wait(timeout=2)
+        assert polled_status[0].status == "recording"
+    finally:
+        mgr._step_complete.set()
+        release_read.set()
+        poller.join(timeout=2)
+        recorder.join(timeout=2)
+
+    assert not poller.is_alive()
+    assert not recorder.is_alive()
+    assert mgr.get_status().recorded_ranges["joint"] == {
+        "min": 100,
+        "max": 300,
+        "current": 300,
+    }
+
+
+def test_recorded_ranges_cache_does_not_publish_after_recording_stops() -> None:
+    """An in-flight read cannot publish stale UI data after recording stops."""
+    from lelab.calibrate import CalibrationManager
+
+    mgr = CalibrationManager()
+    mgr.status.status = "stopping"
+    mgr.status.recorded_ranges = {
+        "joint": {"min": 100, "max": 200, "current": 150},
+    }
+    mgr._mins = {"joint": 100}
+    mgr._maxes = {"joint": 300}
+
+    mgr._cache_recorded_ranges({"joint": 300})
+
+    assert mgr.get_status().recorded_ranges["joint"] == {
+        "min": 100,
+        "max": 200,
+        "current": 150,
+    }
+
+
+def test_status_polling_does_not_read_bus_during_calibration_write() -> None:
+    """Final calibration writes and status polling must not share the motor bus."""
+    from lelab.calibrate import CalibrationManager
+
+    write_started = threading.Event()
+    release_write = threading.Event()
+
+    class Motor:
+        id = 1
+        model = "sts3215"
+
+    class Bus:
+        def __init__(self) -> None:
+            self.motors = {"joint": Motor()}
+            self.sync_read_calls = 0
+
+        def sync_read(self, *_args, **_kwargs):
+            self.sync_read_calls += 1
+            return {"joint": 200}
+
+        def write_calibration(self, _calibration) -> None:
+            write_started.set()
+            assert release_write.wait(timeout=2)
+
+    class Device:
+        def __init__(self) -> None:
+            self.bus = Bus()
+            self.is_connected = True
+            self.calibration_fpath = "test.json"
+            self.calibration = None
+
+        def _save_calibration(self) -> None:
+            pass
+
+    mgr = CalibrationManager()
+    mgr.device = Device()
+    mgr.status.status = "recording"
+    mgr.status.recorded_ranges = {
+        "joint": {"min": 100, "max": 300, "current": 200},
+    }
+    mgr._homing_offsets = {"joint": 0}
+    mgr._mins = {"joint": 100}
+    mgr._maxes = {"joint": 300}
+
+    writer = threading.Thread(target=mgr._complete_calibration)
+    writer.start()
+    assert write_started.wait(timeout=2)
+
+    try:
+        status = mgr.get_status()
+        assert status.status == "recording"
+        assert mgr.device.bus.sync_read_calls == 0
+    finally:
+        release_write.set()
+        writer.join(timeout=2)
+
+    assert not writer.is_alive()
 
 
 def test_calibration_manager_rejects_double_start_via_message() -> None:

@@ -23,6 +23,7 @@ import logging
 import threading
 import time
 import traceback
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -123,50 +124,9 @@ class CalibrationManager:
     def get_status(self) -> CalibrationStatus:
         """Get current calibration status"""
         with self._status_lock:
-            # Update current positions if we're recording and device is connected
-            if self.status.status == "recording" and self.device and self.device.is_connected:
-                try:
-                    # Try reading positions with quick retry on port contention
-                    positions = None
-                    for attempt in range(2):  # Quick retry for status updates
-                        try:
-                            positions = self.device.bus.sync_read("Present_Position", normalize=False)
-                            break
-                        except Exception as read_error:
-                            if "Port is in use" in str(read_error) and attempt < 1:
-                                time.sleep(0.005)  # Very short delay
-                                continue
-                            else:
-                                raise read_error
-
-                    if positions:
-                        # Update recorded ranges
-                        if not self.status.recorded_ranges:
-                            self.status.recorded_ranges = {}
-
-                        for motor, pos in positions.items():
-                            # Filter out invalid readings (0, negative, or extreme values)
-                            if not _is_valid_position(pos):
-                                continue  # Skip invalid readings
-
-                            if motor not in self.status.recorded_ranges:
-                                self.status.recorded_ranges[motor] = {"min": pos, "max": pos, "current": pos}
-                            else:
-                                self.status.recorded_ranges[motor]["current"] = pos
-                                self.status.recorded_ranges[motor]["min"] = min(
-                                    self.status.recorded_ranges[motor]["min"], pos
-                                )
-                                self.status.recorded_ranges[motor]["max"] = max(
-                                    self.status.recorded_ranges[motor]["max"], pos
-                                )
-                except Exception as e:
-                    # Reduce log spam by using debug level for expected port contention
-                    if "Port is in use" in str(e):
-                        logger.debug(f"Port busy during position read: {e}")
-                    else:
-                        logger.warning(f"Failed to read positions: {e}")
-
-            return self.status
+            # Return a snapshot so status serialization cannot race with
+            # range updates from the calibration worker.
+            return deepcopy(self.status)
 
     def _update_status(self, **kwargs):
         """Update calibration status thread-safely"""
@@ -174,6 +134,25 @@ class CalibrationManager:
             for key, value in kwargs.items():
                 if hasattr(self.status, key):
                     setattr(self.status, key, value)
+
+    def _cache_recorded_ranges(self, positions: dict[str, float]) -> None:
+        """Update cached range data for status polling."""
+        # Build the update outside the lock to keep status polling responsive.
+        updates = {
+            motor: {
+                "min": self._mins[motor],
+                "max": self._maxes[motor],
+                "current": pos,
+            }
+            for motor, pos in positions.items()
+            if motor in self._mins
+        }
+        with self._status_lock:
+            if self.status.status != "recording":
+                return
+            recorded_ranges = dict(self.status.recorded_ranges or {})
+            recorded_ranges.update(updates)
+            self.status.recorded_ranges = recorded_ranges
 
     def start_calibration(self, request: CalibrationRequest) -> dict[str, Any]:
         """Start calibration process"""
@@ -450,6 +429,9 @@ class CalibrationManager:
                             if motor in self._mins:
                                 self._mins[motor] = min(self._mins[motor], pos)
                                 self._maxes[motor] = max(self._maxes[motor], pos)
+
+                        # Update cached ranges for the status endpoint.
+                        self._cache_recorded_ranges(valid_positions)
 
                 time.sleep(0.05)  # 20Hz update rate
             except CalibrationDiscontinuityError:
