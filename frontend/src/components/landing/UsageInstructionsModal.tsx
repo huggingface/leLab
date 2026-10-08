@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Terminal, ExternalLink, Copy, Check } from "lucide-react";
 
 const ONE_LINER =
-  "uv tool install git+https://github.com/huggingface/leLab.git && lelab";
+  "uv tool install --with-executables-from huggingface_hub git+https://github.com/huggingface/leLab.git && lelab";
 const LOCAL_URL = "http://localhost:8000/";
 
 interface UsageInstructionsModalProps {

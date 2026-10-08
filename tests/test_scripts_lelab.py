@@ -280,6 +280,8 @@ def test_dev_launcher_builds_expected_subprocess_commands(
     monkeypatch.setattr(launcher, "_start_process", fake_start_process)
     monkeypatch.setattr(launcher, "_install_signal_handlers", lambda: None)
     monkeypatch.setattr(launcher, "_monitor_processes", stop_after_start)
+    # FakeProcess.pid is a real PID on the host; never signal it on shutdown.
+    monkeypatch.setattr(launcher, "_terminate_tree", lambda _pid, _timeout=5: None)
     monkeypatch.setattr(launcher.webbrowser, "open", browser_open)
 
     with pytest.raises(SystemExit) as exc:

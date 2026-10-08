@@ -190,3 +190,61 @@ def test_unrecoverable_dataset_reports_instead_of_hitting_the_hub(tmp_lerobot_ho
 
     with pytest.raises(DatasetRepairError, match="Re-record it"):
         repair_local_dataset(REPO_ID)
+
+
+def test_repaired_image_stats_use_the_episode_video_chunk(tmp_lerobot_home: Path) -> None:
+    """Repeated file names across chunks must not change retained image statistics."""
+    from lelab.dataset_repair import repair_local_dataset
+    from lerobot.datasets import LeRobotDataset
+
+    video_key = "observation.images.cam"
+    features = {
+        "action": {"dtype": "float32", "shape": (2,), "names": ["a", "b"]},
+        "observation.state": {"dtype": "float32", "shape": (2,), "names": ["a", "b"]},
+        video_key: {"dtype": "video", "shape": (32, 32, 3), "names": ["h", "w", "c"]},
+    }
+
+    def record_chunks(repo_id: str, episodes: int) -> Path:
+        dataset = LeRobotDataset.create(repo_id, fps=FPS, features=features, use_videos=True)
+        # Exercise the real writer's rollover without a large recording.
+        dataset.meta.info["chunks_size"] = 1
+        dataset.meta.info["video_files_size_in_mb"] = 0.001
+        for episode in range(episodes):
+            for frame in range(FRAMES):
+                values = np.full(2, episode * FRAMES + frame, dtype=np.float32)
+                dataset.add_frame(
+                    {
+                        "action": values,
+                        "observation.state": values,
+                        "task": "repair me",
+                        video_key: np.full((32, 32, 3), 30 + 90 * episode, dtype=np.uint8),
+                    }
+                )
+            dataset.save_episode()
+        dataset.finalize()
+        return dataset.root
+
+    broken = record_chunks(REPO_ID, 3)
+    reference = record_chunks("repair_test/chunk_reference", 2)
+    video_paths = sorted((broken / "videos" / video_key).rglob("*.mp4"))
+    assert [path.parent.name for path in video_paths] == ["chunk-000", "chunk-001", "chunk-002"]
+    assert all(path.name == "file-000.mp4" for path in video_paths)
+    shutil.rmtree(broken / "meta" / "episodes")
+    video_paths[-1].unlink()
+
+    message = repair_local_dataset(REPO_ID)
+    assert message is not None
+    assert "Recovered 2 episode(s)" in message
+    repaired = LeRobotDataset(REPO_ID, video_backend="pyav")
+    assert repaired.num_episodes == 2
+    assert repaired.num_frames == 2 * FRAMES
+    assert float(repaired[0][video_key].mean()) < float(repaired[FRAMES][video_key].mean())
+
+    repaired_stats = json.loads((broken / "meta" / "stats.json").read_text())[video_key]
+    reference_stats = json.loads((reference / "meta" / "stats.json").read_text())[video_key]
+    assert repaired_stats.keys() == reference_stats.keys()
+    # Repair decodes lossy AV1 video; recording statistics use the source pixels.
+    for name in reference_stats:
+        if name != "count":
+            np.testing.assert_allclose(repaired_stats[name], reference_stats[name], atol=0.01)
+    np.testing.assert_array_equal(repaired_stats["count"], reference_stats["count"])

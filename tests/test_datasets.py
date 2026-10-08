@@ -135,6 +135,180 @@ def test_list_all_datasets_merges_hub_and_local(
     assert by_id["alice/aloha"]["source"] == "hub"
 
 
+def test_merge_local_datasets_creates_new_dataset_without_touching_sources(
+    tmp_lerobot_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lelab import datasets as datasets_mod
+
+    from .test_dataset_repair import _record
+
+    _record("alice/first", video=False, episodes=1)
+    _record("bob/second", video=False, episodes=1)
+    calls = []
+
+    class FakeDataset:
+        def __init__(self, repo_id: str, root: Path) -> None:
+            self.repo_id = repo_id
+            self.root = root
+
+    class FakeMergedDataset:
+        num_episodes = 7
+        num_frames = 70
+
+    def fake_merge(datasets, output_repo_id: str, output_dir: Path):
+        calls.append((datasets, output_repo_id, output_dir))
+        (output_dir / "meta").mkdir(parents=True)
+        (output_dir / "meta" / "info.json").write_text("{}")
+        return FakeMergedDataset()
+
+    monkeypatch.setattr(datasets_mod, "LeRobotDataset", FakeDataset)
+    monkeypatch.setattr(datasets_mod, "merge_datasets", fake_merge)
+
+    result = datasets_mod.handle_merge_local_datasets(["alice/first", "bob/second"], "combined")
+
+    assert result == {"success": True, "repo_id": "local/combined", "num_episodes": 7, "total_frames": 70}
+    assert [dataset.repo_id for dataset in calls[0][0]] == ["alice/first", "bob/second"]
+    assert calls[0][1] == "local/combined"
+    assert (tmp_lerobot_home / "local" / "combined" / "meta" / "info.json").is_file()
+    assert (tmp_lerobot_home / "alice" / "first" / "meta" / "info.json").is_file()
+    assert (tmp_lerobot_home / "bob" / "second" / "meta" / "info.json").is_file()
+
+
+def test_merge_local_datasets_repairs_an_interrupted_source_before_opening(
+    tmp_lerobot_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A recorded-but-unfinalized source must stay local when it is merged."""
+    from lelab import datasets as datasets_mod
+
+    from .test_dataset_repair import _record
+
+    first = _record("alice/first", video=False, episodes=1)
+    _record("bob/second", video=False, episodes=1)
+    # This is the on-disk state an interrupted recording leaves behind. With
+    # LeRobot v0.6.0, opening it before repair would fall through to the Hub.
+    import shutil
+
+    shutil.rmtree(first / "meta" / "episodes")
+
+    class FakeDataset:
+        def __init__(self, repo_id: str, root: Path) -> None:
+            assert (root / "meta" / "episodes").is_dir()
+            self.repo_id = repo_id
+
+    class FakeMergedDataset:
+        num_episodes = 4
+        num_frames = 4
+
+    def fake_merge(datasets, output_repo_id: str, output_dir: Path):
+        (output_dir / "meta").mkdir(parents=True)
+        (output_dir / "meta" / "info.json").write_text("{}")
+        return FakeMergedDataset()
+
+    monkeypatch.setattr(datasets_mod, "LeRobotDataset", FakeDataset)
+    monkeypatch.setattr(datasets_mod, "merge_datasets", fake_merge)
+
+    result = datasets_mod.handle_merge_local_datasets(["alice/first", "bob/second"], "combined")
+
+    assert result["success"] is True
+    assert (first / "meta" / "episodes").is_dir()
+
+
+def test_merge_local_datasets_reports_unrepairable_source(
+    tmp_lerobot_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lelab import datasets as datasets_mod
+    from lelab.dataset_repair import DatasetRepairError
+
+    monkeypatch.setattr(
+        datasets_mod,
+        "repair_local_dataset",
+        lambda _repo_id: (_ for _ in ()).throw(DatasetRepairError("Re-record it")),
+    )
+
+    with pytest.raises(ValueError, match="Re-record it"):
+        datasets_mod.handle_merge_local_datasets(["alice/first", "bob/second"], "combined")
+
+
+@pytest.mark.parametrize(
+    ("source_repo_ids", "output_name", "message"),
+    [
+        (["alice/first"], "combined", "at least two"),
+        (["alice/first", "alice/first"], "combined", "only once"),
+        (["alice/first", "bob/second"], "not/a-name", "Output name"),
+    ],
+)
+def test_merge_local_datasets_rejects_invalid_request(
+    tmp_lerobot_home: Path, source_repo_ids: list[str], output_name: str, message: str
+) -> None:
+    from lelab.datasets import handle_merge_local_datasets
+
+    with pytest.raises(ValueError, match=message):
+        handle_merge_local_datasets(source_repo_ids, output_name)
+
+
+def test_merge_local_datasets_rejects_existing_output(tmp_lerobot_home: Path) -> None:
+    from lelab.datasets import handle_merge_local_datasets
+
+    _make_dataset(tmp_lerobot_home, "local/combined")
+    with pytest.raises(ValueError, match="already exists"):
+        handle_merge_local_datasets(["alice/first", "bob/second"], "combined")
+
+
+def test_merge_local_datasets_cleans_staging_output_on_failure(
+    tmp_lerobot_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lelab import datasets as datasets_mod
+
+    from .test_dataset_repair import _record
+
+    _record("alice/first", video=False, episodes=1)
+    _record("bob/second", video=False, episodes=1)
+    monkeypatch.setattr(datasets_mod, "LeRobotDataset", lambda repo_id, root: object())
+
+    def failing_merge(datasets, output_repo_id: str, output_dir: Path):
+        output_dir.mkdir(parents=True)
+        raise RuntimeError("incompatible features")
+
+    monkeypatch.setattr(datasets_mod, "merge_datasets", failing_merge)
+
+    with pytest.raises(RuntimeError, match="incompatible features"):
+        datasets_mod.handle_merge_local_datasets(["alice/first", "bob/second"], "combined")
+
+    assert not (tmp_lerobot_home / "local" / "combined").exists()
+    assert not list((tmp_lerobot_home / "local").glob(".combined.merge-*"))
+    assert (tmp_lerobot_home / "alice" / "first" / "meta" / "info.json").is_file()
+    assert (tmp_lerobot_home / "bob" / "second" / "meta" / "info.json").is_file()
+
+
+def test_merge_route_returns_result_and_maps_validation_error(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lelab import datasets as datasets_mod
+
+    monkeypatch.setattr(
+        datasets_mod,
+        "handle_merge_local_datasets",
+        lambda source_repo_ids, output_name: {
+            "success": True,
+            "repo_id": "local/combined",
+            "num_episodes": 3,
+            "total_frames": 30,
+        },
+    )
+    response = client.post(
+        "/datasets/merge", json={"source_repo_ids": ["alice/one", "alice/two"], "output_name": "combined"}
+    )
+    assert response.status_code == 200
+    assert response.json()["repo_id"] == "local/combined"
+
+    monkeypatch.setattr(
+        datasets_mod, "handle_merge_local_datasets", lambda *_: (_ for _ in ()).throw(ValueError("bad input"))
+    )
+    response = client.post("/datasets/merge", json={"source_repo_ids": [], "output_name": "combined"})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "bad input"
+
+
 # ── episode browsing ────────────────────────────────────────────────────────
 #
 # The handlers are covered end-to-end through the routes, so the query-param

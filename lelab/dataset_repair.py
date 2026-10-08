@@ -177,11 +177,12 @@ def _episode_video_frames(root: Path, video_key: str, row: dict[str, Any]) -> "n
 
     from lerobot.datasets.compute_stats import sample_indices
 
+    chunk_index = row[f"videos/{video_key}/chunk_index"]
     file_index = row[f"videos/{video_key}/file_index"]
     start = row[f"videos/{video_key}/from_timestamp"]
     end = row[f"videos/{video_key}/to_timestamp"]
 
-    path = next((root / "videos" / video_key).rglob(f"*file-{file_index:03d}.mp4"))
+    path = root / "videos" / video_key / f"chunk-{chunk_index:03d}" / f"file-{file_index:03d}.mp4"
     with av.open(str(path)) as container:
         frames = [
             frame

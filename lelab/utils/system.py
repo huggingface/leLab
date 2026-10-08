@@ -192,13 +192,23 @@ def handle_install_wandb_extra_status() -> dict[str, Any]:
 # Some LeRobot policies import an optional extra at construction time; training
 # (or inference) otherwise dies with a buried ImportError once the subprocess is
 # already running. Map each such policy to the module we probe and the
-# ``pip install lerobot[extra]`` target. Policies not listed (act, vqbet, tdmpc,
-# sac, reward_classifier) need nothing extra.
+# ``pip install lerobot[extra]`` target. Policies not listed (act, vqbet, tdmpc)
+# need nothing extra.
 POLICY_EXTRAS: dict[str, tuple[str, str]] = {
     # policy_type: (probe_module, install_target)
     "smolvla": ("transformers", "lerobot[smolvla]"),
     "pi0": ("transformers", "lerobot[pi]"),
     "pi0_fast": ("transformers", "lerobot[pi]"),
+    "pi05": ("transformers", "lerobot[pi]"),
+    "xvla": ("transformers", "lerobot[xvla]"),
+    "evo1": ("transformers", "lerobot[evo1]"),
+    "eo1": ("qwen_vl_utils", "lerobot[eo1]"),
+    "vla_jepa": ("qwen_vl_utils", "lerobot[vla_jepa]"),
+    "molmoact2": ("peft", "lerobot[molmoact2]"),
+    "wall_x": ("torchdiffeq", "lerobot[wallx]"),
+    "multi_task_dit": ("diffusers", "lerobot[multi_task_dit]"),
+    "fastwam": ("diffusers", "lerobot[fastwam]"),
+    "lingbot_va": ("diffusers", "lerobot[lingbot_va]"),
     "diffusion": ("diffusers", "lerobot[diffusion]"),
     # groot pulls in peft (LoRA), diffusers, timm, dm-tree and decord; peft is a
     # reliable, cross-platform stand-in for "the lerobot[groot] extra is present".

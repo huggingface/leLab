@@ -142,14 +142,15 @@ def _build_update_cmd(owner: str, repo: str) -> list[str]:
 
     - Standard install is `uv tool install`: update the tool in place with
       `--force`, which re-fetches the latest commit even though the version
-      string is unchanged.
+      string is unchanged. `--with-executables-from huggingface_hub` keeps
+      `hf` on PATH, since uv only links the tool's own scripts by default.
     - uv venv install: `uv pip install` pinned to this interpreter (uv venvs
       ship no pip), matching the extra-install flow in utils/system.py.
     - Plain pip env: `python -m pip install`.
     """
     target = f"git+https://github.com/{owner}/{repo}.git"
     if shutil.which("uv") and _is_uv_tool_install():
-        return ["uv", "tool", "install", "--force", target]
+        return ["uv", "tool", "install", "--force", "--with-executables-from", "huggingface_hub", target]
     flags = ["--upgrade", "--force-reinstall", target]
     if shutil.which("uv"):
         return ["uv", "pip", "install", "--python", sys.executable, *flags]

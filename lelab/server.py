@@ -135,6 +135,11 @@ class StartTrainingBody(BaseModel):
         return cls(config=TrainingRequest.model_validate(raw))
 
 
+class MergeDatasetsRequest(BaseModel):
+    source_repo_ids: list[str]
+    output_name: str
+
+
 # Cache for HF Jobs hardware flavors (5-minute TTL)
 _flavors_cache: dict = {"data": None, "fetched_at": 0.0}
 _FLAVOR_CACHE_TTL_SECONDS = 300.0
@@ -389,6 +394,15 @@ def datasets_list(scope: str = "all"):
     if scope == "local":
         return dataset_browser.list_local_datasets_with_source()
     return dataset_browser.list_all_datasets()
+
+
+@app.post("/datasets/merge")
+def merge_local_datasets(request: MergeDatasetsRequest):
+    """Merge two or more local datasets into a new local dataset."""
+    try:
+        return dataset_browser.handle_merge_local_datasets(request.source_repo_ids, request.output_name)
+    except (DatasetNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/dataset-episodes")

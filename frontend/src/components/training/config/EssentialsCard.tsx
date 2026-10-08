@@ -90,14 +90,22 @@ const EssentialsCard: React.FC<EssentialsCardProps> = ({ config, updateConfig, d
               <SelectContent className="bg-slate-800 border-slate-600 text-white">
                 <SelectItem value="act">ACT (Action Chunking Transformer)</SelectItem>
                 <SelectItem value="diffusion">Diffusion Policy</SelectItem>
+                <SelectItem value="multi_task_dit">Multi-Task DiT</SelectItem>
                 <SelectItem value="pi0">PI0</SelectItem>
+                <SelectItem value="pi0_fast">PI0 Fast</SelectItem>
+                <SelectItem value="pi05">PI0.5</SelectItem>
                 <SelectItem value="smolvla">SmolVLA</SelectItem>
                 <SelectItem value="groot">GR00T N1.7</SelectItem>
+                <SelectItem value="xvla">X-VLA</SelectItem>
+                <SelectItem value="wall_x">WALL-OSS</SelectItem>
+                <SelectItem value="eo1">EO-1</SelectItem>
+                <SelectItem value="evo1">Evo-1</SelectItem>
+                <SelectItem value="molmoact2">MolmoAct2</SelectItem>
+                <SelectItem value="vla_jepa">VLA-JEPA</SelectItem>
+                <SelectItem value="fastwam">FastWAM</SelectItem>
+                <SelectItem value="lingbot_va">LingBot-VA</SelectItem>
                 <SelectItem value="tdmpc">TD-MPC</SelectItem>
                 <SelectItem value="vqbet">VQ-BeT</SelectItem>
-                <SelectItem value="pi0_fast">PI0 Fast</SelectItem>
-                <SelectItem value="sac">SAC</SelectItem>
-                <SelectItem value="reward_classifier">Reward Classifier</SelectItem>
               </SelectContent>
             </Select>
           </div>

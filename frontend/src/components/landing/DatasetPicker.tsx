@@ -19,8 +19,8 @@ interface DatasetPickerProps {
   datasets: DatasetItem[];
   loading: boolean;
   onPickExisting: (item: DatasetItem) => void;
-  onCreateNew: (name: string) => void;
-  onOpenCustom: (repoId: string) => void;
+  onCreateNew?: (name: string) => void;
+  onOpenCustom?: (repoId: string) => void;
   children: React.ReactNode;
 }
 
@@ -44,8 +44,8 @@ const DatasetPicker: React.FC<DatasetPickerProps> = ({
   );
   const isRepoId = REPO_ID_RE.test(trimmed);
   const isName = NAME_RE.test(trimmed) && !trimmed.includes("/");
-  const canCreate = trimmed.length > 0 && isName && !matchesExisting;
-  const canOpenCustom = isRepoId && !matchesExisting;
+  const canCreate = !!onCreateNew && trimmed.length > 0 && isName && !matchesExisting;
+  const canOpenCustom = !!onOpenCustom && isRepoId && !matchesExisting;
 
   const createDisabled = matchesExisting || (trimmed !== "" && !canCreate);
   const createLabel = matchesExisting
@@ -58,7 +58,7 @@ const DatasetPicker: React.FC<DatasetPickerProps> = ({
 
   const handleFooterCreate = () => {
     if (createDisabled) return;
-    onCreateNew(trimmed);
+    onCreateNew?.(trimmed);
     reset();
   };
 
@@ -77,13 +77,13 @@ const DatasetPicker: React.FC<DatasetPickerProps> = ({
 
   const handleCreate = () => {
     if (!canCreate) return;
-    onCreateNew(trimmed);
+    onCreateNew?.(trimmed);
     reset();
   };
 
   const handleOpenCustom = () => {
     if (!canOpenCustom) return;
-    onOpenCustom(trimmed);
+    onOpenCustom?.(trimmed);
     reset();
   };
 
@@ -113,7 +113,7 @@ const DatasetPicker: React.FC<DatasetPickerProps> = ({
       >
         <Command className="bg-gray-800">
           <CommandInput
-            placeholder="Search, type a new name, or org/name…"
+            placeholder={onCreateNew ? "Search, type a new name, or org/name…" : "Search datasets…"}
             value={query}
             onValueChange={(v) => setQuery(v.replace(/[^A-Za-z0-9._\-/]/g, "_"))}
             onKeyDown={(e) => {
@@ -133,7 +133,9 @@ const DatasetPicker: React.FC<DatasetPickerProps> = ({
               <CommandEmpty className="py-4 text-sm text-gray-400 text-center">
                 {loading
                   ? "Loading datasets…"
-                  : "No datasets yet. Type a name to create one."}
+                  : onCreateNew
+                    ? "No datasets yet. Type a name to create one."
+                    : "No datasets available."}
               </CommandEmpty>
             )}
             {localDatasets.length > 0 && (
@@ -159,15 +161,17 @@ const DatasetPicker: React.FC<DatasetPickerProps> = ({
               </CommandGroup>
             )}
           </CommandList>
-          <button
-            type="button"
-            onClick={handleFooterCreate}
-            disabled={createDisabled}
-            className="flex w-full items-center gap-2 border-t border-gray-700 px-3 py-2 text-sm text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:text-gray-500 disabled:hover:bg-transparent"
-          >
-            <Plus className="h-4 w-4" />
-            {createLabel}
-          </button>
+          {onCreateNew && (
+            <button
+              type="button"
+              onClick={handleFooterCreate}
+              disabled={createDisabled}
+              className="flex w-full items-center gap-2 border-t border-gray-700 px-3 py-2 text-sm text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:text-gray-500 disabled:hover:bg-transparent"
+            >
+              <Plus className="h-4 w-4" />
+              {createLabel}
+            </button>
+          )}
         </Command>
       </PopoverContent>
     </Popover>
