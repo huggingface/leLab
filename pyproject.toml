@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+requires = ["setuptools>=64", "wheel", "setuptools_scm[toml]>=6.2", "nodejs-wheel-binaries>=22.12"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -36,6 +36,10 @@ test = [
 
 [project.scripts]
 lelab = "lelab.scripts.lelab:main"
+
+[tool.setuptools]
+# Ship only the package-data below: the frontend sources are build inputs, not runtime files.
+include-package-data = false
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -101,7 +105,6 @@ asyncio_mode = "auto"
 
 [tool.typos]
 files.extend-exclude = [
-    "frontend/dist/**",
     "frontend/.gitattributes",
 ]
 

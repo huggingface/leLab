@@ -54,7 +54,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-          lfs: true
 
       # lerobot is a transitive dep that needs these native libs at install /
       # import time. List taken from LeRobot's fast_tests.yml.

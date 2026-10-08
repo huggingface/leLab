@@ -15,7 +15,7 @@
 """
 LeLab launcher.
 
-Default mode starts FastAPI on :8000 and serves the committed frontend/dist
+Default mode starts FastAPI on :8000 and serves the built frontend/dist
 bundle from the same process. Dev mode starts Vite on :8080 and uvicorn
 --reload on :8000.
 """

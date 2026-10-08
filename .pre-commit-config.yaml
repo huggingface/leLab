@@ -15,8 +15,6 @@
 default_language_version:
     python: python3.12
 
-exclude: '^frontend/dist/'
-
 repos:
   ##### Meta #####
   - repo: meta

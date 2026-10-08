@@ -4,7 +4,6 @@ on:
     branches: [main]
     paths:
       - 'frontend/**'
-      - '!frontend/dist/**'
       - '.github/workflows/sync_space.yml'
   workflow_dispatch:
 
@@ -16,16 +15,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          lfs: true
           persist-credentials: false
-      - name: Push frontend/ (without dist/) to Hugging Face Space
+      - name: Push frontend/ to Hugging Face Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           cd frontend
-          # The Space builds its own bundle via Docker; dist/ would be
-          # rejected by HF's pre-receive hook for containing raw binaries.
-          rm -rf dist
+          # HF's pre-receive hook rejects raw binaries, so the meshes go back to LFS.
+          echo 'public/so-101-urdf/meshes/*.stl filter=lfs diff=lfs merge=lfs -text' >> .gitattributes
           git init -b main
           git config user.email "ci@huggingface.co"
           git config user.name "GitHub CI"

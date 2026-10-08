@@ -78,18 +78,7 @@ PRs welcome. Hot-reload mode for working on the code:
 lelab --dev
 ```
 
-Vite on `:8080`, uvicorn `--reload` on `:8000`.
-
-For frontend changes, use Node.js 22 and rebuild the bundle before submitting your PR:
-
-```bash
-cd frontend
-npm ci
-npm run build
-git add dist
-```
-
-Commit `frontend/dist` alongside the source changes. Python installations serve this bundle; the required Quality check verifies that it is up to date.
+Vite on `:8080`, uvicorn `--reload` on `:8000`. Installing LeLab builds the frontend bundle, so PRs never include `frontend/dist`.
 
 <div align="center">
 <sub>Originally hacked together by <a href="https://www.linkedin.com/posts/nicolas-rabault-_lerobot-hackathon-lerobot-ugcPost-7341065019368828930-jTnl/">Team LeLab at the 2025 LeRobot Worldwide Hackathon 🏆</a>, now maintained by the <a href="https://huggingface.co/lerobot">LeRobot</a> team at <a href="https://huggingface.co">Hugging Face</a> with ❤️</sub>

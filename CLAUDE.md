@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 LeLab is a FastAPI + React web interface wrapping the [LeRobot](https://github.com/huggingface/lerobot) framework for the SO-101 leader/follower arm. It exposes teleoperation, dataset recording, calibration, replay, and training as HTTP/WebSocket endpoints, replacing LeRobot's CLI + keyboard-driven flows.
 
-The frontend (React + Vite) lives in [`frontend/`](frontend/). The built bundle in [`frontend/dist/`](frontend/dist/) is committed and shipped inside the Python wheel as package data (`frontend.__init__.py` makes setuptools treat it as a package); [`lelab/server.py`](lelab/server.py) mounts it as `StaticFiles` at `/` so a single `lelab` process serves both API and UI on `:8000`. The `frontend/` directory is also force-pushed to the [LeLab HF Space](https://huggingface.co/spaces/lerobot/LeLab) by [`.github/workflows/sync_space.yml`](.github/workflows/sync_space.yml) — that's a separate runtime; the Space builds the [Dockerfile](frontend/Dockerfile) (which runs `npm run build` again, so committed `dist/` doesn't matter to it).
+The frontend (React + Vite) lives in [`frontend/`](frontend/). The bundle in `frontend/dist/` is not committed: [setup.py](setup.py) builds it while building the wheel, with Node from the `nodejs-wheel-binaries` build requirement, and ships it as package data (`frontend.__init__.py` makes setuptools treat it as a package); [`lelab/server.py`](lelab/server.py) mounts it as `StaticFiles` at `/` so a single `lelab` process serves both API and UI on `:8000`. The `frontend/` directory is also force-pushed to the [LeLab HF Space](https://huggingface.co/spaces/lerobot/LeLab) by [`.github/workflows/sync_space.yml`](.github/workflows/sync_space.yml) — that's a separate runtime; the Space builds the [Dockerfile](frontend/Dockerfile) (which runs `npm run build` itself).
 
 ## Common commands
 
@@ -25,7 +25,7 @@ lelab          # uvicorn on :8000, serves built frontend at /, opens browser
 lelab --dev    # spawns Vite dev (:8080) + uvicorn --reload (:8000), opens browser to :8080
 ```
 
-Frontend PRs must include the rebuilt `frontend/dist/` bundle: use Node.js 22 and run `cd frontend && npm ci && npm run build`, then commit `dist/` alongside the source changes. The required [Quality workflow](.github/workflows/quality.yml) rebuilds and rejects stale bundles before merge. `lelab --dev` serves directly from Vite, so development itself needs no rebuild.
+Editable installs skip the frontend build: `lelab --dev` serves directly from Vite, and `lelab --rebuild` builds `frontend/dist/` with your local Node.js 22 when you want to try the production bundle. The SO-101 meshes in `frontend/public/` are kept out of LFS because installing from git does not fetch LFS files.
 
 Run the Python tests with `pytest` (config in [pyproject.toml](pyproject.toml); install dev deps via `pip install -e ".[test]"`). Tests live in [tests/](tests/) and cover request schemas, pure helpers, and idle/mutex branches of the feature handlers — subprocess/thread happy paths and HF Jobs integration are deliberately not unit-tested. Lint with `ruff check` / `ruff format` (config in [pyproject.toml](pyproject.toml)). There is no Python build step; for end-to-end validation, run `lelab` and exercise endpoints (curl or via the frontend).
 

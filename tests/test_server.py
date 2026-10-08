@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -81,28 +82,35 @@ def test_delete_calibration_config_rejects_unsafe_name(client: TestClient, unsaf
     assert "Invalid configuration name" in body["message"]
 
 
-def _spa_mounted(client: TestClient) -> bool:
-    return any(getattr(route, "name", None) == "frontend" for route in client.app.routes)
+@pytest.fixture
+def spa_client(tmp_path: Path) -> TestClient:
+    """Serves a stand-in frontend build, since editable installs do not build frontend/dist."""
+    from fastapi import FastAPI
+
+    from lelab.server import SPAStaticFiles
+
+    (tmp_path / "index.html").write_text("<!doctype html><html></html>")
+    app = FastAPI()
+    app.mount("/", SPAStaticFiles(directory=tmp_path, html=True))
+    return TestClient(app)
 
 
-def test_spa_deep_link_serves_index_html(client: TestClient) -> None:
+def test_spa_deep_link_serves_index_html(spa_client: TestClient) -> None:
     """A browser hard-reload of a client-side route returns the SPA shell, not a 404."""
-    if not _spa_mounted(client):
-        pytest.skip("frontend/dist not built; SPA not mounted")
-    response = client.get("/recording", headers=BROWSER_ACCEPT)
+    response = spa_client.get("/recording", headers=BROWSER_ACCEPT)
     assert response.status_code == 200
     assert response.text.lstrip().lower().startswith("<!doctype html")
 
 
-def test_spa_fallback_does_not_mask_api_404(client: TestClient) -> None:
+def test_spa_fallback_does_not_mask_api_404(spa_client: TestClient) -> None:
     """Non-HTML clients (XHR, curl, API typos) still get a real 404, not the SPA shell."""
-    response = client.get("/recording", headers={"accept": "application/json"})
+    response = spa_client.get("/recording", headers={"accept": "application/json"})
     assert response.status_code == 404
 
 
-def test_spa_fallback_respects_explicit_html_refusal(client: TestClient) -> None:
+def test_spa_fallback_respects_explicit_html_refusal(spa_client: TestClient) -> None:
     """`text/html;q=0` is an explicit refusal — it must not get the SPA shell."""
-    response = client.get("/recording", headers={"accept": "application/json,text/html;q=0"})
+    response = spa_client.get("/recording", headers={"accept": "application/json,text/html;q=0"})
     assert response.status_code == 404
 
 
