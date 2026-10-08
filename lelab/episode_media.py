@@ -85,8 +85,8 @@ def lerobot_cache_root() -> Path:
     return (Path(hf_home).expanduser() / "lerobot").resolve()
 
 
-def resolve_dataset_dir(repo_id: str) -> Path:
-    """Resolve ``repo_id`` to a local dataset directory.
+def _cache_path(repo_id: str) -> Path:
+    """Resolve ``repo_id`` inside the cache root, whether or not it exists.
 
     Rejects path traversal the same way ``handle_delete_dataset`` does: the
     resolved target must stay strictly inside the cache root. ``repo_id`` comes
@@ -100,6 +100,12 @@ def resolve_dataset_dir(repo_id: str) -> Path:
         raise DatasetNotFoundError(f"Invalid dataset path: {repo_id}") from e
     if target == root or root not in target.parents:
         raise DatasetNotFoundError(f"Invalid dataset path: {repo_id}")
+    return target
+
+
+def resolve_dataset_dir(repo_id: str) -> Path:
+    """Resolve ``repo_id`` to an existing local dataset directory."""
+    target = _cache_path(repo_id)
     if not (target / "meta" / "info.json").is_file():
         raise DatasetNotFoundError(f"Dataset not found locally: {repo_id}")
     return target
@@ -227,11 +233,12 @@ def ensure_episode_index(repo_id: str) -> None:
     it (power cut, kill -9) has none. LeRobot then takes the dataset for one not
     downloaded yet and asks the Hub, which 404s for a dataset never pushed.
     """
+    # Checked before the Hub fallback, so an id escaping the cache never
+    # reaches LeRobot, whether or not something exists at its target.
+    dataset_dir = _cache_path(repo_id)
     # Not in the local cache: LeRobot fetches it from the Hub.
-    if not (lerobot_cache_root() / repo_id / "meta" / "info.json").is_file():
+    if not (dataset_dir / "meta" / "info.json").is_file():
         return
-    # Raises for a repo_id that escapes the cache, so it never reaches LeRobot.
-    dataset_dir = resolve_dataset_dir(repo_id)
     if not read_episode_index(dataset_dir):
         raise UnreadableDatasetError(
             f"{repo_id} has no readable episodes, most likely because its recording was "

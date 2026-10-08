@@ -213,12 +213,20 @@ def test_ensure_episode_index_leaves_absent_dataset_to_lerobot(tmp_lerobot_home:
     ensure_episode_index("acme/on-the-hub")
 
 
-def test_ensure_episode_index_refuses_a_dataset_outside_the_cache(tmp_lerobot_home: Path) -> None:
+@pytest.mark.parametrize(
+    "repo_id", ["../outside/ds", "../outside/absent", "{outside}/outside/ds", ".", "acme/link"]
+)
+def test_ensure_episode_index_refuses_ids_escaping_the_cache(tmp_lerobot_home: Path, repo_id: str) -> None:
+    """Even when nothing exists there, an escaping id must not reach LeRobot."""
     from lelab.episode_media import DatasetNotFoundError, ensure_episode_index
 
-    _write_dataset(tmp_lerobot_home.parent, "outside/ds", episodes=[(0, 4)], cameras=())
+    outside = tmp_lerobot_home.parent
+    _write_dataset(outside, "outside/ds", episodes=[(0, 4)], cameras=())
+    (tmp_lerobot_home / "acme").mkdir()
+    (tmp_lerobot_home / "acme" / "link").symlink_to(outside / "elsewhere")
+
     with pytest.raises(DatasetNotFoundError, match="Invalid dataset path"):
-        ensure_episode_index("../outside/ds")
+        ensure_episode_index(repo_id.format(outside=outside))
 
 
 @pytest.mark.parametrize("damage", ["missing", "no_footer"])
