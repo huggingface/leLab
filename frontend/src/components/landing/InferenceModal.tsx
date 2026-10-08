@@ -172,6 +172,10 @@ const InferenceModal: React.FC<Props> = ({
             Pick a checkpoint and confirm hardware. The selected policy will
             drive the follower autonomously for the configured duration.
           </DialogDescription>
+          <p className="text-xs text-gray-500 text-center -mt-3">
+            Running a plugin policy? Its package must be installed alongside
+            lelab, or the run will fail to load the policy.
+          </p>
 
           <div className="space-y-4">
             <h3 className="text-lg font-semibold text-white border-b border-gray-700 pb-2">
