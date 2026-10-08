@@ -140,10 +140,8 @@ def test_merge_local_datasets_creates_new_dataset_without_touching_sources(
 ) -> None:
     from lelab import datasets as datasets_mod
 
-    from .test_dataset_repair import _record
-
-    _record("alice/first", video=False, episodes=1)
-    _record("bob/second", video=False, episodes=1)
+    _write_dataset(tmp_lerobot_home, "alice/first", episodes=[(0, 4)], cameras=())
+    _write_dataset(tmp_lerobot_home, "bob/second", episodes=[(0, 4)], cameras=())
     calls = []
 
     class FakeDataset:
@@ -174,59 +172,16 @@ def test_merge_local_datasets_creates_new_dataset_without_touching_sources(
     assert (tmp_lerobot_home / "bob" / "second" / "meta" / "info.json").is_file()
 
 
-def test_merge_local_datasets_repairs_an_interrupted_source_before_opening(
-    tmp_lerobot_home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A recorded-but-unfinalized source must stay local when it is merged."""
-    from lelab import datasets as datasets_mod
+def test_merge_local_datasets_reports_unreadable_source(tmp_lerobot_home: Path) -> None:
+    """A recording interrupted before finalize has no episode index; LeRobot
+    would take it for a Hub dataset and 404."""
+    from lelab.datasets import handle_merge_local_datasets
 
-    from .test_dataset_repair import _record
+    _write_dataset(tmp_lerobot_home, "alice/first", episodes=[(0, 4)], cameras=())
+    _make_dataset(tmp_lerobot_home, "bob/second")
 
-    first = _record("alice/first", video=False, episodes=1)
-    _record("bob/second", video=False, episodes=1)
-    # This is the on-disk state an interrupted recording leaves behind. With
-    # LeRobot v0.6.0, opening it before repair would fall through to the Hub.
-    import shutil
-
-    shutil.rmtree(first / "meta" / "episodes")
-
-    class FakeDataset:
-        def __init__(self, repo_id: str, root: Path) -> None:
-            assert (root / "meta" / "episodes").is_dir()
-            self.repo_id = repo_id
-
-    class FakeMergedDataset:
-        num_episodes = 4
-        num_frames = 4
-
-    def fake_merge(datasets, output_repo_id: str, output_dir: Path):
-        (output_dir / "meta").mkdir(parents=True)
-        (output_dir / "meta" / "info.json").write_text("{}")
-        return FakeMergedDataset()
-
-    monkeypatch.setattr(datasets_mod, "LeRobotDataset", FakeDataset)
-    monkeypatch.setattr(datasets_mod, "merge_datasets", fake_merge)
-
-    result = datasets_mod.handle_merge_local_datasets(["alice/first", "bob/second"], "combined")
-
-    assert result["success"] is True
-    assert (first / "meta" / "episodes").is_dir()
-
-
-def test_merge_local_datasets_reports_unrepairable_source(
-    tmp_lerobot_home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from lelab import datasets as datasets_mod
-    from lelab.dataset_repair import DatasetRepairError
-
-    monkeypatch.setattr(
-        datasets_mod,
-        "repair_local_dataset",
-        lambda _repo_id: (_ for _ in ()).throw(DatasetRepairError("Re-record it")),
-    )
-
-    with pytest.raises(ValueError, match="Re-record it"):
-        datasets_mod.handle_merge_local_datasets(["alice/first", "bob/second"], "combined")
+    with pytest.raises(ValueError, match="bob/second has no readable episodes"):
+        handle_merge_local_datasets(["alice/first", "bob/second"], "combined")
 
 
 @pytest.mark.parametrize(
@@ -259,10 +214,8 @@ def test_merge_local_datasets_cleans_staging_output_on_failure(
 ) -> None:
     from lelab import datasets as datasets_mod
 
-    from .test_dataset_repair import _record
-
-    _record("alice/first", video=False, episodes=1)
-    _record("bob/second", video=False, episodes=1)
+    _write_dataset(tmp_lerobot_home, "alice/first", episodes=[(0, 4)], cameras=())
+    _write_dataset(tmp_lerobot_home, "bob/second", episodes=[(0, 4)], cameras=())
     monkeypatch.setattr(datasets_mod, "LeRobotDataset", lambda repo_id, root: object())
 
     def failing_merge(datasets, output_repo_id: str, output_dir: Path):

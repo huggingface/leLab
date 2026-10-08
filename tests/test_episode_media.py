@@ -201,6 +201,47 @@ def test_read_episode_index_empty_when_meta_missing(tmp_lerobot_home: Path) -> N
     assert read_episode_index(d) == []
 
 
+def test_ensure_episode_index_accepts_finalized_dataset(dataset: str) -> None:
+    from lelab.episode_media import ensure_episode_index
+
+    ensure_episode_index(dataset)
+
+
+def test_ensure_episode_index_leaves_absent_dataset_to_lerobot(tmp_lerobot_home: Path) -> None:
+    from lelab.episode_media import ensure_episode_index
+
+    ensure_episode_index("acme/on-the-hub")
+
+
+def test_ensure_episode_index_refuses_a_dataset_outside_the_cache(tmp_lerobot_home: Path) -> None:
+    from lelab.episode_media import DatasetNotFoundError, ensure_episode_index
+
+    _write_dataset(tmp_lerobot_home.parent, "outside/ds", episodes=[(0, 4)], cameras=())
+    with pytest.raises(DatasetNotFoundError, match="Invalid dataset path"):
+        ensure_episode_index("../outside/ds")
+
+
+@pytest.mark.parametrize("damage", ["missing", "no_footer"])
+def test_ensure_episode_index_rejects_unfinalized_recording(
+    tmp_lerobot_home: Path, dataset: str, damage: str
+) -> None:
+    """A recording killed before finalize has no index, or one without its
+    parquet footer. LeRobot would take either for a Hub dataset and 404."""
+    import shutil
+
+    from lelab.episode_media import UnreadableDatasetError, ensure_episode_index
+
+    episodes_dir = tmp_lerobot_home / dataset / "meta" / "episodes"
+    if damage == "missing":
+        shutil.rmtree(episodes_dir)
+    else:
+        index = episodes_dir / "chunk-000" / "file-000.parquet"
+        index.write_bytes(index.read_bytes()[:-8])
+
+    with pytest.raises(UnreadableDatasetError, match="record it again"):
+        ensure_episode_index(dataset)
+
+
 # ── video location ──────────────────────────────────────────────────────────
 
 

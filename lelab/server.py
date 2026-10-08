@@ -1386,7 +1386,7 @@ async def shutdown_event():
     """Clean up resources when FastAPI shuts down"""
     logger.info("🔄 FastAPI shutting down, cleaning up...")
 
-    # Stop any active recording - handled by recording module cleanup
+    _record.stop_recording_and_wait()
 
     if manager:
         manager.stop_broadcast_thread()

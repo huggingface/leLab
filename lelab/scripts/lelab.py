@@ -362,12 +362,20 @@ def _run_prod(*, no_open: bool = False, rebuild: bool = False) -> None:
         def _shutdown(_signum, _frame) -> None:
             logger.info("Shutting down LeLab...")
             try:
-                for child in psutil.Process().children(recursive=True):
-                    with contextlib.suppress(psutil.NoSuchProcess):
-                        child.terminate()
-            except Exception:
-                pass
-            os._exit(0)
+                # os._exit skips uvicorn's shutdown hook, which is what saves
+                # an active recording. Imported here: Ctrl+C can land while the
+                # server is still loading.
+                from lelab.record import stop_recording_and_wait
+
+                stop_recording_and_wait()
+            finally:
+                try:
+                    for child in psutil.Process().children(recursive=True):
+                        with contextlib.suppress(psutil.NoSuchProcess):
+                            child.terminate()
+                except Exception:
+                    pass
+                os._exit(0)
 
         signal.signal(signal.SIGINT, _shutdown)
         for _name in ("SIGTERM", "SIGBREAK"):
@@ -417,6 +425,10 @@ def _run_dev(*, no_open: bool = False) -> None:
                 "--port",
                 str(BACKEND_PORT),
                 "--reload",
+                # Same as prod: an open /camera-feed stream would otherwise
+                # hold off the shutdown hook that saves an active recording.
+                "--timeout-graceful-shutdown",
+                "2",
             ],
             PROJECT_ROOT,
             env=os.environ.copy(),

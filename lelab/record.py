@@ -31,7 +31,7 @@ from lerobot.robots.so_follower import SO101FollowerConfig
 from lerobot.scripts.lerobot_record import RecordConfig
 from lerobot.teleoperators.so_leader import SO101LeaderConfig
 
-from .dataset_repair import DatasetRepairError, repair_local_dataset
+from .episode_media import UnreadableDatasetError, ensure_episode_index
 from .utils.config import setup_calibration_files, with_lelab_tag
 from .utils.devices import safe_disconnect_device
 
@@ -277,7 +277,7 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
         if not request.resume and request.dataset_repo_id:
             request.dataset_repo_id = f"{request.dataset_repo_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         if request.resume:
-            repair_local_dataset(request.dataset_repo_id)
+            ensure_episode_index(request.dataset_repo_id)
 
         logger.info(f"Starting recording for dataset: {request.dataset_repo_id}")
         logger.info(f"Task: {request.single_task}")
@@ -403,6 +403,27 @@ def handle_stop_recording() -> dict[str, Any]:
         "message": "Recording stop requested successfully",
         "session_ending": True,
     }
+
+
+def stop_recording_and_wait() -> None:
+    """Stop the active session and wait for it to finalize its dataset.
+
+    The worker is a daemon thread, so a server exiting mid-session kills it
+    before finalize(): the data file and episode index stay unreadable and the
+    whole session is lost.
+    """
+    thread = recording_thread
+    if thread is None or not thread.is_alive():
+        return
+    handle_stop_recording()
+    # Covers finalize() encoding any videos still queued.
+    timeout_s = 60
+    logger.info("Saving the recording before exiting (up to %ds)...", timeout_s)
+    thread.join(timeout_s)
+    if thread.is_alive():
+        logger.error(
+            "Recording did not finish saving in time; %s may be unreadable", recording_config.dataset_repo_id
+        )
 
 
 def handle_exit_early() -> dict[str, Any]:
@@ -575,7 +596,7 @@ def handle_get_dataset_info(request: DatasetInfoRequest) -> dict[str, Any]:
     try:
         from lerobot.datasets import LeRobotDataset
 
-        repair_local_dataset(request.dataset_repo_id)
+        ensure_episode_index(request.dataset_repo_id)
 
         dataset = LeRobotDataset(request.dataset_repo_id)
         return {
@@ -588,8 +609,8 @@ def handle_get_dataset_info(request: DatasetInfoRequest) -> dict[str, Any]:
             "total_frames": dataset.num_frames,
             "robot_type": getattr(dataset.meta, "robot_type", "Unknown robot"),
         }
-    except DatasetRepairError as e:
-        logger.warning(f"Could not repair local dataset {request.dataset_repo_id}: {e}")
+    except UnreadableDatasetError as e:
+        logger.warning(str(e))
         return {"success": False, "message": str(e)}
 
     except Exception as e:
@@ -691,7 +712,7 @@ def handle_upload_dataset(request: UploadRequest) -> dict[str, Any]:
         # Import LeRobotDataset to load and upload the dataset
         from lerobot.datasets import LeRobotDataset
 
-        repair_local_dataset(request.dataset_repo_id)
+        ensure_episode_index(request.dataset_repo_id)
 
         logger.info(f"Loading dataset {request.dataset_repo_id} for upload")
 
@@ -714,7 +735,7 @@ def handle_upload_dataset(request: UploadRequest) -> dict[str, Any]:
             "num_episodes": dataset.num_episodes,
         }
 
-    except DatasetRepairError as e:
+    except UnreadableDatasetError as e:
         logger.error(f"Cannot upload {request.dataset_repo_id}: {e}")
         return {"success": False, "message": str(e)}
 
@@ -885,7 +906,9 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
         # devices come up, while the user is still moving into position.
         settled_in = False
 
-        while saved_episodes < cfg.dataset.num_episodes:
+        # Checked up front too: each phase clears exit_early as it starts, so a
+        # Stop sent during device setup would otherwise sit out a full reset.
+        while saved_episodes < cfg.dataset.num_episodes and not web_events["stop_recording"]:
             if not settled_in and cfg.dataset.reset_time_s > 0:
                 settled_in = True
                 current_phase = "resetting"
@@ -952,6 +975,11 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
                 web_events["rerecord_episode"] = False
                 web_events["exit_early"] = False
                 dataset.clear_episode_buffer()
+
+                # Stop mid-episode lands here too: drop the take, but there is
+                # no next episode to reset for.
+                if web_events["stop_recording"]:
+                    break
 
                 # Go through reset phase before re-recording (don't increment episode counters)
                 # RESET PHASE - without dataset (matches original record.py exactly)

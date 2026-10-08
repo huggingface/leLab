@@ -59,6 +59,10 @@ class EpisodeNotFoundError(LookupError):
     """The requested episode/camera/frame combination doesn't exist on disk."""
 
 
+class UnreadableDatasetError(Exception):
+    """A local dataset LeRobot cannot open: it has no readable episode index."""
+
+
 # ── dataset resolution ──────────────────────────────────────────────────────
 
 
@@ -214,6 +218,25 @@ def read_episode_index(dataset_dir: Path) -> list[EpisodeIndexRow]:
 
     rows.sort(key=lambda r: r.episode_idx)
     return rows
+
+
+def ensure_episode_index(repo_id: str) -> None:
+    """Raise when a local dataset has no episode index LeRobot can read.
+
+    LeRobot writes that index in ``finalize()``, so a recording killed before
+    it (power cut, kill -9) has none. LeRobot then takes the dataset for one not
+    downloaded yet and asks the Hub, which 404s for a dataset never pushed.
+    """
+    # Not in the local cache: LeRobot fetches it from the Hub.
+    if not (lerobot_cache_root() / repo_id / "meta" / "info.json").is_file():
+        return
+    # Raises for a repo_id that escapes the cache, so it never reaches LeRobot.
+    dataset_dir = resolve_dataset_dir(repo_id)
+    if not read_episode_index(dataset_dir):
+        raise UnreadableDatasetError(
+            f"{repo_id} has no readable episodes, most likely because its recording was "
+            "interrupted. Delete it and record it again."
+        )
 
 
 # ── video location ──────────────────────────────────────────────────────────

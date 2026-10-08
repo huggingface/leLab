@@ -60,6 +60,42 @@ def test_handle_stop_recording_when_idle_returns_dict(tmp_lerobot_home) -> None:
     assert isinstance(result, dict)
 
 
+def test_stop_recording_and_wait_when_idle_returns() -> None:
+    from lelab.record import stop_recording_and_wait
+
+    stop_recording_and_wait()
+
+
+def test_stop_recording_and_wait_lets_the_session_finalize(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Server shutdown must end the session through its teardown, not kill it."""
+    import threading
+    import time
+    from types import SimpleNamespace
+
+    from lelab import record
+
+    events = {"stop_recording": False, "exit_early": False}
+    finalized = threading.Event()
+
+    def session() -> None:
+        while not events["stop_recording"]:
+            time.sleep(0.01)
+        finalized.set()
+
+    thread = threading.Thread(target=session, daemon=True)
+    monkeypatch.setattr(record, "recording_active", True)
+    monkeypatch.setattr(record, "recording_events", events)
+    monkeypatch.setattr(record, "recording_thread", thread)
+    monkeypatch.setattr(record, "recording_config", SimpleNamespace(dataset_repo_id="local/x"))
+    monkeypatch.setattr(record, "current_phase", "recording")
+    monkeypatch.setattr(record, "phase_start_time", None)
+    thread.start()
+
+    record.stop_recording_and_wait()
+
+    assert finalized.is_set()
+
+
 def test_resolve_dataset_dir_rejects_traversal(tmp_lerobot_home) -> None:
     from lelab.record import _resolve_dataset_dir
 
@@ -300,6 +336,29 @@ def test_build_camera_configs_skips_non_opencv_type() -> None:
     assert configs == {}
 
 
+EPISODES = 2
+
+
+def _record(repo_id: str):
+    """Write a small finished LeRobot dataset and return its root."""
+    import numpy as np
+
+    from lerobot.datasets import LeRobotDataset
+
+    features = {
+        "action": {"dtype": "float32", "shape": (2,), "names": ["a", "b"]},
+        "observation.state": {"dtype": "float32", "shape": (2,), "names": ["a", "b"]},
+    }
+    dataset = LeRobotDataset.create(repo_id, fps=10, features=features, use_videos=False)
+    for _ in range(EPISODES):
+        for frame in range(5):
+            values = np.full(2, frame, dtype=np.float32)
+            dataset.add_frame({"action": values, "observation.state": values, "task": "pick"})
+        dataset.save_episode()
+    dataset.finalize()
+    return dataset.root
+
+
 def _resume_request(repo_id: str):
     from lelab.record import RecordingRequest
 
@@ -319,9 +378,8 @@ def test_resume_reopens_the_dataset_in_the_local_cache(
 ) -> None:
     import lelab.record as record
     from lerobot.datasets import LeRobotDataset
-    from tests.test_dataset_repair import EPISODES, _record
 
-    _record("local/ds", video=False)
+    _record("local/ds")
     monkeypatch.setattr(record, "setup_calibration_files", lambda leader, follower: ("leader", "follower"))
 
     config = record.create_record_config(_resume_request("local/ds"))
@@ -329,13 +387,12 @@ def test_resume_reopens_the_dataset_in_the_local_cache(
     assert dataset.meta.total_episodes == EPISODES
 
 
-def test_resume_refuses_an_unrecoverable_dataset_before_the_robot(
+def test_resume_refuses_an_unreadable_dataset_before_the_robot(
     tmp_lerobot_home, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import lelab.record as record
-    from tests.test_dataset_repair import _record
 
-    root = _record("local/ds", video=False)
+    root = _record("local/ds")
     shutil.rmtree(root / "meta" / "episodes")
     for path in (root / "data").rglob("*.parquet"):
         path.write_bytes(b"PAR1 truncated")
@@ -345,5 +402,5 @@ def test_resume_refuses_an_unrecoverable_dataset_before_the_robot(
 
     result = record.handle_start_recording(_resume_request("local/ds"))
     assert result["success"] is False
-    assert "Re-record it" in result["message"]
+    assert "record it again" in result["message"]
     assert record.recording_active is False

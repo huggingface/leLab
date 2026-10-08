@@ -54,6 +54,18 @@ def test_app_exposes_required_endpoints() -> None:
     assert not missing, f"missing routes: {missing}"
 
 
+def test_shutdown_lets_an_active_recording_finalize(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without this the daemon recording thread dies unfinalized on Ctrl+C."""
+    from lelab import record
+    from lelab.server import app
+
+    stop = MagicMock()
+    monkeypatch.setattr(record, "stop_recording_and_wait", stop)
+    with TestClient(app):
+        stop.assert_not_called()
+    stop.assert_called_once_with()
+
+
 def test_health_endpoint_returns_200(client: TestClient) -> None:
     response = client.get("/health")
     assert response.status_code == 200

@@ -27,7 +27,6 @@ from lerobot.datasets import LeRobotDataset
 from lerobot.datasets.dataset_tools import merge_datasets
 
 from . import episode_media
-from .dataset_repair import DatasetRepairError, repair_local_dataset
 from .utils.hf_auth import cached_whoami, shared_hf_api
 
 logger = logging.getLogger(__name__)
@@ -203,13 +202,10 @@ def handle_merge_local_datasets(source_repo_ids: list[str], output_name: str) ->
     if output_dir.exists():
         raise ValueError(f"A local dataset already exists at {output_repo_id}")
 
-    # An interrupted local recording can have data and info.json but no episode
-    # index. LeRobot then treats it as absent and attempts a Hub lookup, so make
-    # each source readable before constructing a dataset from its local path.
     try:
         for repo_id in source_repo_ids:
-            repair_local_dataset(repo_id)
-    except DatasetRepairError as exc:
+            episode_media.ensure_episode_index(repo_id)
+    except episode_media.UnreadableDatasetError as exc:
         raise ValueError(str(exc)) from exc
 
     source_dirs = [episode_media.resolve_dataset_dir(repo_id) for repo_id in source_repo_ids]
