@@ -579,7 +579,14 @@ def _list_imported_hub(api, repo_id: str) -> list[JobCheckpoint]:
     return []
 
 
-_LANGUAGE_CONDITIONED_POLICY_TYPES = {"smolvla", "pi0", "pi0_fast", "pi05"}
+# Policies known to ignore the task string. Everything else (including plugin
+# policies we can't enumerate) gets the task field, since an unused task is
+# harmless but a missing one makes a language-conditioned policy unusable.
+_TASK_FREE_POLICY_TYPES = {"act", "diffusion", "vqbet", "tdmpc", "sac"}
+
+
+def _policy_requires_task(policy_type: object) -> bool:
+    return policy_type not in _TASK_FREE_POLICY_TYPES
 
 
 _HUB_CKPT_REF_RE = re.compile(r"^(?P<repo>[^@]+)@checkpoints/(?P<step_dir>\d+)$")
@@ -1086,7 +1093,7 @@ class JobRegistry:
         return {
             "policy_type": policy_type,
             "image_features": image_features,
-            "requires_task": policy_type in _LANGUAGE_CONDITIONED_POLICY_TYPES,
+            "requires_task": _policy_requires_task(policy_type),
         }
 
     def delete(self, job_id: str) -> None:

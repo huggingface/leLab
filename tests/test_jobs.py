@@ -271,3 +271,17 @@ def test_register_imported_hub_repo(monkeypatch, tmp_path) -> None:
     assert rec.output_dir == ""
     cks = reg.list_checkpoints(rec.id)
     assert [c.ref for c in cks] == ["user/some-model@root"]
+
+
+@pytest.mark.parametrize("policy_type", ["act", "diffusion", "vqbet", "tdmpc", "sac"])
+def test_policy_requires_task_false_for_task_free_policies(policy_type: str) -> None:
+    from lelab.jobs import _policy_requires_task
+
+    assert _policy_requires_task(policy_type) is False
+
+
+@pytest.mark.parametrize("policy_type", ["smolvla", "pi0", "pi05", "groot", "xvla", "some_plugin", None])
+def test_policy_requires_task_true_for_language_or_unknown_policies(policy_type: object) -> None:
+    from lelab.jobs import _policy_requires_task
+
+    assert _policy_requires_task(policy_type) is True
