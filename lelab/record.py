@@ -703,8 +703,8 @@ def handle_delete_dataset(request: DatasetInfoRequest) -> dict[str, Any]:
         except RepositoryNotFoundError:
             pass
         except Exception as e:
-            logger.error(f"Failed to delete {repo_id} from the Hub: {e}")
-            return {"success": False, "message": f"Failed to delete dataset from the Hub: {e}"}
+            logger.error(f"Hub deletion of {repo_id} failed: {e}")
+            return {"success": False, "message": f"Could not remove the dataset on the Hub: {e}"}
 
     try:
         shutil.rmtree(target)
