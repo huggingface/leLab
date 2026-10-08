@@ -3,8 +3,8 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useToast } from "@/hooks/use-toast";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useToast } from "@/hooks/use-toast";
 import {
   ArrowLeft,
   Upload as UploadIcon,
@@ -20,16 +20,7 @@ import {
 } from "lucide-react";
 import { useApi } from "@/contexts/ApiContext";
 import { DatasetSource } from "@/lib/replayApi";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import DeleteDatasetDialog from "@/components/dataset/DeleteDatasetDialog";
 
 interface DatasetInfo {
   dataset_repo_id: string;
@@ -71,9 +62,6 @@ const Upload = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [deleteFromHub, setDeleteFromHub] = useState(false);
-  const [deleteConfirmText, setDeleteConfirmText] = useState("");
 
   // Load actual dataset information from backend
   React.useEffect(() => {
@@ -227,47 +215,6 @@ const Upload = () => {
     navigate("/");
   };
 
-  const handleDeleteDataset = async () => {
-    if (!datasetInfo) return;
-    setIsDeleting(true);
-    try {
-      const response = await fetchWithHeaders(`${baseUrl}/delete-dataset`, {
-        method: "POST",
-        body: JSON.stringify({
-          dataset_repo_id: datasetInfo.dataset_repo_id,
-          delete_from_hub: deleteFromHub,
-        }),
-      });
-      const data = await response.json();
-      if (response.ok && data.success) {
-        toast({
-          title: "Dataset Deleted",
-          description: deleteFromHub
-            ? `${datasetInfo.dataset_repo_id} has been removed from disk and the Hub.`
-            : `${datasetInfo.dataset_repo_id} has been removed from disk.`,
-        });
-        navigate("/");
-      } else {
-        toast({
-          title: "Delete Failed",
-          description: data.message || "Could not delete the dataset.",
-          variant: "destructive",
-        });
-      }
-    } catch (error) {
-      toast({
-        title: "Connection Error",
-        description: "Could not connect to the backend server.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsDeleting(false);
-      setShowDeleteConfirm(false);
-      setDeleteFromHub(false);
-      setDeleteConfirmText("");
-    }
-  };
-
   // Show loading state while fetching dataset info
   if (isLoadingDatasetInfo || !datasetInfo) {
     return (
@@ -300,7 +247,6 @@ const Upload = () => {
               onClick={() => setShowDeleteConfirm(true)}
               variant="outline"
               size="icon"
-              disabled={isDeleting}
               aria-label="Delete dataset from disk"
               className="border-red-500/40 text-red-400 hover:border-red-400 hover:text-red-300 hover:bg-red-500/10"
             >
@@ -545,66 +491,13 @@ const Upload = () => {
         )}
       </div>
 
-      <AlertDialog
+      <DeleteDatasetDialog
+        repoId={datasetInfo.dataset_repo_id}
+        onHub={isAlreadyOnHub}
         open={showDeleteConfirm}
-        onOpenChange={(open) => {
-          setShowDeleteConfirm(open);
-          if (!open) {
-            setDeleteFromHub(false);
-            setDeleteConfirmText("");
-          }
-        }}
-      >
-        <AlertDialogContent className="bg-gray-900 border-gray-700 text-white">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete dataset from disk?</AlertDialogTitle>
-            <AlertDialogDescription className="text-gray-400">
-              This permanently removes <span className="font-mono text-white">{datasetInfo.dataset_repo_id}</span> from your local cache. This action cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          {isAlreadyOnHub && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id="delete-from-hub"
-                  checked={deleteFromHub}
-                  onCheckedChange={(checked) => setDeleteFromHub(checked === true)}
-                />
-                <Label htmlFor="delete-from-hub" className="text-sm text-gray-300">
-                  Also delete this dataset from the HuggingFace Hub
-                </Label>
-              </div>
-              {deleteFromHub && (
-                <div className="space-y-1">
-                  <Label className="text-xs text-gray-400">
-                    Type <span className="font-mono text-white">{datasetInfo.dataset_repo_id}</span> to confirm
-                  </Label>
-                  <Input
-                    value={deleteConfirmText}
-                    onChange={(e) => setDeleteConfirmText(e.target.value)}
-                    className="bg-gray-800 border-gray-700 text-white"
-                  />
-                </div>
-              )}
-            </div>
-          )}
-          <AlertDialogFooter>
-            <AlertDialogCancel className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700">
-              Keep dataset
-            </AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleDeleteDataset}
-              disabled={
-                isDeleting ||
-                (deleteFromHub && deleteConfirmText !== datasetInfo.dataset_repo_id)
-              }
-              className="bg-red-500 hover:bg-red-600 text-white"
-            >
-              {isDeleting ? "Deleting…" : "Delete"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        onOpenChange={setShowDeleteConfirm}
+        onDeleted={() => navigate("/")}
+      />
     </div>
   );
 };

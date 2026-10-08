@@ -14,6 +14,7 @@ import { useRobots } from "@/hooks/useRobots";
 import { useDatasets } from "@/hooks/useDatasets";
 import { useRecording } from "@/hooks/useRecording";
 import { DatasetItem } from "@/lib/replayApi";
+import { openHubViewer } from "@/lib/hubViewer";
 import { isHostedSpace } from "@/lib/isHostedSpace";
 
 const ON_SPACE = isHostedSpace();
@@ -38,14 +39,6 @@ const Landing = () => {
   const navigate = useNavigate();
 
   const handleTrainingClick = () => navigate("/training");
-
-  const openHubViewer = (repoId: string, isPrivate: boolean) => {
-    const spacePath = `/spaces/lerobot/visualize_dataset?path=${encodeURIComponent(`/${repoId}`)}`;
-    const target = isPrivate
-      ? `https://huggingface.co/login?next=${encodeURIComponent(spacePath)}`
-      : `https://huggingface.co${spacePath}`;
-    window.open(target, "_blank", "noopener,noreferrer");
-  };
 
   const handlePickExisting = (item: DatasetItem) => {
     // Anything with files on disk opens in the local episode browser; upload and

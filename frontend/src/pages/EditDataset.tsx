@@ -1,17 +1,23 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { AlertCircle, ArrowLeft, Database, Disc, Loader2, Merge, Upload } from "lucide-react";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  AlertCircle,
+  ArrowLeft,
+  ChevronsUpDown,
+  Database,
+  Disc,
+  ExternalLink,
+  Loader2,
+  Merge,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
+import DeleteDatasetDialog from "@/components/dataset/DeleteDatasetDialog";
 import EpisodeList from "@/components/dataset/EpisodeList";
 import EpisodeViewer from "@/components/dataset/EpisodeViewer";
 import MergeDatasetsDialog from "@/components/dataset/MergeDatasetsDialog";
+import DatasetPicker from "@/components/landing/DatasetPicker";
 import RecordingModal from "@/components/landing/RecordingModal";
 import { useApi } from "@/contexts/ApiContext";
 import { useDatasets } from "@/hooks/useDatasets";
@@ -20,7 +26,8 @@ import { useRecording } from "@/hooks/useRecording";
 import { useRobots } from "@/hooks/useRobots";
 import { useToast } from "@/hooks/use-toast";
 import { formatDuration } from "@/lib/datasetApi";
-import { mergeLocalDatasets } from "@/lib/replayApi";
+import { openHubViewer } from "@/lib/hubViewer";
+import { DatasetItem, mergeLocalDatasets } from "@/lib/replayApi";
 
 // The robot_type LeRobot stores for the SO-101 follower.
 const FOLLOWER_ROBOT_TYPE = "so_follower";
@@ -47,6 +54,7 @@ const EditDataset = () => {
   const { baseUrl, fetchWithHeaders } = useApi();
   const { toast } = useToast();
   const [mergeOpen, setMergeOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   // A Hub-only dataset has no videos on disk to decode.
   const localDatasets = useMemo(
     () => datasets.filter((d) => d.source === "local" || d.source === "both"),
@@ -91,6 +99,11 @@ const EditDataset = () => {
     return api ? { ...params, api } : params;
   };
   const setDataset = (next: string) => setSearchParams(withApi({ dataset: next }));
+  // A Hub-only dataset has no videos on disk to browse, so it opens in the Hub viewer.
+  const handlePickExisting = (item: DatasetItem) => {
+    if (item.source === "hub") openHubViewer(item.repo_id, item.private);
+    else setDataset(item.repo_id);
+  };
   const handleMerge = async (sourceRepoIds: string[], outputName: string) => {
     const result = await mergeLocalDatasets(baseUrl, fetchWithHeaders, sourceRepoIds, outputName);
     refresh();
@@ -133,20 +146,24 @@ const EditDataset = () => {
 
           <div className="ml-auto flex w-full items-center gap-2 sm:w-auto">
             <div className="w-full sm:w-[380px]">
-              <Select value={repoId ?? undefined} onValueChange={setDataset}>
-                <SelectTrigger className="h-9 border-gray-800 bg-gray-950 text-sm text-white">
-                  <SelectValue
-                    placeholder={datasetsLoading ? "Loading datasets…" : "Select a local dataset"}
-                  />
-                </SelectTrigger>
-                <SelectContent className="border-gray-800 bg-gray-950 text-white">
-                  {localDatasets.map((d) => (
-                    <SelectItem key={d.repo_id} value={d.repo_id} className="text-sm">
-                      {d.repo_id}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <DatasetPicker
+                datasets={datasets}
+                loading={datasetsLoading}
+                onPickExisting={handlePickExisting}
+                onOpenCustom={(id) => openHubViewer(id, true)}
+                onCreateNew={recording.openForNew}
+              >
+                <Button
+                  variant="outline"
+                  role="combobox"
+                  className="h-9 w-full justify-between border-gray-800 bg-gray-950 text-sm text-white hover:bg-gray-900"
+                >
+                  <span className="truncate">
+                    {repoId ?? (datasetsLoading ? "Loading datasets…" : "Select or create a dataset…")}
+                  </span>
+                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+              </DatasetPicker>
             </div>
             {repoId && selectedIsLocal && (
               <Button
@@ -159,9 +176,24 @@ const EditDataset = () => {
                 Merge
               </Button>
             )}
-            {/* Picking a dataset now lands here rather than on /upload, so the
-                upload + delete flow hangs off the page you browse from. */}
-            {repoId && (
+            {repoId && selectedSource === "both" && (
+              <Button
+                asChild
+                variant="outline"
+                size="sm"
+                className="h-9 gap-1.5 border-gray-800 bg-gray-950 text-xs text-gray-300 hover:bg-gray-900"
+              >
+                <a
+                  href={`https://huggingface.co/datasets/${repoId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  View on the Hub
+                </a>
+              </Button>
+            )}
+            {repoId && selectedSource !== "both" && (
               <Button
                 variant="outline"
                 size="sm"
@@ -179,6 +211,17 @@ const EditDataset = () => {
               >
                 <Upload className="h-3.5 w-3.5" />
                 Upload
+              </Button>
+            )}
+            {repoId && selectedIsLocal && (
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setDeleteOpen(true)}
+                aria-label="Delete dataset from disk"
+                className="h-9 w-9 border-red-500/40 bg-gray-950 text-red-400 hover:border-red-400 hover:bg-red-500/10 hover:text-red-300"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
               </Button>
             )}
             {appendTarget && (
@@ -271,6 +314,16 @@ const EditDataset = () => {
           open={mergeOpen}
           onOpenChange={setMergeOpen}
           onMerge={handleMerge}
+        />
+      )}
+
+      {repoId && selectedIsLocal && (
+        <DeleteDatasetDialog
+          repoId={repoId}
+          onHub={selectedSource === "both"}
+          open={deleteOpen}
+          onOpenChange={setDeleteOpen}
+          onDeleted={() => navigate("/")}
         />
       )}
 
