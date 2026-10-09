@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
+from lerobot.utils.device_utils import auto_select_torch_device
+
 if TYPE_CHECKING:
     from lelab.jobs import JobTarget
 
@@ -75,7 +77,7 @@ class TrainingRequest(BaseModel):
     eval_use_async_envs: bool = False
 
     # Policy-specific
-    policy_device: str | None = "cuda"
+    policy_device: str | None = None
     policy_use_amp: bool = False
     # Hub upload (set by HfCloudJobRunner; not exposed in the form)
     policy_push_to_hub: bool = False
@@ -145,15 +147,15 @@ def build_training_command(
         cmd.extend(["--seed", str(request.seed)])
 
     # Policy device / AMP / hub
-    if request.policy_device:
-        cmd.extend(["--policy.device", request.policy_device])
     cmd.extend(["--policy.use_amp", "true" if request.policy_use_amp else "false"])
     # On HF Cloud, lerobot's submit_to_hf owns the model repo and sets push_to_hub on
     # the pod itself; _pod_forwarded_args drops any --policy.push_to_hub/--policy.repo_id
     # we'd pass, so we must not emit them. Local runs keep the existing behavior:
     # LeRobot defaults push_to_hub=True and demands --policy.repo_id when so.
+    # submit_to_hf also resets policy.device so the pod picks its own device.
     is_cloud = job_target is not None and job_target.runner == "hf_cloud"
     if not is_cloud:
+        cmd.extend(["--policy.device", request.policy_device or auto_select_torch_device().type])
         cmd.extend(["--policy.push_to_hub", "true" if request.policy_push_to_hub else "false"])
         if request.policy_push_to_hub and request.policy_repo_id:
             cmd.extend(["--policy.repo_id", request.policy_repo_id])
