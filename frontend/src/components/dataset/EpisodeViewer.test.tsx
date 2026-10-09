@@ -10,6 +10,7 @@ vi.mock("@/contexts/ApiContext", () => ({
 }));
 vi.mock("./FilmStrip", () => ({ default: () => null }));
 vi.mock("./MotionTrace", () => ({ default: () => null }));
+vi.mock("./ReplayButton", () => ({ default: () => null }));
 
 test.each([0, 4])("playback loops at file end with an episode offset of %s seconds", async (offset) => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });

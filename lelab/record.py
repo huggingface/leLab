@@ -34,7 +34,7 @@ from lerobot.teleoperators.so_leader import SO101LeaderConfig
 from .camera_config import lerobot_camera_settings, validate_camera_rotations
 from .episode_media import UnreadableDatasetError, ensure_episode_index
 from .utils.config import setup_calibration_files, with_lelab_tag
-from .utils.devices import safe_disconnect_device
+from .utils.devices import follower_lock, safe_disconnect_device
 
 logger = logging.getLogger(__name__)
 
@@ -58,9 +58,6 @@ phase_start_time = None  # Track when current phase started
 last_recording_info: dict[str, Any] | None = (
     None  # Snapshot of the most recently completed dataset (for /dataset-info)
 )
-# Guards the start path so two concurrent POST /start-recording calls cannot
-# both pass the active-flag check.
-_state_lock = threading.Lock()
 
 
 class RecordingRequest(BaseModel):
@@ -251,17 +248,19 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
         phase_start_time, \
         last_recording_info
 
-    from . import rollout as _rollout, teleoperate as _teleoperate
+    from . import replay as _replay, rollout as _rollout, teleoperate as _teleoperate
 
     # Claim the active flag under the lock so two concurrent starts can't both
     # pass the precondition check.
-    with _state_lock:
+    with follower_lock:
         if recording_active:
             return {"success": False, "message": "Recording is already active"}
         if _teleoperate.teleoperation_active:
             return {"success": False, "message": "Teleoperation is currently active. Stop it first."}
         if _rollout.inference_active:
             return {"success": False, "message": "Inference is currently active. Stop it first."}
+        if _replay.replay_active:
+            return {"success": False, "message": "Replay is currently active. Stop it first."}
         recording_active = True
         recording_thread = None
         recording_events = None

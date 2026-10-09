@@ -24,7 +24,7 @@ from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
 from lerobot.teleoperators.so_leader import SO101Leader, SO101LeaderConfig
 
 from .utils.config import setup_calibration_files
-from .utils.devices import safe_disconnect_device
+from .utils.devices import follower_lock, safe_disconnect_device
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +33,6 @@ teleoperation_active = False
 teleoperation_thread: threading.Thread | None = None
 current_robot = None
 current_teleop = None
-# Guards the start path; the worker owns disconnect so stop() does not race.
-_state_lock = threading.Lock()
 
 
 class TeleoperateRequest(BaseModel):
@@ -118,15 +116,17 @@ def handle_start_teleoperation(request: TeleoperateRequest, websocket_manager=No
     """
     global teleoperation_active, teleoperation_thread, current_robot, current_teleop
 
-    from . import record as _record, rollout as _rollout
+    from . import record as _record, replay as _replay, rollout as _rollout
 
-    with _state_lock:
+    with follower_lock:
         if teleoperation_active:
             return {"success": False, "message": "Teleoperation is already active"}
         if _record.recording_active:
             return {"success": False, "message": "Recording is currently active. Stop it first."}
         if _rollout.inference_active:
             return {"success": False, "message": "Inference is currently active. Stop it first."}
+        if _replay.replay_active:
+            return {"success": False, "message": "Replay is currently active. Stop it first."}
         teleoperation_active = True
 
     robot = None

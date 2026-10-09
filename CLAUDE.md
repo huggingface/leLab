@@ -37,6 +37,7 @@ Run the Python tests with `pytest` (config in [pyproject.toml](pyproject.toml); 
 
 - [record.py](lelab/record.py) — dataset recording (wraps `lerobot.record.record`); patches `lerobot.common.utils.control_utils` keyboard listener so frontend buttons replace arrow-key controls. The worker is a daemon thread, so the server's shutdown hook calls `stop_recording_and_wait()` to let an active session finalize on Ctrl+C.
 - [teleoperate.py](lelab/teleoperate.py) — leader→follower teleoperation (wraps `lerobot.teleoperate`).
+- [replay.py](lelab/replay.py): plays a recorded episode's actions on the follower arm, an in-process take on `lerobot-replay` so the dataset browser can stop it.
 - [calibrate.py](lelab/calibrate.py) — step-by-step web calibration with a `CalibrationManager` singleton and `_step_complete` threading.Event.
 - [train.py](lelab/train.py) — wraps the LeRobot training CLI as a subprocess (psutil for lifecycle, queue for log streaming).
 - [datasets.py](lelab/datasets.py) — dataset listing (local cache + Hub, merged under a `source` field) plus the episode-browsing handlers behind `/dataset-episodes`, `/dataset-episode`, `/dataset-frame`, `/dataset-thumbnails`, `/dataset-motion` and `/dataset-video`.
@@ -45,7 +46,7 @@ Run the Python tests with `pytest` (config in [pyproject.toml](pyproject.toml); 
 
 ### State model
 
-Each feature module owns module-level globals (e.g. `recording_active`, `teleoperation_active`, `current_robot`) protected by threads/locks where needed. There's no shared session object — features are mutually exclusive in practice (you can't teleoperate and record simultaneously) but this is **not** enforced in code.
+Each feature module owns module-level globals (e.g. `recording_active`, `teleoperation_active`, `current_robot`) protected by threads/locks where needed. There's no shared session object. Recording, teleoperation, inference and replay all drive the follower, so each start handler checks the others' flags and refuses to run while one is active. Calibration is not part of that check.
 
 ### WebSocket broadcast
 

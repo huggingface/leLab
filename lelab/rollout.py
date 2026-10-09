@@ -39,6 +39,7 @@ from pydantic import BaseModel, field_validator
 
 from .camera_config import lerobot_camera_settings, validate_camera_rotations
 from .utils.config import setup_follower_calibration_file
+from .utils.devices import follower_lock
 
 logger = logging.getLogger(__name__)
 
@@ -301,10 +302,10 @@ def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
     global inference_active, _inference_proc, _inference_started_at
     global _inference_rollout_started_at, _inference_meta
 
-    # Mutex with teleop and recording: all three drive the same serial bus.
-    from . import record as _record, teleoperate as _teleoperate
+    # Mutex with teleop, recording and replay: they all drive the same serial bus.
+    from . import record as _record, replay as _replay, teleoperate as _teleoperate
 
-    with _state_lock:
+    with follower_lock, _state_lock:
         if _teleoperate.teleoperation_active:
             return {
                 "success": False,
@@ -316,6 +317,12 @@ def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
                 "success": False,
                 "status_code": 409,
                 "message": "Recording is currently active. Stop it first.",
+            }
+        if _replay.replay_active:
+            return {
+                "success": False,
+                "status_code": 409,
+                "message": "Replay is currently active. Stop it first.",
             }
         if inference_active:
             return {

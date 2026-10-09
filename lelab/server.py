@@ -62,6 +62,12 @@ from .record import (
     handle_stop_recording,
     handle_upload_dataset,
 )
+from .replay import (
+    ReplayRequest,
+    handle_replay_status,
+    handle_start_replay,
+    handle_stop_replay,
+)
 from .rollout import (
     InferenceRequest,
     handle_inference_status,
@@ -352,6 +358,22 @@ def stop_teleoperation():
 def teleoperation_status():
     """Get the current teleoperation status"""
     return handle_teleoperation_status()
+
+
+@app.post("/start-replay")
+def start_replay(request: ReplayRequest):
+    """Replay a recorded episode on the follower arm"""
+    return handle_start_replay(request)
+
+
+@app.post("/stop-replay")
+def stop_replay():
+    return handle_stop_replay()
+
+
+@app.get("/replay-status")
+def replay_status():
+    return handle_replay_status()
 
 
 @app.get("/joint-positions")
