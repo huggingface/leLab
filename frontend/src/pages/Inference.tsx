@@ -16,12 +16,16 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  FPS_TONE_TEXT,
   InferenceStatus,
+  fpsTone,
   getInferenceStatus,
   stopInference,
 } from "@/lib/inferenceApi";
 
 const POLL_MS = 1000;
+// One sample per poll, so this is the last minute of control-loop rate.
+const FPS_HISTORY_LEN = 60;
 
 function formatTime(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
@@ -30,11 +34,67 @@ function formatTime(seconds: number): string {
   return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
 
+/** Rate history over a fixed 60-sample axis: the curve grows in from the
+ * left, then slides once the window is full. The dashed line is the target. */
+const FpsSparkline: React.FC<{ values: number[]; target: number | null }> = ({
+  values,
+  target,
+}) => {
+  const W = 200;
+  const H = 40;
+  if (values.length < 2) return null;
+  const ceiling = Math.max(target ?? 0, ...values) * 1.1 || 1;
+  const y = (v: number) => H - (v / ceiling) * H;
+  const step = W / (FPS_HISTORY_LEN - 1);
+  const points = values.map((v, i) => `${(i * step).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      preserveAspectRatio="none"
+      className="w-full h-10"
+      aria-label="Control-loop rate over the last minute"
+    >
+      {target != null && target > 0 && (
+        <line
+          x1={0}
+          y1={y(target)}
+          x2={W}
+          y2={y(target)}
+          stroke="#374151"
+          strokeWidth={1}
+          strokeDasharray="3 3"
+          vectorEffect="non-scaling-stroke"
+        />
+      )}
+      <polyline
+        points={points}
+        fill="none"
+        stroke="#4ade80"
+        strokeWidth={1.5}
+        vectorEffect="non-scaling-stroke"
+      />
+    </svg>
+  );
+};
+
+const FpsTile: React.FC<{
+  value: string;
+  label: string;
+  valueClass?: string;
+  borderClass?: string;
+}> = ({ value, label, valueClass = "text-slate-200", borderClass = "border-gray-700" }) => (
+  <div className={`flex-1 bg-black/40 border rounded-lg px-3 py-2 ${borderClass}`}>
+    <div className={`font-mono text-xl leading-none tabular-nums ${valueClass}`}>{value}</div>
+    <div className="text-[10px] text-gray-500 mt-1">{label}</div>
+  </div>
+);
+
 const Inference: React.FC = () => {
   const navigate = useNavigate();
   const { baseUrl, fetchWithHeaders } = useApi();
   const { toast } = useToast();
   const [status, setStatus] = useState<InferenceStatus | null>(null);
+  const [fpsHistory, setFpsHistory] = useState<number[]>([]);
   const [showStopConfirm, setShowStopConfirm] = useState(false);
   const navigatedAwayRef = useRef(false);
   // Independent flag: we may request a stop (safety net) before the run
@@ -56,15 +116,26 @@ const Inference: React.FC = () => {
         const next = await getInferenceStatus(baseUrl, fetchWithHeaders);
         if (cancelled) return;
         setStatus(next);
+        if (next.fps_now != null && !next.fps_stale) {
+          const sample = next.fps_now;
+          setFpsHistory((h) => [...h, sample].slice(-FPS_HISTORY_LEN));
+        }
         // Auto-bounce home once the run is done.
         if (!next.inference_active && !navigatedAwayRef.current) {
           navigatedAwayRef.current = true;
           if (next.exited) {
+            // The average is the one number worth carrying off the page: it
+            // says whether the policy actually ran at the rate it was trained at.
+            const rate =
+              next.fps_avg != null
+                ? ` Averaged ${next.fps_avg.toFixed(1)} Hz` +
+                  (next.target_fps ? ` of ${next.target_fps} Hz.` : ".")
+                : "";
             toast({
               title: "Inference finished",
               description:
                 next.exit_code === 0
-                  ? "Run completed."
+                  ? `Run completed.${rate}`
                   : `Exit code ${next.exit_code}. See ${next.log_path}.`,
               variant: next.exit_code === 0 ? "default" : "destructive",
             });
@@ -152,6 +223,13 @@ const Inference: React.FC = () => {
     : "FINISHED";
   const timerSeconds = isRunning ? rolloutElapsed : setupElapsed;
 
+  const targetFps = status.target_fps;
+  const fpsNow = status.fps_now;
+  const hasFps = fpsNow != null || status.fps_avg != null;
+  const nowTone = fpsNow != null ? fpsTone(fpsNow, targetFps) : null;
+  const minTone = status.fps_min != null ? fpsTone(status.fps_min, targetFps) : null;
+  const fmtFps = (v: number | null) => (v != null ? v.toFixed(1) : "—");
+
   return (
     <div className="min-h-screen bg-black text-white flex flex-col p-4 sm:p-6 lg:p-8">
       <div className="flex items-center gap-4 mb-8">
@@ -210,6 +288,55 @@ const Inference: React.FC = () => {
               }`}
               style={isSettingUp ? undefined : { width: `${pct}%` }}
             />
+          </div>
+
+          <div className="mb-6">
+            <div className="flex items-baseline justify-between mb-2">
+              <span className="text-[10px] uppercase tracking-widest text-gray-500">
+                control loop
+              </span>
+              {targetFps != null && (
+                <span className="text-[10px] text-gray-500">target {targetFps} Hz</span>
+              )}
+            </div>
+            {!hasFps ? (
+              <div className="text-xs text-gray-600 border border-gray-800 rounded-lg px-3 py-4 text-center">
+                {isSettingUp
+                  ? "Waiting for the control loop…"
+                  : "No rate reported yet."}
+              </div>
+            ) : (
+              <>
+                <div className="flex gap-2">
+                  <FpsTile
+                    value={fmtFps(fpsNow)}
+                    label="FPS now"
+                    valueClass={nowTone ? FPS_TONE_TEXT[nowTone] : "text-slate-500"}
+                    borderClass={
+                      nowTone === "bad"
+                        ? "border-red-900"
+                        : nowTone === "warn"
+                        ? "border-amber-900"
+                        : nowTone === "good"
+                        ? "border-green-900"
+                        : "border-gray-700"
+                    }
+                  />
+                  <FpsTile value={fmtFps(status.fps_avg)} label="average" />
+                  <FpsTile
+                    value={fmtFps(status.fps_min)}
+                    label="worst second"
+                    valueClass={minTone ? FPS_TONE_TEXT[minTone] : "text-slate-200"}
+                  />
+                </div>
+                <FpsSparkline values={fpsHistory} target={targetFps} />
+                <div className="text-[10px] text-gray-500">
+                  {status.fps_worst_gap_ms != null &&
+                    `longest stall ${Math.round(status.fps_worst_gap_ms)} ms · `}
+                  {status.fps_ticks} loop ticks
+                </div>
+              </>
+            )}
           </div>
 
           <div className="text-xs text-slate-500 break-all mb-6">
