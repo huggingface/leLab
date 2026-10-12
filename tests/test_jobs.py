@@ -271,3 +271,46 @@ def test_register_imported_hub_repo(monkeypatch, tmp_path) -> None:
     assert rec.output_dir == ""
     cks = reg.list_checkpoints(rec.id)
     assert [c.ref for c in cks] == ["user/some-model@root"]
+
+
+def _default_to_cp932(monkeypatch) -> None:
+    """Make Path.read_text/write_text default to CP932, as on Japanese Windows."""
+    from pathlib import Path
+
+    real_write_text, real_read_text = Path.write_text, Path.read_text
+
+    def write_text(self, data, encoding=None, *args, **kwargs):
+        return real_write_text(self, data, encoding or "cp932", *args, **kwargs)
+
+    def read_text(self, encoding=None, *args, **kwargs):
+        return real_read_text(self, encoding or "cp932", *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", write_text)
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+
+def test_job_json_survives_a_cp932_default_encoding(monkeypatch, tmp_path) -> None:
+    """CP932 cannot encode the "·" in the default name of an imported model (#131)."""
+    from lelab.jobs import JobRegistry
+
+    model = tmp_path / "model"
+    _make_pretrained(model)
+    _default_to_cp932(monkeypatch)
+
+    rec = JobRegistry(tmp_path / "root").register_imported(str(model))
+
+    assert "·" in rec.name
+    assert JobRegistry(tmp_path / "root").get(rec.id).name == rec.name
+
+
+def test_cp932_job_json_written_before_the_fix_still_loads(monkeypatch, tmp_path) -> None:
+    from lelab.jobs import JobRegistry
+
+    model = tmp_path / "model"
+    _make_pretrained(model)
+    rec = JobRegistry(tmp_path / "root").register_imported(str(model), name="日本語のモデル")
+    meta = next((tmp_path / "root").rglob("job.json"))
+    meta.write_bytes(meta.read_text(encoding="utf-8").encode("cp932"))
+    _default_to_cp932(monkeypatch)
+
+    assert JobRegistry(tmp_path / "root").get(rec.id).name == "日本語のモデル"

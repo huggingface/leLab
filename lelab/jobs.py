@@ -636,6 +636,16 @@ def _job_meta_path(output_root: Path, job_id: str) -> Path:
     return _job_dir(output_root, job_id) / "job.json"
 
 
+def _read_job_meta(path: Path) -> dict:
+    """job.json is UTF-8. Earlier versions wrote it in the platform's default
+    encoding (CP932 on Japanese Windows), so fall back to that for old files."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        text = path.read_text()
+    return json.loads(text)
+
+
 class JobAlreadyRunningError(Exception):
     """Raised when start() is called while another local job is running."""
 
@@ -739,13 +749,13 @@ class JobRegistry:
         if not meta.is_file():
             return
         try:
-            data = json.loads(meta.read_text())
+            data = _read_job_meta(meta)
         except Exception as exc:
             logger.warning("Migration: could not parse %s: %s", meta, exc)
             return
         data["output_dir"] = str(job_dir / "run")
         tmp = meta.with_suffix(meta.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, indent=2))
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
         os.replace(tmp, meta)
 
     def set_on_change(self, callback: Callable[[], None] | None) -> None:
@@ -1115,7 +1125,7 @@ class JobRegistry:
             if not meta.exists():
                 continue
             try:
-                data = json.loads(meta.read_text())
+                data = _read_job_meta(meta)
                 record = JobRecord.model_validate(data)
             except Exception as exc:
                 logger.warning("Skipping malformed job.json at %s: %s", meta, exc)
@@ -1272,7 +1282,7 @@ class JobRegistry:
         # Atomic write so a crash mid-write never strands a half-written file
         # that would skip the job on next _load_from_disk.
         tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(record.model_dump_json(indent=2))
+        tmp.write_text(record.model_dump_json(indent=2), encoding="utf-8")
         os.replace(tmp, path)
 
 
