@@ -37,7 +37,7 @@ from starlette.responses import Response
 from starlette.types import Scope
 
 # Import our custom recording functionality
-from . import datasets as dataset_browser, record as _record
+from . import camera_reference, datasets as dataset_browser, record as _record
 
 # Import our custom calibration functionality
 from .calibrate import CalibrationRequest, calibration_manager
@@ -1395,6 +1395,40 @@ def delete_robot(name: str):
     if delete_robot_record(name):
         return {"status": "success"}
     return JSONResponse(status_code=404, content={"status": "error", "message": "Robot not found"})
+
+
+@app.get("/robots/{name}/camera-reference/{camera}")
+def get_camera_reference(name: str, camera: str):
+    """The saved reference frame for one of a robot's cameras, as a PNG."""
+    try:
+        png = camera_reference.load_reference(name, camera)
+    except camera_reference.InvalidReferenceError as e:
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(e)})
+    if png is None:
+        return JSONResponse(status_code=404, content={"status": "error", "message": "No reference saved"})
+    # The frame is replaced in place on re-save, so the browser must revalidate.
+    return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-cache"})
+
+
+@app.put("/robots/{name}/camera-reference/{camera}")
+async def put_camera_reference(name: str, camera: str, request: Request):
+    """Save the request body (a PNG) as the reference frame for one camera."""
+    try:
+        camera_reference.save_reference(name, camera, await request.body())
+    except camera_reference.InvalidReferenceError as e:
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(e)})
+    return {"status": "success"}
+
+
+@app.delete("/robots/{name}/camera-reference/{camera}")
+def delete_camera_reference(name: str, camera: str):
+    try:
+        deleted = camera_reference.delete_reference(name, camera)
+    except camera_reference.InvalidReferenceError as e:
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(e)})
+    if not deleted:
+        return JSONResponse(status_code=404, content={"status": "error", "message": "No reference saved"})
+    return {"status": "success"}
 
 
 @app.on_event("startup")

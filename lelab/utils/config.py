@@ -44,6 +44,9 @@ FOLLOWER_CONFIG_FILE = os.path.join(CONFIG_STORAGE_PATH, "follower_config.txt")
 # Robot config records (per-robot JSON metadata)
 ROBOTS_PATH = os.path.expanduser("~/.cache/huggingface/lerobot/robots")
 
+# Saved camera reference frames, one PNG per robot/camera (see lelab/camera_reference.py)
+CAMERA_REFERENCES_PATH = os.path.expanduser("~/.cache/huggingface/lerobot/camera_references")
+
 # Tag stamped on every dataset pushed to the Hub from LeLab, so we can later
 # query the Hub for LeLab-produced datasets and compute usage metrics.
 LELAB_TAG = "LeLab"

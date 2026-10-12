@@ -282,10 +282,13 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
                   onCamerasChange={setCameras}
                   releaseStreamsRef={releaseStreamsRef}
                   readOnly
+                  robotName={robot?.name}
                 />
                 <p className="text-xs text-gray-500">
                   These are the cameras set up for this robot. To add or change a
-                  camera, configure it on the Calibration page.
+                  camera, configure it on the Calibration page. Save a reference
+                  frame to see it as a ghost over the live preview and realign
+                  the rig next session.
                 </p>
               </div>
             )}

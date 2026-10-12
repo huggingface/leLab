@@ -11,6 +11,9 @@ interface Props {
   height?: number;
   className?: string;
   fallback?: string;
+  /** Saved reference frame, drawn over the live video as a translucent ghost. */
+  ghostSrc?: string;
+  ghostOpacity?: number;
 }
 
 /**
@@ -26,6 +29,8 @@ export default function BrowserCameraPreview({
   height = 480,
   className = "",
   fallback,
+  ghostSrc,
+  ghostOpacity = 0.5,
 }: Props) {
   const rotationError = cameraRotationError({ rotation });
   const { videoRef, hasError } = useCameraStream(deviceId, paused || !!rotationError, { width, height });
@@ -39,6 +44,7 @@ export default function BrowserCameraPreview({
       style={{ aspectRatio: geometry.aspectRatio }}
     >
       {showVideo ? (
+        <>
         <video
           ref={videoRef}
           autoPlay
@@ -46,6 +52,16 @@ export default function BrowserCameraPreview({
           playsInline
           style={geometry.videoStyle}
         />
+        {ghostSrc && (
+          <img
+            src={ghostSrc}
+            alt=""
+            aria-hidden
+            className="pointer-events-none"
+            style={{ ...geometry.videoStyle, opacity: ghostOpacity }}
+          />
+        )}
+        </>
       ) : (
         <div className="absolute inset-0 flex flex-col items-center justify-center">
           <VideoOff className="w-5 h-5 text-gray-500 mb-1" />

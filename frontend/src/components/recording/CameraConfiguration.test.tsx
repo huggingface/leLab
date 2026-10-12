@@ -6,6 +6,8 @@ import CameraConfiguration from "./CameraConfiguration";
 import { CameraConfig, normalizeCameraConfig, serializeCameras } from "@/lib/cameraConfig";
 vi.mock("@/hooks/useAvailableCameras", () => ({ useAvailableCameras: () => ({ cameras: [], isLoading: false, refresh: vi.fn() }) }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
+const reference = { url: null as string | null, error: null, save: vi.fn(), clear: vi.fn() };
+vi.mock("@/hooks/useCameraReference", () => ({ useCameraReference: () => reference }));
 vi.mock("@/hooks/useCameraStream", () => ({ useCameraStream: () => ({ videoRef: React.createRef<HTMLVideoElement>(), hasError: false }) }));
 let root: Root;
 let container: HTMLDivElement;
@@ -42,4 +44,18 @@ test("an invalid stored rotation stays visible until the user selects a valid va
   expect(select.value).toBe("");
   act(() => { select.value = "180"; select.dispatchEvent(new Event("change", { bubbles: true })); });
   expect(change).toHaveBeenCalledWith([{ ...camera, rotation: 180 }]);
+});
+test("reference controls appear only for a named robot in read-only mode", () => {
+  act(() => root.render(<CameraConfiguration cameras={[camera]} onCamerasChange={vi.fn()} readOnly />));
+  expect(container.textContent).not.toContain("Set reference");
+  act(() => root.render(<CameraConfiguration cameras={[camera]} onCamerasChange={vi.fn()} readOnly robotName="arm" />));
+  expect(container.textContent).toContain("Set reference");
+  expect(container.querySelector('input[type="range"]')).toBeNull();
+  reference.url = "blob:ref";
+  act(() => root.render(<CameraConfiguration cameras={[camera]} onCamerasChange={vi.fn()} readOnly robotName="arm" />));
+  expect(container.textContent).toContain("Replace reference");
+  expect(container.querySelector("img")!.getAttribute("src")).toBe("blob:ref");
+  const slider = container.querySelector<HTMLInputElement>('input[type="range"]')!;
+  expect(slider).not.toBeNull();
+  reference.url = null;
 });

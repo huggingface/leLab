@@ -39,3 +39,13 @@ test("a stream at another size keeps the recorded aspect ratio", () => {
   expect(video.style.width).toBe("100%");
   expect(video.style.objectFit).toBe("cover");
 });
+test("the reference ghost sits over the video with its rotation and opacity", () => {
+  act(() => root.render(<BrowserCameraPreview deviceId="wrist" rotation={90} ghostSrc="blob:ref" ghostOpacity={0.3} />));
+  const video = container.querySelector("video")!, ghost = container.querySelector("img")!;
+  expect(ghost.getAttribute("src")).toBe("blob:ref");
+  expect(ghost.style.opacity).toBe("0.3");
+  expect(ghost.style.transform).toBe(video.style.transform);
+  expect(ghost.style.width).toBe(video.style.width);
+  act(() => root.render(<BrowserCameraPreview deviceId="wrist" />));
+  expect(container.querySelector("img")).toBeNull();
+});

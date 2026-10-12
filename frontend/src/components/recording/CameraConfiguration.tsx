@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -18,8 +18,10 @@ import {
 } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
 import { useAvailableCameras } from "@/hooks/useAvailableCameras";
+import { useCameraReference } from "@/hooks/useCameraReference";
 import BrowserCameraPreview from "@/components/control/BrowserCameraPreview";
 import CameraRotationSelect from "@/components/control/CameraRotationSelect";
+import CameraReferenceControls from "@/components/recording/CameraReferenceControls";
 import {
   CameraConfig,
   cameraRotation,
@@ -54,6 +56,9 @@ interface CameraConfigurationProps {
   // cameras as read-only live previews. Used in the recording dialog, where
   // cameras are managed on the Calibration page rather than added ad hoc.
   readOnly?: boolean;
+  // Robot the cameras belong to. In read-only mode this enables the reference
+  // frame controls, which are stored per robot and camera.
+  robotName?: string;
 }
 
 const CameraConfiguration: React.FC<CameraConfigurationProps> = ({
@@ -61,6 +66,7 @@ const CameraConfiguration: React.FC<CameraConfigurationProps> = ({
   onCamerasChange,
   releaseStreamsRef,
   readOnly = false,
+  robotName,
 }) => {
   const { toast } = useToast();
 
@@ -307,6 +313,7 @@ const CameraConfiguration: React.FC<CameraConfigurationProps> = ({
                 deviceId={previewDeviceId(camera, availableCameras)}
                 paused={streamsPaused}
                 readOnly={readOnly}
+                robotName={robotName}
                 onRemove={() => removeCamera(camera.id)}
                 onUpdate={(updates) => updateCamera(camera.id, updates)}
               />
@@ -334,6 +341,7 @@ interface CameraPreviewProps {
   deviceId: string;
   paused: boolean;
   readOnly: boolean;
+  robotName?: string;
   onRemove: () => void;
   onUpdate: (updates: Partial<CameraConfig>) => void;
 }
@@ -343,22 +351,30 @@ const CameraPreview: React.FC<CameraPreviewProps> = ({
   deviceId,
   paused,
   readOnly,
+  robotName,
   onRemove,
   onUpdate,
 }) => {
+  const previewRef = useRef<HTMLDivElement>(null);
+  const [ghostOpacity, setGhostOpacity] = useState(0.5);
+  const reference = useCameraReference(readOnly ? robotName : undefined, camera.name);
   const rotationError = cameraRotationError(camera);
   const rotation = rotationError ? null : cameraRotation(camera.rotation);
   const output = rotation === null ? null : rotatedDimensions(camera.width, camera.height, rotation);
   return (
     <div className="bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
+      <div ref={previewRef}>
       <BrowserCameraPreview
         deviceId={deviceId}
         paused={paused}
+        ghostSrc={reference.url ?? undefined}
+        ghostOpacity={ghostOpacity}
         rotation={camera.rotation}
         width={camera.width}
         height={camera.height}
         fallback={paused ? "Preview paused" : deviceId ? undefined : "No browser match"}
       />
+      </div>
 
       {/* Camera Info */}
       <div className="p-3 space-y-2">
@@ -376,6 +392,20 @@ const CameraPreview: React.FC<CameraPreviewProps> = ({
           )}
         </div>
 
+        {readOnly && robotName && (
+          <CameraReferenceControls
+            hasReference={!!reference.url}
+            opacity={ghostOpacity}
+            onOpacityChange={setGhostOpacity}
+            onSave={() => {
+              const video = previewRef.current?.querySelector("video");
+              if (video) void reference.save(video);
+            }}
+            onClear={() => void reference.clear()}
+            disabled={paused || !!rotationError}
+            error={reference.error}
+          />
+        )}
         {rotationError && <p role="alert" className="text-xs text-red-400">{rotationError} Select a valid rotation.</p>}
         {readOnly ? (
           <p className="text-xs text-gray-400">
