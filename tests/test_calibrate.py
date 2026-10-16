@@ -292,6 +292,20 @@ def test_calibration_manager_rejects_double_start_via_message() -> None:
     assert "already" in result.get("message", "").lower()
 
 
+@pytest.mark.parametrize("config_file", ["", "../escape", "..", "a/b", "a\\b", " padded"])
+def test_calibration_manager_rejects_unsafe_config_name(config_file) -> None:
+    """config_file names the calibration JSON on disk; unsafe names never start a worker."""
+    from lelab.calibrate import CalibrationManager, CalibrationRequest
+
+    mgr = CalibrationManager()
+    result = mgr.start_calibration(
+        CalibrationRequest(device_type="robot", port="/dev/null", config_file=config_file)
+    )
+    assert result == {"success": False, "message": "Invalid configuration name"}
+    assert mgr.status.calibration_active is False
+    assert mgr.calibration_thread is None
+
+
 def test_cleanup_device_force_releases_and_clears_when_disconnect_fails() -> None:
     """A failed device.disconnect() must still force-close the port and clear the
     device handle — otherwise the COM port stays busy and blocks the next run."""

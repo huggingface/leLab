@@ -39,6 +39,7 @@ from lerobot.teleoperators import (
 )
 from lerobot.utils.utils import init_logging
 
+from .utils.config import is_valid_robot_name
 from .utils.devices import safe_disconnect_device
 
 logger = logging.getLogger(__name__)
@@ -157,6 +158,12 @@ class CalibrationManager:
     def start_calibration(self, request: CalibrationRequest) -> dict[str, Any]:
         """Start calibration process"""
         try:
+            # config_file becomes the LeRobot device id, and LeRobot writes the calibration to
+            # calibration_dir / f"{id}.json", so reject path-traversal characters (/, \, ..) first.
+            # Same guard as the calibration-config delete endpoint and robot records.
+            if not is_valid_robot_name(request.config_file):
+                return {"success": False, "message": "Invalid configuration name"}
+
             if self.status.calibration_active:
                 return {"success": False, "message": "Calibration already active"}
 
