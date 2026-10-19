@@ -24,13 +24,13 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.datastructures import Headers
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
@@ -151,6 +151,12 @@ class StartTrainingBody(BaseModel):
 
 class MergeDatasetsRequest(BaseModel):
     source_repo_ids: list[str]
+    output_name: str
+
+
+class MoveEpisodesRequest(BaseModel):
+    repo_id: str
+    episode_indices: list[Annotated[int, Field(ge=0)]] = Field(min_length=1)
     output_name: str
 
 
@@ -456,6 +462,19 @@ def merge_local_datasets(request: MergeDatasetsRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/datasets/move-episodes")
+def move_dataset_episodes(request: MoveEpisodesRequest):
+    """Move episodes out of a local dataset into a new local dataset."""
+    if _record.recording_active:
+        raise HTTPException(status_code=409, detail="Stop the recording before editing a dataset")
+    try:
+        return dataset_browser.handle_move_episodes(
+            request.repo_id, request.episode_indices, request.output_name
+        )
+    except (DatasetNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/dataset-episodes")
 def dataset_episodes(repo_id: str):
     """List the episodes of a local dataset."""
@@ -493,12 +512,12 @@ def dataset_frame(
         png = dataset_browser.load_episode_frame_png(repo_id, episode_index, camera, frame_index, max_width)
     except (DatasetNotFoundError, EpisodeNotFoundError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    # A frame is immutable for a given (dataset, episode, camera, index), and the
-    # scrubber re-requests the same ones constantly, so let the browser cache it.
+    # Not cached: moving episodes out of a dataset renumbers the ones left, so the
+    # same (dataset, episode, camera, index) can point at a different frame.
     return Response(
         content=png,
         media_type="image/png",
-        headers={"Cache-Control": "private, max-age=3600"},
+        headers={"Cache-Control": "no-cache"},
     )
 
 
@@ -518,11 +537,14 @@ def dataset_video(repo_id: str, camera: str, chunk: int = 0, file: int = 0):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     # content_disposition_type="inline" is load-bearing: the default is
     # "attachment", which makes the browser download the file rather than play it.
+    # no-cache makes the browser revalidate against the ETag, since moving
+    # episodes rewrites the file behind the same chunk/file URL.
     return FileResponse(
         path,
         media_type="video/mp4",
         filename=path.name,
         content_disposition_type="inline",
+        headers={"Cache-Control": "no-cache"},
     )
 
 

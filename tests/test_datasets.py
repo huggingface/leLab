@@ -262,6 +262,145 @@ def test_merge_route_returns_result_and_maps_validation_error(
     assert response.json()["detail"] == "bad input"
 
 
+def _record_dataset(repo_id: str, episodes: int) -> Path:
+    """Write a finished LeRobot dataset whose episode i has every value set to i."""
+    import numpy as np
+
+    from lerobot.datasets import LeRobotDataset
+
+    features = {"action": {"dtype": "float32", "shape": (1,), "names": ["a"]}}
+    dataset = LeRobotDataset.create(repo_id, fps=10, features=features, use_videos=False)
+    for ep in range(episodes):
+        for _ in range(3):
+            dataset.add_frame({"action": np.full(1, ep, dtype=np.float32), "task": f"task {ep}"})
+        dataset.save_episode()
+    dataset.finalize()
+    return dataset.root
+
+
+def _episode_tasks(repo_id: str) -> list[str]:
+    from lelab import episode_media
+    from lerobot.datasets import LeRobotDataset
+
+    dataset = LeRobotDataset(repo_id=repo_id, root=episode_media.resolve_dataset_dir(repo_id))
+    return [dataset.meta.episodes[i]["tasks"][0] for i in range(dataset.meta.total_episodes)]
+
+
+def test_move_episodes_splits_the_source_into_a_new_dataset(tmp_lerobot_home: Path) -> None:
+    from lelab.datasets import handle_move_episodes
+
+    _record_dataset("alice/demo", episodes=4)
+
+    result = handle_move_episodes("alice/demo", [1, 3], "rejected")
+
+    assert result == {
+        "success": True,
+        "repo_id": "local/rejected",
+        "moved_episodes": 2,
+        "remaining_episodes": 2,
+    }
+    assert _episode_tasks("local/rejected") == ["task 1", "task 3"]
+    assert _episode_tasks("alice/demo") == ["task 0", "task 2"]
+    assert not list((tmp_lerobot_home / "local").glob(".rejected.move-*"))
+
+
+@pytest.mark.parametrize(
+    ("episode_indices", "output_name", "message"),
+    [
+        ([], "rejected", "at least one episode"),
+        ([0], "not/a-name", "Output name"),
+        ([5], "rejected", r"Episodes not in alice/demo: \[5\]"),
+        ([0, 1], "rejected", "Cannot move every episode"),
+    ],
+)
+def test_move_episodes_rejects_invalid_request(
+    tmp_lerobot_home: Path, episode_indices: list[int], output_name: str, message: str
+) -> None:
+    from lelab.datasets import handle_move_episodes
+
+    _record_dataset("alice/demo", episodes=2)
+    with pytest.raises(ValueError, match=message):
+        handle_move_episodes("alice/demo", episode_indices, output_name)
+    assert _episode_tasks("alice/demo") == ["task 0", "task 1"]
+
+
+def test_move_episodes_rejects_existing_output(tmp_lerobot_home: Path) -> None:
+    from lelab.datasets import handle_move_episodes
+
+    _make_dataset(tmp_lerobot_home, "local/rejected")
+    with pytest.raises(ValueError, match="already exists"):
+        handle_move_episodes("alice/demo", [0], "rejected")
+
+
+def test_move_episodes_leaves_source_untouched_on_failure(
+    tmp_lerobot_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lelab import datasets as datasets_mod
+
+    _record_dataset("alice/demo", episodes=3)
+    real_delete = datasets_mod.delete_episodes
+
+    def failing_second_copy(dataset, episode_indices, output_dir, repo_id):
+        if repo_id == "alice/demo":
+            output_dir.mkdir(parents=True)
+            raise RuntimeError("disk full")
+        return real_delete(dataset, episode_indices, output_dir=output_dir, repo_id=repo_id)
+
+    monkeypatch.setattr(datasets_mod, "delete_episodes", failing_second_copy)
+
+    with pytest.raises(RuntimeError, match="disk full"):
+        datasets_mod.handle_move_episodes("alice/demo", [1], "rejected")
+
+    assert _episode_tasks("alice/demo") == ["task 0", "task 1", "task 2"]
+    assert not (tmp_lerobot_home / "local" / "rejected").exists()
+    assert not list((tmp_lerobot_home / "local").glob(".rejected.move-*"))
+
+
+def test_move_episodes_route_refuses_while_recording(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lelab import datasets as datasets_mod, record
+
+    monkeypatch.setattr(record, "recording_active", True)
+    monkeypatch.setattr(
+        datasets_mod, "handle_move_episodes", lambda *_: pytest.fail("must not edit while recording")
+    )
+
+    response = client.post(
+        "/datasets/move-episodes", json={"repo_id": "alice/demo", "episode_indices": [0], "output_name": "x"}
+    )
+    assert response.status_code == 409
+
+
+def test_move_episodes_route_maps_validation_error(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lelab import datasets as datasets_mod
+
+    monkeypatch.setattr(
+        datasets_mod, "handle_move_episodes", lambda *_: (_ for _ in ()).throw(ValueError("bad input"))
+    )
+    response = client.post(
+        "/datasets/move-episodes", json={"repo_id": "alice/demo", "episode_indices": [0], "output_name": "x"}
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "bad input"
+
+
+@pytest.mark.parametrize("episode_indices", [[], [-1]])
+def test_move_episodes_route_rejects_bad_indices_before_editing(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, episode_indices: list[int]
+) -> None:
+    from lelab import datasets as datasets_mod
+
+    monkeypatch.setattr(datasets_mod, "handle_move_episodes", lambda *_: pytest.fail("must not edit"))
+    response = client.post(
+        "/datasets/move-episodes",
+        json={"repo_id": "alice/demo", "episode_indices": episode_indices, "output_name": "x"},
+    )
+    assert response.status_code == 422
+
+
 # ── episode browsing ────────────────────────────────────────────────────────
 #
 # The handlers are covered end-to-end through the routes, so the query-param

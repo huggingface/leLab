@@ -16,6 +16,13 @@ export interface MergeDatasetsResult {
   total_frames: number;
 }
 
+export interface MoveEpisodesResult {
+  success: true;
+  repo_id: string;
+  moved_episodes: number;
+  remaining_episodes: number;
+}
+
 export async function listDatasets(
   baseUrl: string,
   fetcher: Fetcher,
@@ -53,5 +60,19 @@ export async function mergeLocalDatasets(
     method: "POST",
     body: { source_repo_ids: sourceRepoIds, output_name: outputName },
     action: "Merge datasets",
+  });
+}
+
+export async function moveEpisodes(
+  baseUrl: string,
+  fetcher: Fetcher,
+  repoId: string,
+  episodeIndices: number[],
+  outputName: string,
+): Promise<MoveEpisodesResult> {
+  return apiRequest<MoveEpisodesResult>(baseUrl, fetcher, "/datasets/move-episodes", {
+    method: "POST",
+    body: { repo_id: repoId, episode_indices: episodeIndices, output_name: outputName },
+    action: "Move episodes",
   });
 }
