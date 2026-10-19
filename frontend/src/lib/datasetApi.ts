@@ -189,3 +189,22 @@ export function formatDuration(seconds: number | null | undefined): string {
   const s = Math.round(seconds % 60);
   return `${m}m ${String(s).padStart(2, "0")}s`;
 }
+
+/**
+ * Parse "3, 7, 10-12" into sorted episode indices. Returns null when the text
+ * is not a list of indices and ranges below `total`.
+ */
+export function parseEpisodeList(text: string, total: number): number[] | null {
+  const indices = new Set<number>();
+  for (const part of text.split(",")) {
+    const item = part.trim();
+    if (!item) continue;
+    const match = /^(\d+)(?:\s*-\s*(\d+))?$/.exec(item);
+    if (!match) return null;
+    const start = Number(match[1]);
+    const end = match[2] === undefined ? start : Number(match[2]);
+    if (end < start || end >= total) return null;
+    for (let i = start; i <= end; i++) indices.add(i);
+  }
+  return indices.size > 0 ? [...indices].sort((a, b) => a - b) : null;
+}
