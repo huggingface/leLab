@@ -16,6 +16,7 @@ import {
 import { Button } from "@/components/ui/button";
 import DeleteDatasetDialog from "@/components/dataset/DeleteDatasetDialog";
 import EpisodeList from "@/components/dataset/EpisodeList";
+import EpisodeTaskDialog from "@/components/dataset/EpisodeTaskDialog";
 import EpisodeViewer from "@/components/dataset/EpisodeViewer";
 import MergeDatasetsDialog from "@/components/dataset/MergeDatasetsDialog";
 import MoveEpisodesDialog from "@/components/dataset/MoveEpisodesDialog";
@@ -29,7 +30,7 @@ import { useRobots } from "@/hooks/useRobots";
 import { useToast } from "@/hooks/use-toast";
 import { formatDuration } from "@/lib/datasetApi";
 import { openHubViewer } from "@/lib/hubViewer";
-import { DatasetItem, MoveDestination, mergeLocalDatasets, moveEpisodes } from "@/lib/replayApi";
+import { DatasetItem, MoveDestination, mergeLocalDatasets, moveEpisodes, setEpisodeTask } from "@/lib/replayApi";
 
 // The robot_type LeRobot stores for the SO-101 follower.
 const FOLLOWER_ROBOT_TYPE = "so_follower";
@@ -58,6 +59,7 @@ const EditDataset = () => {
   const [mergeOpen, setMergeOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
+  const [taskOpen, setTaskOpen] = useState(false);
   // A Hub-only dataset has no videos on disk to decode.
   const localDatasets = useMemo(
     () => datasets.filter((d) => d.source === "local" || d.source === "both"),
@@ -123,6 +125,18 @@ const EditDataset = () => {
     toast({
       title: "Episodes moved",
       description: `${result.moved_episodes} moved to ${result.repo_id}, ${result.remaining_episodes} left in ${repoId}.`,
+    });
+  };
+  const handleSaveTask = async (task: string, targetEpisode: number | null) => {
+    if (!repoId) return;
+    const result = await setEpisodeTask(baseUrl, fetchWithHeaders, repoId, task, targetEpisode);
+    refreshEpisodes();
+    toast({
+      title: "Task saved",
+      description:
+        targetEpisode === null
+          ? `All ${result.updated_episodes} episodes now have the task "${result.task}".`
+          : `Episode ${targetEpisode} now has the task "${result.task}".`,
     });
   };
   const setEpisode = (next: number) => {
@@ -310,6 +324,7 @@ const EditDataset = () => {
                 episodes={data.episodes}
                 selected={episodeIndex}
                 onSelect={setEpisode}
+                onEditTask={selectedIsLocal ? () => setTaskOpen(true) : undefined}
               />
 
               <div>
@@ -352,6 +367,18 @@ const EditDataset = () => {
           open={moveOpen}
           onOpenChange={setMoveOpen}
           onMove={handleMove}
+        />
+      )}
+
+      {repoId && selectedIsLocal && data?.success && episodeIndex !== null && (
+        <EpisodeTaskDialog
+          repoId={repoId}
+          episodeIndex={episodeIndex}
+          currentTask={data.episodes.find((ep) => ep.episode_index === episodeIndex)?.tasks[0] ?? ""}
+          totalEpisodes={data.total_episodes}
+          open={taskOpen}
+          onOpenChange={setTaskOpen}
+          onSave={handleSaveTask}
         />
       )}
 
