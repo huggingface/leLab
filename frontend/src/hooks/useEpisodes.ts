@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useApi } from "@/contexts/ApiContext";
 import {
   EpisodeDetail,
@@ -13,6 +13,7 @@ export const useEpisodes = (repoId: string | null) => {
   const [data, setData] = useState<EpisodeListResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [version, setVersion] = useState(0);
 
   useEffect(() => {
     setData(null);
@@ -44,11 +45,13 @@ export const useEpisodes = (repoId: string | null) => {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [baseUrl, fetchWithHeaders, repoId]);
+  }, [baseUrl, fetchWithHeaders, repoId, version]);
+
+  const refresh = useCallback(() => setVersion((v) => v + 1), []);
 
   // Effects run after render: do not let the new dataset auto-select an
   // episode from the old list before this effect clears it.
-  return { data: data?.repo_id === repoId ? data : null, loading, error };
+  return { data: data?.repo_id === repoId ? data : null, loading, error, refresh };
 };
 
 /** One episode's detail. Either arg null → idle. */
