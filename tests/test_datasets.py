@@ -401,6 +401,106 @@ def test_move_episodes_route_rejects_bad_indices_before_editing(
     assert response.status_code == 422
 
 
+def test_delete_episodes_renumbers_the_source(tmp_lerobot_home: Path) -> None:
+    from lelab.datasets import handle_delete_episodes
+
+    _record_dataset("alice/demo", episodes=4)
+
+    result = handle_delete_episodes("alice/demo", [3, 1])
+
+    assert result == {
+        "success": True,
+        "repo_id": "alice/demo",
+        "deleted_episodes": 2,
+        "remaining_episodes": 2,
+    }
+    assert _episode_tasks("alice/demo") == ["task 0", "task 2"]
+    assert not list((tmp_lerobot_home / "alice").glob(".demo.delete-*"))
+
+
+@pytest.mark.parametrize(
+    ("episode_indices", "message"),
+    [
+        ([], "at least one episode to delete"),
+        ([5], r"Episodes not in alice/demo: \[5\]"),
+        ([0, 1], "Cannot delete every episode"),
+    ],
+)
+def test_delete_episodes_rejects_invalid_request(
+    tmp_lerobot_home: Path, episode_indices: list[int], message: str
+) -> None:
+    from lelab.datasets import handle_delete_episodes
+
+    _record_dataset("alice/demo", episodes=2)
+    with pytest.raises(ValueError, match=message):
+        handle_delete_episodes("alice/demo", episode_indices)
+    assert _episode_tasks("alice/demo") == ["task 0", "task 1"]
+
+
+def test_delete_episodes_leaves_source_untouched_on_failure(
+    tmp_lerobot_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lelab import datasets as datasets_mod
+
+    _record_dataset("alice/demo", episodes=3)
+
+    def failing_copy(dataset, episode_indices, output_dir, repo_id):
+        output_dir.mkdir(parents=True)
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(datasets_mod, "delete_episodes", failing_copy)
+
+    with pytest.raises(RuntimeError, match="disk full"):
+        datasets_mod.handle_delete_episodes("alice/demo", [1])
+
+    assert _episode_tasks("alice/demo") == ["task 0", "task 1", "task 2"]
+    assert not list((tmp_lerobot_home / "alice").glob(".demo.delete-*"))
+
+
+def test_delete_episodes_route_refuses_while_recording(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lelab import datasets as datasets_mod, record
+
+    monkeypatch.setattr(record, "recording_active", True)
+    monkeypatch.setattr(
+        datasets_mod, "handle_delete_episodes", lambda *_: pytest.fail("must not edit while recording")
+    )
+
+    response = client.post(
+        "/datasets/delete-episodes", json={"repo_id": "alice/demo", "episode_indices": [0]}
+    )
+    assert response.status_code == 409
+
+
+def test_delete_episodes_route_maps_validation_error(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lelab import datasets as datasets_mod
+
+    monkeypatch.setattr(
+        datasets_mod, "handle_delete_episodes", lambda *_: (_ for _ in ()).throw(ValueError("bad input"))
+    )
+    response = client.post(
+        "/datasets/delete-episodes", json={"repo_id": "alice/demo", "episode_indices": [0]}
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "bad input"
+
+
+@pytest.mark.parametrize("episode_indices", [[], [-1]])
+def test_delete_episodes_route_rejects_bad_indices_before_editing(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, episode_indices: list[int]
+) -> None:
+    from lelab import datasets as datasets_mod
+
+    monkeypatch.setattr(datasets_mod, "handle_delete_episodes", lambda *_: pytest.fail("must not edit"))
+    response = client.post(
+        "/datasets/delete-episodes", json={"repo_id": "alice/demo", "episode_indices": episode_indices}
+    )
+    assert response.status_code == 422
+
+
 # ── episode browsing ────────────────────────────────────────────────────────
 #
 # The handlers are covered end-to-end through the routes, so the query-param

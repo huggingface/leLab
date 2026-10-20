@@ -7,6 +7,7 @@ import {
   Database,
   Disc,
   ExternalLink,
+  ListX,
   Loader2,
   Merge,
   Scissors,
@@ -18,7 +19,7 @@ import DeleteDatasetDialog from "@/components/dataset/DeleteDatasetDialog";
 import EpisodeList from "@/components/dataset/EpisodeList";
 import EpisodeViewer from "@/components/dataset/EpisodeViewer";
 import MergeDatasetsDialog from "@/components/dataset/MergeDatasetsDialog";
-import MoveEpisodesDialog from "@/components/dataset/MoveEpisodesDialog";
+import EpisodesDialog, { EpisodesDialogMode } from "@/components/dataset/EpisodesDialog";
 import DatasetPicker from "@/components/landing/DatasetPicker";
 import RecordingModal from "@/components/landing/RecordingModal";
 import { useApi } from "@/contexts/ApiContext";
@@ -29,7 +30,7 @@ import { useRobots } from "@/hooks/useRobots";
 import { useToast } from "@/hooks/use-toast";
 import { formatDuration } from "@/lib/datasetApi";
 import { openHubViewer } from "@/lib/hubViewer";
-import { DatasetItem, mergeLocalDatasets, moveEpisodes } from "@/lib/replayApi";
+import { DatasetItem, deleteEpisodes, mergeLocalDatasets, moveEpisodes } from "@/lib/replayApi";
 
 // The robot_type LeRobot stores for the SO-101 follower.
 const FOLLOWER_ROBOT_TYPE = "so_follower";
@@ -57,7 +58,13 @@ const EditDataset = () => {
   const { toast } = useToast();
   const [mergeOpen, setMergeOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [moveOpen, setMoveOpen] = useState(false);
+  const [episodesOpen, setEpisodesOpen] = useState(false);
+  // Kept after close, so the dialog does not change layout while it fades out.
+  const [episodesMode, setEpisodesMode] = useState<EpisodesDialogMode>("move");
+  const openEpisodesDialog = (mode: EpisodesDialogMode) => {
+    setEpisodesMode(mode);
+    setEpisodesOpen(true);
+  };
   // A Hub-only dataset has no videos on disk to decode.
   const localDatasets = useMemo(
     () => datasets.filter((d) => d.source === "local" || d.source === "both"),
@@ -113,17 +120,22 @@ const EditDataset = () => {
     setDataset(result.repo_id);
     toast({ title: "Datasets merged", description: `${result.num_episodes} episodes are ready to browse.` });
   };
-  const handleMove = async (episodeIndices: number[], outputName: string) => {
+  const handleEpisodesEdit = async (episodeIndices: number[], outputName: string | null) => {
     if (!repoId) return;
-    const result = await moveEpisodes(baseUrl, fetchWithHeaders, repoId, episodeIndices, outputName);
+    const description =
+      outputName === null
+        ? await deleteEpisodes(baseUrl, fetchWithHeaders, repoId, episodeIndices).then(
+            (result) => `${result.deleted_episodes} deleted, ${result.remaining_episodes} left in ${repoId}.`,
+          )
+        : await moveEpisodes(baseUrl, fetchWithHeaders, repoId, episodeIndices, outputName).then(
+            (result) =>
+              `${result.moved_episodes} moved to ${result.repo_id}, ${result.remaining_episodes} left in ${repoId}.`,
+          );
     refresh();
     // The episodes left behind are renumbered, so reopen the dataset from its first one.
     setSearchParams(withApi({ dataset: repoId }));
     refreshEpisodes();
-    toast({
-      title: "Episodes moved",
-      description: `${result.moved_episodes} moved to ${result.repo_id}, ${result.remaining_episodes} left in ${repoId}.`,
-    });
+    toast({ title: outputName === null ? "Episodes deleted" : "Episodes moved", description });
   };
   const setEpisode = (next: number) => {
     if (!repoId) return;
@@ -195,11 +207,22 @@ const EditDataset = () => {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setMoveOpen(true)}
+                onClick={() => openEpisodesDialog("move")}
                 className="h-9 gap-1.5 border-gray-800 bg-gray-950 text-xs text-gray-300 hover:bg-gray-900"
               >
                 <Scissors className="h-3.5 w-3.5" />
                 Move episodes
+              </Button>
+            )}
+            {repoId && selectedIsLocal && data?.success && data.total_episodes > 1 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => openEpisodesDialog("delete")}
+                className="h-9 gap-1.5 border-gray-800 bg-gray-950 text-xs text-gray-300 hover:bg-gray-900"
+              >
+                <ListX className="h-3.5 w-3.5" />
+                Delete episodes
               </Button>
             )}
             {repoId && selectedSource === "both" && (
@@ -344,13 +367,14 @@ const EditDataset = () => {
       )}
 
       {repoId && selectedIsLocal && data?.success && (
-        <MoveEpisodesDialog
+        <EpisodesDialog
+          mode={episodesMode}
           repoId={repoId}
           totalEpisodes={data.total_episodes}
           currentEpisode={episodeIndex}
-          open={moveOpen}
-          onOpenChange={setMoveOpen}
-          onMove={handleMove}
+          open={episodesOpen}
+          onOpenChange={setEpisodesOpen}
+          onSubmit={handleEpisodesEdit}
         />
       )}
 

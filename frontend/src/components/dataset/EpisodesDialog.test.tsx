@@ -5,7 +5,7 @@ import { expect, test } from "vitest";
 
 import { parseEpisodeList } from "@/lib/datasetApi";
 
-import MoveEpisodesDialog from "./MoveEpisodesDialog";
+import EpisodesDialog from "./EpisodesDialog";
 
 test("parses episode lists and ranges", () => {
   expect(parseEpisodeList("3, 1, 5-7, 3", 10)).toEqual([1, 3, 5, 6, 7]);
@@ -26,20 +26,21 @@ test("opens on the browsed episode and refuses to move every episode", async () 
   try {
     await act(async () => {
       root.render(
-        <MoveEpisodesDialog
+        <EpisodesDialog
+          mode="move"
           repoId="local/demo"
           totalEpisodes={2}
           currentEpisode={1}
           open
           onOpenChange={() => {}}
-          onMove={async (indices, name) => {
-            moved.push([indices, name]);
+          onSubmit={async (indices, name) => {
+            moved.push([indices, name!]);
           }}
         />,
       );
     });
 
-    const episodes = document.getElementById("move-episodes") as HTMLInputElement;
+    const episodes = document.getElementById("episode-selection") as HTMLInputElement;
     const name = document.getElementById("moved-dataset-name") as HTMLInputElement;
     const moveButton = () =>
       [...document.body.querySelectorAll("button")].find((b) =>
@@ -67,6 +68,43 @@ test("opens on the browsed episode and refuses to move every episode", async () 
     await type(episodes, "1");
     await act(async () => moveButton().click());
     expect(moved).toEqual([[[1], "rejected_takes"]]);
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
+test("delete mode has no name field and deletes the selected episodes", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const deleted: [number[], string | null][] = [];
+
+  try {
+    await act(async () => {
+      root.render(
+        <EpisodesDialog
+          mode="delete"
+          repoId="local/demo"
+          totalEpisodes={3}
+          currentEpisode={2}
+          open
+          onOpenChange={() => {}}
+          onSubmit={async (indices, name) => {
+            deleted.push([indices, name]);
+          }}
+        />,
+      );
+    });
+
+    expect(document.getElementById("moved-dataset-name")).toBeNull();
+    const deleteButton = [...document.body.querySelectorAll("button")].find((b) =>
+      b.textContent?.startsWith("Delete "),
+    ) as HTMLButtonElement;
+    expect(deleteButton.textContent).toBe("Delete 1 episode");
+    await act(async () => deleteButton.click());
+    expect(deleted).toEqual([[[2], null]]);
   } finally {
     await act(async () => root.unmount());
     host.remove();

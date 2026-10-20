@@ -154,6 +154,11 @@ class MoveEpisodesRequest(BaseModel):
     output_name: str
 
 
+class DeleteEpisodesRequest(BaseModel):
+    repo_id: str
+    episode_indices: list[Annotated[int, Field(ge=0)]] = Field(min_length=1)
+
+
 # Cache for HF Jobs hardware flavors (5-minute TTL)
 _flavors_cache: dict = {"data": None, "fetched_at": 0.0}
 _FLAVOR_CACHE_TTL_SECONDS = 300.0
@@ -453,6 +458,17 @@ def move_dataset_episodes(request: MoveEpisodesRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/datasets/delete-episodes")
+def delete_dataset_episodes(request: DeleteEpisodesRequest):
+    """Delete episodes from a local dataset."""
+    if _record.recording_active:
+        raise HTTPException(status_code=409, detail="Stop the recording before editing a dataset")
+    try:
+        return dataset_browser.handle_delete_episodes(request.repo_id, request.episode_indices)
+    except (DatasetNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/dataset-episodes")
 def dataset_episodes(repo_id: str):
     """List the episodes of a local dataset."""
@@ -490,7 +506,7 @@ def dataset_frame(
         png = dataset_browser.load_episode_frame_png(repo_id, episode_index, camera, frame_index, max_width)
     except (DatasetNotFoundError, EpisodeNotFoundError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    # Not cached: moving episodes out of a dataset renumbers the ones left, so the
+    # Not cached: moving or deleting episodes renumbers the ones left, so the
     # same (dataset, episode, camera, index) can point at a different frame.
     return Response(
         content=png,
@@ -515,8 +531,8 @@ def dataset_video(repo_id: str, camera: str, chunk: int = 0, file: int = 0):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     # content_disposition_type="inline" is load-bearing: the default is
     # "attachment", which makes the browser download the file rather than play it.
-    # no-cache makes the browser revalidate against the ETag, since moving
-    # episodes rewrites the file behind the same chunk/file URL.
+    # no-cache makes the browser revalidate against the ETag, since moving or
+    # deleting episodes rewrites the file behind the same chunk/file URL.
     return FileResponse(
         path,
         media_type="video/mp4",

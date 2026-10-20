@@ -234,28 +234,15 @@ def handle_merge_local_datasets(source_repo_ids: list[str], output_name: str) ->
     }
 
 
-def handle_move_episodes(repo_id: str, episode_indices: list[int], output_name: str) -> dict[str, Any]:
-    """Move episodes out of a local dataset into a new local dataset.
+def _load_for_episode_edit(repo_id: str, episode_indices: list[int], verb: str):
+    """Open a local dataset and check which episodes an edit removes from it.
 
-    Both datasets are written to a staging dir first, so a failure leaves the
-    source as it was. The source is then swapped for the copy without the moved
-    episodes, which renumbers the episodes left in it.
+    Returns the dataset, its directory, the sorted episodes to remove and the
+    episodes that stay.
     """
     episode_indices = sorted(set(episode_indices))
     if not episode_indices:
-        raise ValueError("Select at least one episode to move")
-
-    output_name = output_name.strip()
-    if not _DATASET_NAME_RE.fullmatch(output_name):
-        raise ValueError("Output name may contain only letters, numbers, '.', '_' and '-'")
-
-    output_repo_id = f"{LOCAL_DATASET_NAMESPACE}/{output_name}"
-    cache_root = _lerobot_cache_root()
-    output_dir = (cache_root / output_repo_id).resolve()
-    if cache_root not in output_dir.parents:
-        raise ValueError("Invalid output dataset path")
-    if output_dir.exists():
-        raise ValueError(f"A local dataset already exists at {output_repo_id}")
+        raise ValueError(f"Select at least one episode to {verb}")
 
     try:
         episode_media.ensure_episode_index(repo_id)
@@ -270,7 +257,40 @@ def handle_move_episodes(repo_id: str, episode_indices: list[int], output_name: 
         raise ValueError(f"Episodes not in {repo_id}: {invalid}")
     kept = [i for i in range(total) if i not in episode_indices]
     if not kept:
-        raise ValueError("Cannot move every episode; at least one must stay in the dataset")
+        raise ValueError(f"Cannot {verb} every episode; at least one must stay in the dataset")
+    return dataset, source_dir, episode_indices, kept
+
+
+def _swap_in_staged_copy(source_dir: Path, staging: Path) -> None:
+    """Replace `source_dir` with `staging/kept`, restoring the source if that fails."""
+    source_dir.rename(staging / "old")
+    try:
+        (staging / "kept").rename(source_dir)
+    except OSError:
+        (staging / "old").rename(source_dir)
+        raise
+
+
+def handle_move_episodes(repo_id: str, episode_indices: list[int], output_name: str) -> dict[str, Any]:
+    """Move episodes out of a local dataset into a new local dataset.
+
+    Both datasets are written to a staging dir first, so a failure leaves the
+    source as it was. The source is then swapped for the copy without the moved
+    episodes, which renumbers the episodes left in it.
+    """
+    output_name = output_name.strip()
+    if not _DATASET_NAME_RE.fullmatch(output_name):
+        raise ValueError("Output name may contain only letters, numbers, '.', '_' and '-'")
+
+    output_repo_id = f"{LOCAL_DATASET_NAMESPACE}/{output_name}"
+    cache_root = _lerobot_cache_root()
+    output_dir = (cache_root / output_repo_id).resolve()
+    if cache_root not in output_dir.parents:
+        raise ValueError("Invalid output dataset path")
+    if output_dir.exists():
+        raise ValueError(f"A local dataset already exists at {output_repo_id}")
+
+    dataset, source_dir, episode_indices, kept = _load_for_episode_edit(repo_id, episode_indices, "move")
 
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{output_name}.move-", dir=output_dir.parent))
@@ -278,23 +298,41 @@ def handle_move_episodes(repo_id: str, episode_indices: list[int], output_name: 
         moved = delete_episodes(dataset, kept, output_dir=staging / "moved", repo_id=output_repo_id)
         delete_episodes(dataset, episode_indices, output_dir=staging / "kept", repo_id=repo_id)
         (staging / "moved").rename(output_dir)
-        source_dir.rename(staging / "old")
         try:
-            (staging / "kept").rename(source_dir)
+            _swap_in_staged_copy(source_dir, staging)
         except OSError:
-            (staging / "old").rename(source_dir)
             shutil.rmtree(output_dir, ignore_errors=True)
             raise
-    except Exception:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise
-    else:
+    finally:
         shutil.rmtree(staging, ignore_errors=True)
 
     return {
         "success": True,
         "repo_id": output_repo_id,
         "moved_episodes": moved.num_episodes,
+        "remaining_episodes": len(kept),
+    }
+
+
+def handle_delete_episodes(repo_id: str, episode_indices: list[int]) -> dict[str, Any]:
+    """Delete episodes from a local dataset, renumbering the episodes left.
+
+    The trimmed copy is written to a staging dir first, so a failure leaves the
+    source as it was.
+    """
+    dataset, source_dir, episode_indices, kept = _load_for_episode_edit(repo_id, episode_indices, "delete")
+
+    staging = Path(tempfile.mkdtemp(prefix=f".{source_dir.name}.delete-", dir=source_dir.parent))
+    try:
+        delete_episodes(dataset, episode_indices, output_dir=staging / "kept", repo_id=repo_id)
+        _swap_in_staged_copy(source_dir, staging)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+    return {
+        "success": True,
+        "repo_id": repo_id,
+        "deleted_episodes": len(episode_indices),
         "remaining_episodes": len(kept),
     }
 

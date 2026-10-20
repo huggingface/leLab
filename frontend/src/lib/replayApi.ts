@@ -23,6 +23,13 @@ export interface MoveEpisodesResult {
   remaining_episodes: number;
 }
 
+export interface DeleteEpisodesResult {
+  success: true;
+  repo_id: string;
+  deleted_episodes: number;
+  remaining_episodes: number;
+}
+
 export async function listDatasets(
   baseUrl: string,
   fetcher: Fetcher,
@@ -74,5 +81,18 @@ export async function moveEpisodes(
     method: "POST",
     body: { repo_id: repoId, episode_indices: episodeIndices, output_name: outputName },
     action: "Move episodes",
+  });
+}
+
+export async function deleteEpisodes(
+  baseUrl: string,
+  fetcher: Fetcher,
+  repoId: string,
+  episodeIndices: number[],
+): Promise<DeleteEpisodesResult> {
+  return apiRequest<DeleteEpisodesResult>(baseUrl, fetcher, "/datasets/delete-episodes", {
+    method: "POST",
+    body: { repo_id: repoId, episode_indices: episodeIndices },
+    action: "Delete episodes",
   });
 }
