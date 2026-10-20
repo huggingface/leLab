@@ -15,6 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import DeleteDatasetDialog from "@/components/dataset/DeleteDatasetDialog";
 import EpisodeList from "@/components/dataset/EpisodeList";
+import EpisodeTaskDialog from "@/components/dataset/EpisodeTaskDialog";
 import EpisodeViewer from "@/components/dataset/EpisodeViewer";
 import MergeDatasetsDialog from "@/components/dataset/MergeDatasetsDialog";
 import DatasetPicker from "@/components/landing/DatasetPicker";
@@ -27,7 +28,7 @@ import { useRobots } from "@/hooks/useRobots";
 import { useToast } from "@/hooks/use-toast";
 import { formatDuration } from "@/lib/datasetApi";
 import { openHubViewer } from "@/lib/hubViewer";
-import { DatasetItem, mergeLocalDatasets } from "@/lib/replayApi";
+import { DatasetItem, mergeLocalDatasets, setEpisodeTask } from "@/lib/replayApi";
 
 // The robot_type LeRobot stores for the SO-101 follower.
 const FOLLOWER_ROBOT_TYPE = "so_follower";
@@ -55,6 +56,7 @@ const EditDataset = () => {
   const { toast } = useToast();
   const [mergeOpen, setMergeOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [taskOpen, setTaskOpen] = useState(false);
   // A Hub-only dataset has no videos on disk to decode.
   const localDatasets = useMemo(
     () => datasets.filter((d) => d.source === "local" || d.source === "both"),
@@ -67,7 +69,7 @@ const EditDataset = () => {
   const selectedSource = datasets.find((d) => d.repo_id === repoId)?.source;
   const selectedIsLocal = selectedSource === "local" || selectedSource === "both";
 
-  const { data, loading, error } = useEpisodes(repoId);
+  const { data, loading, error, refresh: refreshEpisodes } = useEpisodes(repoId);
   const {
     detail,
     loading: detailLoading,
@@ -109,6 +111,18 @@ const EditDataset = () => {
     refresh();
     setDataset(result.repo_id);
     toast({ title: "Datasets merged", description: `${result.num_episodes} episodes are ready to browse.` });
+  };
+  const handleSaveTask = async (task: string, targetEpisode: number | null) => {
+    if (!repoId) return;
+    const result = await setEpisodeTask(baseUrl, fetchWithHeaders, repoId, task, targetEpisode);
+    refreshEpisodes();
+    toast({
+      title: "Task saved",
+      description:
+        targetEpisode === null
+          ? `All ${result.updated_episodes} episodes now have the task "${result.task}".`
+          : `Episode ${targetEpisode} now has the task "${result.task}".`,
+    });
   };
   const setEpisode = (next: number) => {
     if (!repoId) return;
@@ -284,6 +298,7 @@ const EditDataset = () => {
                 episodes={data.episodes}
                 selected={episodeIndex}
                 onSelect={setEpisode}
+                onEditTask={selectedIsLocal ? () => setTaskOpen(true) : undefined}
               />
 
               <div>
@@ -314,6 +329,18 @@ const EditDataset = () => {
           open={mergeOpen}
           onOpenChange={setMergeOpen}
           onMerge={handleMerge}
+        />
+      )}
+
+      {repoId && selectedIsLocal && data?.success && episodeIndex !== null && (
+        <EpisodeTaskDialog
+          repoId={repoId}
+          episodeIndex={episodeIndex}
+          currentTask={data.episodes.find((ep) => ep.episode_index === episodeIndex)?.tasks[0] ?? ""}
+          totalEpisodes={data.total_episodes}
+          open={taskOpen}
+          onOpenChange={setTaskOpen}
+          onSave={handleSaveTask}
         />
       )}
 

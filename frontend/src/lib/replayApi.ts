@@ -55,3 +55,25 @@ export async function mergeLocalDatasets(
     action: "Merge datasets",
   });
 }
+
+export interface EpisodeTaskResult {
+  success: true;
+  repo_id: string;
+  task: string;
+  updated_episodes: number;
+}
+
+/** Set the task of one episode, or of every episode when `episodeIndex` is null. */
+export async function setEpisodeTask(
+  baseUrl: string,
+  fetcher: Fetcher,
+  repoId: string,
+  task: string,
+  episodeIndex: number | null,
+): Promise<EpisodeTaskResult> {
+  return apiRequest<EpisodeTaskResult>(baseUrl, fetcher, "/datasets/episode-task", {
+    method: "POST",
+    body: { repo_id: repoId, task, episode_index: episodeIndex },
+    action: "Edit task",
+  });
+}

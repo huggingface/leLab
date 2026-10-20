@@ -1,13 +1,16 @@
 import React, { useEffect, useRef } from "react";
+import { Pencil } from "lucide-react";
 import { EpisodeSummary, formatDuration } from "@/lib/datasetApi";
 
 interface EpisodeListProps {
   episodes: EpisodeSummary[];
   selected: number | null;
   onSelect: (episodeIndex: number) => void;
+  /** Shows an edit button on the selected episode's task when set. */
+  onEditTask?: (episodeIndex: number) => void;
 }
 
-const EpisodeList: React.FC<EpisodeListProps> = ({ episodes, selected, onSelect }) => {
+const EpisodeList: React.FC<EpisodeListProps> = ({ episodes, selected, onSelect, onEditTask }) => {
   const activeRef = useRef<HTMLButtonElement | null>(null);
 
   // Follow the selection. Paging with Previous/Next, or opening a link straight
@@ -39,29 +42,43 @@ const EpisodeList: React.FC<EpisodeListProps> = ({ episodes, selected, onSelect 
         {episodes.map((ep) => {
           const active = ep.episode_index === selected;
           return (
-            <button
+            <div
               key={ep.episode_index}
-              ref={active ? activeRef : undefined}
-              type="button"
-              onClick={() => onSelect(ep.episode_index)}
-              className={`flex w-full items-center gap-2 border-b border-gray-900 px-3 py-2 text-left transition last:border-b-0 ${
+              className={`flex items-center border-b border-gray-900 transition last:border-b-0 ${
                 active ? "bg-gray-800/80" : "hover:bg-gray-900"
-              } focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-orange-500`}
+              }`}
             >
-              <span
-                className={`w-8 text-xs tabular-nums ${
-                  active ? "font-semibold text-orange-400" : "text-gray-500"
-                }`}
+              <button
+                ref={active ? activeRef : undefined}
+                type="button"
+                onClick={() => onSelect(ep.episode_index)}
+                className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-orange-500"
               >
-                {ep.episode_index}
-              </span>
-              <span className="flex-1 truncate text-xs text-gray-300">
-                {ep.tasks.length > 0 ? ep.tasks.join(", ") : "—"}
-              </span>
-              <span className="text-[11px] tabular-nums text-gray-500">
-                {formatDuration(ep.duration_s)}
-              </span>
-            </button>
+                <span
+                  className={`w-8 text-xs tabular-nums ${
+                    active ? "font-semibold text-orange-400" : "text-gray-500"
+                  }`}
+                >
+                  {ep.episode_index}
+                </span>
+                <span className="flex-1 truncate text-xs text-gray-300">
+                  {ep.tasks.length > 0 ? ep.tasks.join(", ") : "—"}
+                </span>
+                <span className="text-[11px] tabular-nums text-gray-500">
+                  {formatDuration(ep.duration_s)}
+                </span>
+              </button>
+              {active && onEditTask && (
+                <button
+                  type="button"
+                  onClick={() => onEditTask(ep.episode_index)}
+                  aria-label={`Edit the task of episode ${ep.episode_index}`}
+                  className="mr-2 rounded p-1 text-gray-500 hover:bg-gray-700 hover:text-gray-200 focus:outline-none focus-visible:ring-1 focus-visible:ring-orange-500"
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+              )}
+            </div>
           );
         })}
       </div>

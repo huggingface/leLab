@@ -262,6 +262,139 @@ def test_merge_route_returns_result_and_maps_validation_error(
     assert response.json()["detail"] == "bad input"
 
 
+def _record_dataset(repo_id: str, episodes: int) -> Path:
+    """Write a finished LeRobot dataset whose episode i has every value set to i."""
+    import numpy as np
+
+    from lerobot.datasets import LeRobotDataset
+
+    features = {"action": {"dtype": "float32", "shape": (1,), "names": ["a"]}}
+    dataset = LeRobotDataset.create(repo_id, fps=10, features=features, use_videos=False)
+    for ep in range(episodes):
+        for _ in range(3):
+            dataset.add_frame({"action": np.full(1, ep, dtype=np.float32), "task": f"task {ep}"})
+        dataset.save_episode()
+    dataset.finalize()
+    return dataset.root
+
+
+def _episode_tasks(repo_id: str) -> list[str]:
+    from lelab import episode_media
+    from lerobot.datasets import LeRobotDataset
+
+    dataset = LeRobotDataset(repo_id=repo_id, root=episode_media.resolve_dataset_dir(repo_id))
+    return [dataset.meta.episodes[i]["tasks"][0] for i in range(dataset.meta.total_episodes)]
+
+
+def test_set_episode_task_relabels_one_episode(tmp_lerobot_home: Path) -> None:
+    from lelab.datasets import handle_set_episode_task
+
+    root = _record_dataset("alice/demo", episodes=3)
+    # Stands in for the videos, which the edit must link rather than copy.
+    (root / "videos").mkdir()
+    (root / "videos" / "clip.mp4").write_bytes(b"frames")
+    inode = (root / "videos" / "clip.mp4").stat().st_ino
+
+    result = handle_set_episode_task("alice/demo", "  pick the bowl ", episode_index=1)
+
+    assert result == {
+        "success": True,
+        "repo_id": "alice/demo",
+        "task": "pick the bowl",
+        "updated_episodes": 1,
+    }
+    assert _episode_tasks("alice/demo") == ["task 0", "pick the bowl", "task 2"]
+    assert (root / "videos" / "clip.mp4").stat().st_ino == inode
+    assert not list((tmp_lerobot_home / "alice").glob(".demo.task-*"))
+
+
+def test_set_episode_task_relabels_every_episode(tmp_lerobot_home: Path) -> None:
+    from lelab.datasets import handle_set_episode_task
+
+    _record_dataset("alice/demo", episodes=3)
+
+    result = handle_set_episode_task("alice/demo", "pick the bowl")
+
+    assert result["updated_episodes"] == 3
+    assert _episode_tasks("alice/demo") == ["pick the bowl"] * 3
+
+
+@pytest.mark.parametrize(
+    ("task", "episode_index", "message"),
+    [(" ", 0, "cannot be empty"), ("pick", 3, "Episode 3 is not in alice/demo")],
+)
+def test_set_episode_task_rejects_invalid_request(
+    tmp_lerobot_home: Path, task: str, episode_index: int, message: str
+) -> None:
+    from lelab.datasets import handle_set_episode_task
+
+    _record_dataset("alice/demo", episodes=3)
+    with pytest.raises(ValueError, match=message):
+        handle_set_episode_task("alice/demo", task, episode_index)
+    assert _episode_tasks("alice/demo") == ["task 0", "task 1", "task 2"]
+
+
+def test_set_episode_task_leaves_source_untouched_on_failure(
+    tmp_lerobot_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lelab import datasets as datasets_mod
+
+    _record_dataset("alice/demo", episodes=2)
+    real_modify = datasets_mod.modify_tasks
+
+    def failing_modify(dataset, **kwargs):
+        real_modify(dataset, **kwargs)
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(datasets_mod, "modify_tasks", failing_modify)
+
+    with pytest.raises(RuntimeError, match="disk full"):
+        datasets_mod.handle_set_episode_task("alice/demo", "pick the bowl")
+
+    assert _episode_tasks("alice/demo") == ["task 0", "task 1"]
+    assert not list((tmp_lerobot_home / "alice").glob(".demo.task-*"))
+
+
+def test_episode_task_route_refuses_while_recording(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lelab import datasets as datasets_mod, record
+
+    monkeypatch.setattr(record, "recording_active", True)
+    monkeypatch.setattr(
+        datasets_mod, "handle_set_episode_task", lambda *_: pytest.fail("must not edit while recording")
+    )
+
+    response = client.post("/datasets/episode-task", json={"repo_id": "alice/demo", "task": "pick"})
+    assert response.status_code == 409
+
+
+@pytest.mark.parametrize("body", [{"task": ""}, {"task": "pick", "episode_index": -1}])
+def test_episode_task_route_rejects_bad_request_before_editing(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, body: dict
+) -> None:
+    from lelab import datasets as datasets_mod
+
+    monkeypatch.setattr(datasets_mod, "handle_set_episode_task", lambda *_: pytest.fail("must not edit"))
+    response = client.post("/datasets/episode-task", json={"repo_id": "alice/demo", **body})
+    assert response.status_code == 422
+
+
+def test_episode_task_route_maps_validation_error(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lelab import datasets as datasets_mod
+
+    monkeypatch.setattr(
+        datasets_mod, "handle_set_episode_task", lambda *_: (_ for _ in ()).throw(ValueError("bad input"))
+    )
+    response = client.post(
+        "/datasets/episode-task", json={"repo_id": "alice/demo", "task": "pick", "episode_index": 0}
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "bad input"
+
+
 # ── episode browsing ────────────────────────────────────────────────────────
 #
 # The handlers are covered end-to-end through the routes, so the query-param
