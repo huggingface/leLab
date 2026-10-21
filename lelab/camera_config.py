@@ -31,7 +31,7 @@ def validate_camera_rotations(cameras: dict[str, dict[str, Any]]) -> dict[str, d
 def lerobot_camera_settings(config: dict[str, Any]) -> dict[str, Any]:
     """Return LeRobot output dimensions and its signed rotation value.
 
-    The API dimensions describe the native capture mode. LeRobot v0.6.0
+    The API dimensions describe the native capture mode. LeRobot camera config
     dimensions describe the rotated output, so quarter-turns swap them.
     """
     validate_camera_rotations({"camera": config})
