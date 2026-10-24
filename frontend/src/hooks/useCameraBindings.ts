@@ -5,6 +5,7 @@ import { ImageFeatures } from "@/lib/checkpointsApi";
 import {
   CameraRequest,
   CameraRotation,
+  liveCameraFor,
   PhysicalCamera,
   physicalCameraKey,
   rotatedDimensions,
@@ -43,10 +44,7 @@ export function useCameraBindings(
           (c) => c.name.toLowerCase() === expectedName.toLowerCase(),
         );
         if (!robotCam) continue;
-        const live =
-          (robotCam.device_id &&
-            availableCameras.find((c) => c.deviceId === robotCam.device_id)) ||
-          availableCameras.find((c) => c.index === robotCam.camera_index);
+        const live = liveCameraFor(robotCam, availableCameras);
         if (live) {
           next[expectedName] = live.index;
           changed = true;

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { CameraConfig, cameraRotation, normalizeCameraConfig, physicalCameraKey, rotatedDimensions, rotationForCamera, serializeCameras } from "./cameraConfig";
+import { CameraConfig, cameraRotation, normalizeCameraConfig, physicalCameraKey, previewDeviceId, rotatedDimensions, rotationForCamera, serializeCameras } from "./cameraConfig";
 const camera: CameraConfig = { id: "wrist", name: "wrist", device_id: "usb-wrist", camera_index: 1, type: "opencv", width: 640, height: 480, fps: 30 };
 
 test("old profiles default to zero without changing capture dimensions", () => {
@@ -26,4 +26,12 @@ test("rotation follows a physical camera across index drift and policy reassignm
   expect(rotationForCamera(wrist, saved, overrides)).toBe(270);
   expect(rotationForCamera(top, saved, overrides)).toBe(90);
   expect(rotationForCamera({ deviceId: "unsaved", index: 5 }, saved, {})).toBe(0);
+});
+test("a saved camera previews by its device ID, else by cv2 index in another browser", () => {
+  const firefox = [{ index: 0, deviceId: "ff-other" }, { index: 1, deviceId: "usb-wrist" }];
+  const safari = [{ index: 0, deviceId: "sf-other" }, { index: 1, deviceId: "sf-wrist" }];
+  expect(previewDeviceId(camera, firefox)).toBe("usb-wrist");
+  expect(previewDeviceId(camera, safari)).toBe("sf-wrist");
+  expect(previewDeviceId(camera, [])).toBe("usb-wrist");
+  expect(previewDeviceId({ ...camera, camera_index: 5 }, safari)).toBe("");
 });

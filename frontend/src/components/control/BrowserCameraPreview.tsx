@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React from "react";
 import { VideoOff } from "lucide-react";
 import { useCameraStream } from "@/hooks/useCameraStream";
 import { CameraRotation, cameraPreviewGeometry, cameraRotationError } from "@/lib/cameraConfig";
@@ -13,7 +13,11 @@ interface Props {
   fallback?: string;
 }
 
-/** Browser streams contain raw frames, so only browser previews use CSS rotation. */
+/**
+ * Browser streams contain raw frames, so only browser previews use CSS rotation.
+ * The box keeps the recorded capture size's shape even when the browser stream
+ * has another size, so the preview frames the scene the way recording will.
+ */
 export default function BrowserCameraPreview({
   deviceId,
   paused = false,
@@ -24,12 +28,10 @@ export default function BrowserCameraPreview({
   fallback,
 }: Props) {
   const rotationError = cameraRotationError({ rotation });
-  const { videoRef, hasError } = useCameraStream(deviceId, paused || !!rotationError);
-  const [metadata, setMetadata] = useState<{ deviceId: string; width: number; height: number } | null>(null);
-  const dimensions = metadata?.deviceId === deviceId ? metadata : { width, height };
+  const { videoRef, hasError } = useCameraStream(deviceId, paused || !!rotationError, { width, height });
   const geometry = rotationError
     ? { aspectRatio: `${width} / ${height}`, videoStyle: {} }
-    : cameraPreviewGeometry(dimensions.width, dimensions.height, rotation);
+    : cameraPreviewGeometry(width, height, rotation);
   const showVideo = !rotationError && !paused && deviceId && !hasError;
   return (
     <div
@@ -43,12 +45,6 @@ export default function BrowserCameraPreview({
           muted
           playsInline
           style={geometry.videoStyle}
-          onLoadedMetadata={(event) => {
-            const video = event.currentTarget;
-            if (video.videoWidth > 0 && video.videoHeight > 0) {
-              setMetadata({ deviceId, width: video.videoWidth, height: video.videoHeight });
-            }
-          }}
         />
       ) : (
         <div className="absolute inset-0 flex flex-col items-center justify-center">

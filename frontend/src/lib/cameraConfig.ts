@@ -89,7 +89,9 @@ export function cameraPreviewGeometry(width: number, height: number, rotation: C
     top: "50%",
     width: quarterTurn ? `${(width / height) * 100}%` : "100%",
     height: quarterTurn ? `${(height / width) * 100}%` : "100%",
-    objectFit: "contain",
+    // Crop, don't letterbox: a stream that fell back to another aspect ratio
+    // (see useCameraStream) should still show the recorded framing.
+    objectFit: "cover",
     maxWidth: "none",
     transform: `translate(-50%, -50%) rotate(${rotation}deg)`,
   };
@@ -99,6 +101,33 @@ export function cameraPreviewGeometry(width: number, height: number, rotation: C
 export interface PhysicalCamera {
   index: number;
   deviceId: string;
+}
+
+/**
+ * The live camera for a saved one. Browser device IDs differ per browser and
+ * origin, so an ID saved in Firefox is unknown to Safari (or to the Vite dev
+ * origin); fall back to the cv2 index, which every browser shares.
+ */
+export function liveCameraFor<T extends PhysicalCamera>(
+  saved: Pick<CameraConfig, "device_id" | "camera_index">,
+  available: T[],
+): T | undefined {
+  return (
+    (saved.device_id ? available.find((c) => c.deviceId === saved.device_id) : undefined) ??
+    available.find((c) => c.index === saved.camera_index)
+  );
+}
+
+/**
+ * Browser device ID to preview a saved camera with. Until the live cameras
+ * have been listed, try the saved ID; afterwards "" means no camera matched.
+ */
+export function previewDeviceId(
+  saved: Pick<CameraConfig, "device_id" | "camera_index">,
+  available: PhysicalCamera[],
+): string {
+  if (available.length === 0) return saved.device_id;
+  return liveCameraFor(saved, available)?.deviceId ?? "";
 }
 
 export function physicalCameraKey(camera: PhysicalCamera): string {

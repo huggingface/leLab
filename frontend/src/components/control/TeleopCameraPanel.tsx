@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useRobots } from "@/hooks/useRobots";
+import { useAvailableCameras } from "@/hooks/useAvailableCameras";
+import { previewDeviceId } from "@/lib/cameraConfig";
 import CameraFeed from "./CameraFeed";
 
 /**
@@ -23,16 +25,18 @@ const TeleopCameraPanel: React.FC = () => {
   // attempt) — useful if a camera was unplugged and reconnected.
   const [reloadKey, setReloadKey] = useState(0);
   const { selectedRecord, isLoading: robotsLoading } = useRobots();
+  const { cameras: availableCameras } = useAvailableCameras({ enabled });
 
-  // Feeds come solely from the robot's configured cameras; each carries a stored
-  // browser device_id we stream directly. A configured camera whose device is
-  // currently absent still shows (name + failed-preview placeholder), so the
-  // user can tell it's expected but not detected.
+  // Feeds come solely from the robot's configured cameras, streamed by their
+  // stored browser device_id or, in a browser that doesn't know that ID, by
+  // their cv2 index. A configured camera whose device is currently absent still
+  // shows (name + failed-preview placeholder), so the user can tell it's
+  // expected but not detected.
   const configured = selectedRecord?.cameras ?? [];
   const feeds = configured.map((c) => ({
     key: c.id,
     name: c.name,
-    deviceId: c.device_id,
+    deviceId: previewDeviceId(c, availableCameras),
     rotation: c.rotation,
     width: c.width,
     height: c.height,

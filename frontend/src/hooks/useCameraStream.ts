@@ -15,6 +15,13 @@ import { useEffect, useRef, useState } from "react";
  *     device-exposure change (timing isn't guaranteed) — so we re-attempt on
  *     that event instead. Without this the hook would otherwise stay stuck on
  *     the error state until a full page reload.
+ *
+ * The stream is first requested at `size`, the capture size recording uses
+ * (browser default when omitted). A stream can also open cleanly yet never
+ * deliver a frame: some UVC cameras (e.g. Innomaker U20CAM on macOS) accept
+ * 640x480 in Firefox but stay silent until something starts them at a native
+ * resolution. If no frame arrives within STALL_TIMEOUT_MS we reopen at the
+ * next size in FALLBACK_SIZES, so cameras that stream at `size` are untouched.
  */
 const MAX_RETRIES = 4;
 const BASE_DELAY_MS = 300;
@@ -22,8 +29,21 @@ const BASE_DELAY_MS = 300;
 // device (NotFoundError) and unsatisfiable constraints (OverconstrainedError)
 // won't fix themselves on a retimed retry — those recover via `devicechange`.
 const TRANSIENT_ERRORS = new Set(["NotReadableError", "AbortError"]);
+const STALL_TIMEOUT_MS = 2500;
+const FALLBACK_SIZES: CameraSize[] = [
+  { width: 1280, height: 720 },
+  { width: 1920, height: 1080 },
+];
 
-export function useCameraStream(deviceId: string, paused: boolean) {
+export interface CameraSize {
+  width: number;
+  height: number;
+}
+
+const sizeConstraints = (size: CameraSize | undefined): MediaTrackConstraints =>
+  size ? { width: { ideal: size.width }, height: { ideal: size.height } } : {};
+
+export function useCameraStream(deviceId: string, paused: boolean, size?: CameraSize) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [hasError, setHasError] = useState(false);
   // Bumping this forces the stream effect to re-run (a clean retry).
@@ -53,20 +73,34 @@ export function useCameraStream(deviceId: string, paused: boolean) {
     let cancelled = false;
     let stream: MediaStream | null = null;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let stallTimer: ReturnType<typeof setTimeout> | null = null;
     setHasError(false);
+    const attempts = [size, ...FALLBACK_SIZES];
 
-    const start = async (attempt: number) => {
+    const stopStream = () => {
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+      stream = null;
+    };
+
+    const start = async (attempt: number, sizeIndex: number) => {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { deviceId: { exact: deviceId } },
+          video: { deviceId: { exact: deviceId }, ...sizeConstraints(attempts[sizeIndex]) },
         });
         if (cancelled) {
-          stream.getTracks().forEach((t) => t.stop());
+          stopStream();
           return;
         }
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play().catch(() => {});
+        const video = videoRef.current;
+        if (!video) return;
+        video.srcObject = stream;
+        video.play().catch(() => {});
+        if (sizeIndex < attempts.length - 1) {
+          stallTimer = setTimeout(() => {
+            if (cancelled || video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) return;
+            stopStream();
+            start(0, sizeIndex + 1);
+          }, STALL_TIMEOUT_MS);
         }
       } catch (err) {
         if (cancelled) return;
@@ -74,7 +108,7 @@ export function useCameraStream(deviceId: string, paused: boolean) {
         if (attempt < MAX_RETRIES && TRANSIENT_ERRORS.has(name)) {
           // Exponential backoff: 300ms, 600ms, 1200ms, ...
           retryTimer = setTimeout(
-            () => start(attempt + 1),
+            () => start(attempt + 1, sizeIndex),
             BASE_DELAY_MS * 2 ** attempt
           );
         } else {
@@ -82,14 +116,18 @@ export function useCameraStream(deviceId: string, paused: boolean) {
         }
       }
     };
-    start(0);
+    start(0, 0);
 
     return () => {
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
-      if (stream) stream.getTracks().forEach((t) => t.stop());
+      if (stallTimer) clearTimeout(stallTimer);
+      stopStream();
     };
-  }, [deviceId, paused, retryKey]);
+    // Depend on the size's numbers, not the object, so a caller passing a fresh
+    // literal each render doesn't restart the stream.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deviceId, paused, retryKey, size?.width, size?.height]);
 
   return { videoRef, hasError };
 }

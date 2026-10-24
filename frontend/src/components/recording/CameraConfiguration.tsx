@@ -20,7 +20,13 @@ import { useToast } from "@/hooks/use-toast";
 import { useAvailableCameras } from "@/hooks/useAvailableCameras";
 import BrowserCameraPreview from "@/components/control/BrowserCameraPreview";
 import CameraRotationSelect from "@/components/control/CameraRotationSelect";
-import { CameraConfig, cameraRotation, cameraRotationError, rotatedDimensions } from "@/lib/cameraConfig";
+import {
+  CameraConfig,
+  cameraRotation,
+  cameraRotationError,
+  previewDeviceId,
+  rotatedDimensions,
+} from "@/lib/cameraConfig";
 export type { CameraConfig } from "@/lib/cameraConfig";
 
 // Sentinels distinguish "leave unset" (auto-detect / platform default) from an
@@ -298,6 +304,7 @@ const CameraConfiguration: React.FC<CameraConfigurationProps> = ({
               <CameraPreview
                 key={camera.id}
                 camera={camera}
+                deviceId={previewDeviceId(camera, availableCameras)}
                 paused={streamsPaused}
                 readOnly={readOnly}
                 onRemove={() => removeCamera(camera.id)}
@@ -324,6 +331,7 @@ const CameraConfiguration: React.FC<CameraConfigurationProps> = ({
 
 interface CameraPreviewProps {
   camera: CameraConfig;
+  deviceId: string;
   paused: boolean;
   readOnly: boolean;
   onRemove: () => void;
@@ -332,6 +340,7 @@ interface CameraPreviewProps {
 
 const CameraPreview: React.FC<CameraPreviewProps> = ({
   camera,
+  deviceId,
   paused,
   readOnly,
   onRemove,
@@ -343,12 +352,12 @@ const CameraPreview: React.FC<CameraPreviewProps> = ({
   return (
     <div className="bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
       <BrowserCameraPreview
-        deviceId={camera.device_id}
+        deviceId={deviceId}
         paused={paused}
         rotation={camera.rotation}
         width={camera.width}
         height={camera.height}
-        fallback={paused ? "Preview paused" : camera.device_id ? undefined : "No browser match"}
+        fallback={paused ? "Preview paused" : deviceId ? undefined : "No browser match"}
       />
 
       {/* Camera Info */}

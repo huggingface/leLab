@@ -19,30 +19,23 @@ test("the Rotation control exposes four clockwise values and emits a number", ()
   act(() => { select.value = "90"; select.dispatchEvent(new Event("change", { bubbles: true })); });
   expect(change).toHaveBeenCalledWith(90);
 });
-test("a quarter turn fits the whole non-square frame and uses actual stream dimensions", () => {
+test("a quarter turn fills the rotated recorded frame", () => {
   act(() => root.render(<BrowserCameraPreview deviceId="wrist" rotation={90} width={640} height={480} />));
   const video = container.querySelector("video")!, wrapper = video.parentElement!;
   expect(wrapper.style.aspectRatio).toBe("480 / 640");
-  expect(video.style.objectFit).toBe("contain");
+  expect(video.style.objectFit).toBe("cover");
   expect(video.style.maxWidth).toBe("none");
   expect(video.style.transform).toBe("translate(-50%, -50%) rotate(90deg)");
   expect(parseFloat(video.style.width)).toBeCloseTo(640 / 480 * 100);
   expect(parseFloat(video.style.height)).toBeCloseTo(480 / 640 * 100);
+});
+test("a stream at another size keeps the recorded aspect ratio", () => {
+  act(() => root.render(<BrowserCameraPreview deviceId="A" rotation={0} width={640} height={480} />));
+  const video = container.querySelector("video")!;
   Object.defineProperty(video, "videoWidth", { value: 1280 });
   Object.defineProperty(video, "videoHeight", { value: 720 });
   act(() => video.dispatchEvent(new Event("loadedmetadata")));
-  expect(wrapper.style.aspectRatio).toBe("720 / 1280");
-  expect(parseFloat(video.style.width)).toBeCloseTo(1280 / 720 * 100);
-  expect(parseFloat(video.style.height)).toBeCloseTo(720 / 1280 * 100);
-});
-test("device reassignment does not reuse the old device's frame geometry", () => {
-  act(() => root.render(<BrowserCameraPreview deviceId="A" rotation={270} />));
-  const video = container.querySelector("video")!;
-  Object.defineProperty(video, "videoWidth", { value: 1920 });
-  Object.defineProperty(video, "videoHeight", { value: 1080 });
-  act(() => video.dispatchEvent(new Event("loadedmetadata")));
-  act(() => root.render(<BrowserCameraPreview deviceId="B" rotation={180} width={640} height={480} />));
   expect(video.parentElement!.style.aspectRatio).toBe("640 / 480");
   expect(video.style.width).toBe("100%");
-  expect(video.style.transform).toContain("rotate(180deg)");
+  expect(video.style.objectFit).toBe("cover");
 });
