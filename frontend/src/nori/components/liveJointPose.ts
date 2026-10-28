@@ -82,6 +82,10 @@ export function liveStateToJointRadians(
     }
     if (joint.mimicJoint) continue; // never drive a mimic directly
 
+    // The right wrist-roll model axis opposes the physical joint. Correct the
+    // display angle after denormalization so calibration zero is preserved.
+    const displaySign = jointName === "right_wrist_roll_joint" ? -1 : 1;
+
     // Calibrated SI bounds win over URDF limits. Per spec they may be INVERTED
     // (lower > upper: the order carries the axis direction) — interpolate as
     // written, never sort. lift.pos is already physical and never has an entry
@@ -92,7 +96,7 @@ export function liveStateToJointRadians(
       typeof si[0] === "number" && typeof si[1] === "number" &&
       Number.isFinite(si[0]) && Number.isFinite(si[1]) && si[0] !== si[1]
     ) {
-      out[jointName] = si[0] + fraction * (si[1] - si[0]);
+      out[jointName] = displaySign * (si[0] + fraction * (si[1] - si[0]));
       continue;
     }
 
@@ -105,7 +109,7 @@ export function liveStateToJointRadians(
     out[jointName] =
       key === LIFT_KEY
         ? Math.min(upper, Math.max(lower, value / 1000)) // mm → m, clamped
-        : lower + fraction * (upper - lower);
+        : displaySign * (lower + fraction * (upper - lower));
   }
   return out;
 }

@@ -49,6 +49,32 @@ function makeJoints(): Record<string, UrdfJointInfo> {
 }
 
 describe("liveStateToJointRadians", () => {
+  it.each([undefined, [-0.7, 1.3], [1.3, -0.7]] as const)(
+    "reverses only right wrist roll after denormalization (SI bounds: %s)",
+    (bounds) => {
+      const joints = makeJoints();
+      const descriptor = bounds ? {
+        ranges_si: {
+          "right_arm_wrist_roll.pos": [...bounds] as [number, number],
+          "left_arm_wrist_roll.pos": [...bounds] as [number, number],
+          "right_arm_wrist_pitch.pos": [...bounds] as [number, number],
+        },
+      } : undefined;
+      const [lower, upper] = bounds ?? [-1.5, 2.5];
+      for (const value of [-100, -50, 0, 50, 100]) {
+        const out = liveStateToJointRadians({
+          "right_arm_wrist_roll.pos": value,
+          "left_arm_wrist_roll.pos": value,
+          "right_arm_wrist_pitch.pos": value,
+        }, joints, descriptor);
+        const angle = lower + ((value + 100) / 200) * (upper - lower);
+        expect(out.right_wrist_roll_joint).toBeCloseTo(-angle, 10);
+        expect(out.left_wrist_roll_joint).toBeCloseTo(angle, 10);
+        expect(out.right_wrist_pitch_joint).toBeCloseTo(angle, 10);
+      }
+    }
+  );
+
   it("maps all 17 telemetry keys to their URDF joints", () => {
     const state: Record<string, number> = { "lift.pos": 360 };
     for (const side of ["left", "right"] as const) {
