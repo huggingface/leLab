@@ -1,5 +1,7 @@
 import React from "react";
 import { Button } from "@/components/ui/button";
+import { ALIGNED_SCORE, LIGHTING_FAIR, LIGHTING_GOOD } from "@/lib/cameraReferenceScore";
+import type { ReferenceScores } from "@/hooks/useReferenceScores";
 
 interface Props {
   hasReference: boolean;
@@ -9,7 +11,31 @@ interface Props {
   onClear: () => void;
   disabled: boolean;
   error: string | null;
+  scores?: ReferenceScores;
 }
+
+const lightingTone = (match: number) =>
+  match >= LIGHTING_GOOD ? "text-green-400" : match >= LIGHTING_FAIR ? "text-amber-400" : "text-red-400";
+
+/** Live alignment and lighting match against the reference, with the lighting breakdown as text. */
+const ScoreLine: React.FC<{ scores: ReferenceScores }> = ({ scores: { alignment, lighting } }) => (
+  <p className="text-xs text-gray-400" aria-live="polite">
+    Alignment{" "}
+    {alignment === null ? (
+      <span>–</span>
+    ) : (
+      <span className={alignment >= ALIGNED_SCORE ? "text-green-400" : "text-orange-400"}>
+        {Math.round(alignment)}%
+      </span>
+    )}
+    {lighting && (
+      <>
+        {" · "}Lighting <span className={lightingTone(lighting.match)}>{Math.round(lighting.match)}%</span>
+        {` (brightness ${lighting.brightnessDiff.toFixed(1)}%, color ${lighting.colorDiff.toFixed(1)}%)`}
+      </>
+    )}
+  </p>
+);
 
 /** Save the current frame as the reference, then slide the ghost overlay over the live preview. */
 const CameraReferenceControls: React.FC<Props> = ({
@@ -20,6 +46,7 @@ const CameraReferenceControls: React.FC<Props> = ({
   onClear,
   disabled,
   error,
+  scores,
 }) => (
   <div className="space-y-1.5">
     <div className="flex items-center gap-2">
@@ -60,6 +87,7 @@ const CameraReferenceControls: React.FC<Props> = ({
         />
       </label>
     )}
+    {hasReference && scores && <ScoreLine scores={scores} />}
     {error && <p role="alert" className="text-xs text-red-400">{error}</p>}
   </div>
 );
