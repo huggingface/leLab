@@ -157,7 +157,8 @@ class MergeDatasetsRequest(BaseModel):
 class MoveEpisodesRequest(BaseModel):
     repo_id: str
     episode_indices: list[Annotated[int, Field(ge=0)]] = Field(min_length=1)
-    output_name: str
+    output_name: str | None = None
+    target_repo_id: str | None = None
 
 
 # Cache for HF Jobs hardware flavors (5-minute TTL)
@@ -464,12 +465,12 @@ def merge_local_datasets(request: MergeDatasetsRequest):
 
 @app.post("/datasets/move-episodes")
 def move_dataset_episodes(request: MoveEpisodesRequest):
-    """Move episodes out of a local dataset into a new local dataset."""
+    """Move episodes out of a local dataset into a new or an existing local dataset."""
     if _record.recording_active:
         raise HTTPException(status_code=409, detail="Stop the recording before editing a dataset")
     try:
         return dataset_browser.handle_move_episodes(
-            request.repo_id, request.episode_indices, request.output_name
+            request.repo_id, request.episode_indices, request.output_name, request.target_repo_id
         )
     except (DatasetNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -9,7 +9,7 @@ import {
   ExternalLink,
   Loader2,
   Merge,
-  Scissors,
+  SquareArrowOutUpRight,
   Trash2,
   Upload,
 } from "lucide-react";
@@ -29,7 +29,7 @@ import { useRobots } from "@/hooks/useRobots";
 import { useToast } from "@/hooks/use-toast";
 import { formatDuration } from "@/lib/datasetApi";
 import { openHubViewer } from "@/lib/hubViewer";
-import { DatasetItem, mergeLocalDatasets, moveEpisodes } from "@/lib/replayApi";
+import { DatasetItem, MoveDestination, mergeLocalDatasets, moveEpisodes } from "@/lib/replayApi";
 
 // The robot_type LeRobot stores for the SO-101 follower.
 const FOLLOWER_ROBOT_TYPE = "so_follower";
@@ -113,9 +113,9 @@ const EditDataset = () => {
     setDataset(result.repo_id);
     toast({ title: "Datasets merged", description: `${result.num_episodes} episodes are ready to browse.` });
   };
-  const handleMove = async (episodeIndices: number[], outputName: string) => {
+  const handleMove = async (episodeIndices: number[], destination: MoveDestination) => {
     if (!repoId) return;
-    const result = await moveEpisodes(baseUrl, fetchWithHeaders, repoId, episodeIndices, outputName);
+    const result = await moveEpisodes(baseUrl, fetchWithHeaders, repoId, episodeIndices, destination);
     refresh();
     // The episodes left behind are renumbered, so reopen the dataset from its first one.
     setSearchParams(withApi({ dataset: repoId }));
@@ -198,7 +198,7 @@ const EditDataset = () => {
                 onClick={() => setMoveOpen(true)}
                 className="h-9 gap-1.5 border-gray-800 bg-gray-950 text-xs text-gray-300 hover:bg-gray-900"
               >
-                <Scissors className="h-3.5 w-3.5" />
+                <SquareArrowOutUpRight className="h-3.5 w-3.5" />
                 Move episodes
               </Button>
             )}
@@ -345,6 +345,7 @@ const EditDataset = () => {
 
       {repoId && selectedIsLocal && data?.success && (
         <MoveEpisodesDialog
+          datasets={localDatasets}
           repoId={repoId}
           totalEpisodes={data.total_episodes}
           currentEpisode={episodeIndex}

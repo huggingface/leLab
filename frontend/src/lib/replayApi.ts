@@ -63,16 +63,24 @@ export async function mergeLocalDatasets(
   });
 }
 
+export type MoveDestination = { newName: string } | { existingRepoId: string };
+
 export async function moveEpisodes(
   baseUrl: string,
   fetcher: Fetcher,
   repoId: string,
   episodeIndices: number[],
-  outputName: string,
+  destination: MoveDestination,
 ): Promise<MoveEpisodesResult> {
   return apiRequest<MoveEpisodesResult>(baseUrl, fetcher, "/datasets/move-episodes", {
     method: "POST",
-    body: { repo_id: repoId, episode_indices: episodeIndices, output_name: outputName },
+    body: {
+      repo_id: repoId,
+      episode_indices: episodeIndices,
+      ...("newName" in destination
+        ? { output_name: destination.newName }
+        : { target_repo_id: destination.existingRepoId }),
+    },
     action: "Move episodes",
   });
 }

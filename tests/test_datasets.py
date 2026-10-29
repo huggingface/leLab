@@ -262,14 +262,14 @@ def test_merge_route_returns_result_and_maps_validation_error(
     assert response.json()["detail"] == "bad input"
 
 
-def _record_dataset(repo_id: str, episodes: int) -> Path:
+def _record_dataset(repo_id: str, episodes: int, fps: int = 10) -> Path:
     """Write a finished LeRobot dataset whose episode i has every value set to i."""
     import numpy as np
 
     from lerobot.datasets import LeRobotDataset
 
     features = {"action": {"dtype": "float32", "shape": (1,), "names": ["a"]}}
-    dataset = LeRobotDataset.create(repo_id, fps=10, features=features, use_videos=False)
+    dataset = LeRobotDataset.create(repo_id, fps=fps, features=features, use_videos=False)
     for ep in range(episodes):
         for _ in range(3):
             dataset.add_frame({"action": np.full(1, ep, dtype=np.float32), "task": f"task {ep}"})
@@ -322,6 +322,60 @@ def test_move_episodes_rejects_invalid_request(
     with pytest.raises(ValueError, match=message):
         handle_move_episodes("alice/demo", episode_indices, output_name)
     assert _episode_tasks("alice/demo") == ["task 0", "task 1"]
+
+
+def test_move_episodes_merges_into_an_existing_dataset(tmp_lerobot_home: Path) -> None:
+    from lelab.datasets import handle_move_episodes
+
+    _record_dataset("alice/demo", episodes=4)
+    _record_dataset("bob/target", episodes=2)
+
+    result = handle_move_episodes("alice/demo", [1, 3], target_repo_id="bob/target")
+
+    assert result == {
+        "success": True,
+        "repo_id": "bob/target",
+        "moved_episodes": 2,
+        "remaining_episodes": 2,
+    }
+    assert _episode_tasks("bob/target") == ["task 0", "task 1", "task 1", "task 3"]
+    assert _episode_tasks("alice/demo") == ["task 0", "task 2"]
+    assert not list((tmp_lerobot_home / "bob").glob(".target.move-*"))
+
+
+def test_move_episodes_refuses_an_incompatible_target(tmp_lerobot_home: Path) -> None:
+    from lelab.datasets import handle_move_episodes
+
+    _record_dataset("alice/demo", episodes=3)
+    _record_dataset("bob/target", episodes=2, fps=20)
+
+    with pytest.raises(ValueError, match="Same fps is expected"):
+        handle_move_episodes("alice/demo", [1], target_repo_id="bob/target")
+
+    assert _episode_tasks("alice/demo") == ["task 0", "task 1", "task 2"]
+    assert _episode_tasks("bob/target") == ["task 0", "task 1"]
+    assert not list((tmp_lerobot_home / "bob").glob(".target.move-*"))
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({}, "either a new dataset name or an existing target"),
+        (
+            {"output_name": "x", "target_repo_id": "bob/target"},
+            "either a new dataset name or an existing target",
+        ),
+        ({"target_repo_id": "alice/demo"}, "different dataset than the source"),
+    ],
+)
+def test_move_episodes_rejects_an_ambiguous_destination(
+    tmp_lerobot_home: Path, kwargs: dict[str, str], message: str
+) -> None:
+    from lelab.datasets import handle_move_episodes
+
+    _record_dataset("alice/demo", episodes=2)
+    with pytest.raises(ValueError, match=message):
+        handle_move_episodes("alice/demo", [0], **kwargs)
 
 
 def test_move_episodes_rejects_existing_output(tmp_lerobot_home: Path) -> None:
@@ -385,6 +439,23 @@ def test_move_episodes_route_maps_validation_error(
     )
     assert response.status_code == 400
     assert response.json()["detail"] == "bad input"
+
+
+def test_move_episodes_route_forwards_an_existing_target(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lelab import datasets as datasets_mod
+
+    calls = []
+    monkeypatch.setattr(
+        datasets_mod, "handle_move_episodes", lambda *args: calls.append(args) or {"success": True}
+    )
+    response = client.post(
+        "/datasets/move-episodes",
+        json={"repo_id": "alice/demo", "episode_indices": [0], "target_repo_id": "bob/target"},
+    )
+    assert response.status_code == 200
+    assert calls == [("alice/demo", [0], None, "bob/target")]
 
 
 @pytest.mark.parametrize("episode_indices", [[], [-1]])

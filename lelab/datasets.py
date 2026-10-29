@@ -234,28 +234,68 @@ def handle_merge_local_datasets(source_repo_ids: list[str], output_name: str) ->
     }
 
 
-def handle_move_episodes(repo_id: str, episode_indices: list[int], output_name: str) -> dict[str, Any]:
-    """Move episodes out of a local dataset into a new local dataset.
+def _swap_dirs(replacements: list[tuple[Path, Path]], backup_dir: Path) -> None:
+    """Replace each live dir with its staged copy; a failure restores the ones already swapped."""
+    done: list[tuple[Path, Path | None]] = []
+    try:
+        for i, (live, staged) in enumerate(replacements):
+            backup = backup_dir / f"old{i}" if live.exists() else None
+            if backup is not None:
+                live.rename(backup)
+            done.append((live, backup))
+            staged.rename(live)
+    except OSError:
+        for live, backup in reversed(done):
+            shutil.rmtree(live, ignore_errors=True)
+            if backup is not None:
+                backup.rename(live)
+        raise
 
-    Both datasets are written to a staging dir first, so a failure leaves the
-    source as it was. The source is then swapped for the copy without the moved
-    episodes, which renumbers the episodes left in it.
+
+def handle_move_episodes(
+    repo_id: str,
+    episode_indices: list[int],
+    output_name: str | None = None,
+    target_repo_id: str | None = None,
+) -> dict[str, Any]:
+    """Move episodes out of a local dataset into a new or an existing local dataset.
+
+    Every rewritten dataset is built in a staging dir first, so a failure leaves
+    the source and the target as they were. The source is then swapped for the
+    copy without the moved episodes, which renumbers the episodes left in it. An
+    existing target is merged with the moved episodes, which keeps its own
+    episodes first and refuses a target whose fps, features or robot type differ.
     """
     episode_indices = sorted(set(episode_indices))
     if not episode_indices:
         raise ValueError("Select at least one episode to move")
+    if (output_name is None) == (target_repo_id is None):
+        raise ValueError("Choose either a new dataset name or an existing target dataset")
 
-    output_name = output_name.strip()
-    if not _DATASET_NAME_RE.fullmatch(output_name):
-        raise ValueError("Output name may contain only letters, numbers, '.', '_' and '-'")
-
-    output_repo_id = f"{LOCAL_DATASET_NAMESPACE}/{output_name}"
     cache_root = _lerobot_cache_root()
-    output_dir = (cache_root / output_repo_id).resolve()
-    if cache_root not in output_dir.parents:
-        raise ValueError("Invalid output dataset path")
-    if output_dir.exists():
-        raise ValueError(f"A local dataset already exists at {output_repo_id}")
+    target_dir: Path | None = None
+    if target_repo_id is not None:
+        if target_repo_id == repo_id:
+            raise ValueError("The target must be a different dataset than the source")
+        try:
+            episode_media.ensure_episode_index(target_repo_id)
+        except episode_media.UnreadableDatasetError as exc:
+            raise ValueError(str(exc)) from exc
+        target_dir = episode_media.resolve_dataset_dir(target_repo_id)
+        destination_repo_id = target_repo_id
+        destination_dir = target_dir
+        staging_prefix = f".{target_dir.name}.move-"
+    else:
+        output_name = output_name.strip()
+        if not _DATASET_NAME_RE.fullmatch(output_name):
+            raise ValueError("Output name may contain only letters, numbers, '.', '_' and '-'")
+        destination_repo_id = f"{LOCAL_DATASET_NAMESPACE}/{output_name}"
+        destination_dir = (cache_root / destination_repo_id).resolve()
+        if cache_root not in destination_dir.parents:
+            raise ValueError("Invalid output dataset path")
+        if destination_dir.exists():
+            raise ValueError(f"A local dataset already exists at {destination_repo_id}")
+        staging_prefix = f".{output_name}.move-"
 
     try:
         episode_media.ensure_episode_index(repo_id)
@@ -272,29 +312,28 @@ def handle_move_episodes(repo_id: str, episode_indices: list[int], output_name: 
     if not kept:
         raise ValueError("Cannot move every episode; at least one must stay in the dataset")
 
-    output_dir.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=f".{output_name}.move-", dir=output_dir.parent))
+    destination_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=staging_prefix, dir=destination_dir.parent))
     try:
-        moved = delete_episodes(dataset, kept, output_dir=staging / "moved", repo_id=output_repo_id)
+        moved = delete_episodes(dataset, kept, output_dir=staging / "moved", repo_id=destination_repo_id)
         delete_episodes(dataset, episode_indices, output_dir=staging / "kept", repo_id=repo_id)
-        (staging / "moved").rename(output_dir)
-        source_dir.rename(staging / "old")
-        try:
-            (staging / "kept").rename(source_dir)
-        except OSError:
-            (staging / "old").rename(source_dir)
-            shutil.rmtree(output_dir, ignore_errors=True)
-            raise
-    except Exception:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise
-    else:
+        if target_dir is not None:
+            target = LeRobotDataset(repo_id=target_repo_id, root=target_dir)
+            merge_datasets([target, moved], output_repo_id=target_repo_id, output_dir=staging / "merged")
+            destination_staged = staging / "merged"
+        else:
+            destination_staged = staging / "moved"
+        _swap_dirs(
+            [(source_dir, staging / "kept"), (destination_dir, destination_staged)],
+            backup_dir=staging,
+        )
+    finally:
         shutil.rmtree(staging, ignore_errors=True)
 
     return {
         "success": True,
-        "repo_id": output_repo_id,
-        "moved_episodes": moved.num_episodes,
+        "repo_id": destination_repo_id,
+        "moved_episodes": len(episode_indices),
         "remaining_episodes": len(kept),
     }
 
