@@ -46,13 +46,14 @@ const calibrated: RobotRecord = {
 let host: HTMLDivElement;
 let root: Root;
 const onStart = vi.fn();
+const onEnd = vi.fn();
 
 const button = (label: string) =>
   [...host.querySelectorAll("button")].find((b) => b.textContent?.includes(label));
 
 async function mount() {
   await act(async () => {
-    root.render(<ReplayButton repoId="local/ds" episodeIndex={2} onStart={onStart} />);
+    root.render(<ReplayButton repoId="local/ds" episodeIndex={2} onStart={onStart} onEnd={onEnd} />);
   });
 }
 
@@ -69,6 +70,7 @@ beforeEach(() => {
   robot.current = calibrated;
   toast.mockClear();
   onStart.mockClear();
+  onEnd.mockClear();
   host = document.createElement("div");
   root = createRoot(host);
 });
@@ -131,4 +133,16 @@ test("a refused start reports it and offers Play again", async () => {
     expect.objectContaining({ description: "A replay is already running" }),
   );
   expect(button("Play on robot")).toBeDefined();
+});
+
+test("the footage is told to stop once the replay ends or is stopped", async () => {
+  await mount();
+  await act(async () => button("Play on robot")!.click());
+  await poll();
+  expect(onEnd).not.toHaveBeenCalled();
+
+  await act(async () => button("Stop robot")!.click());
+  backend.active = false;
+  await poll();
+  expect(onEnd).toHaveBeenCalledOnce();
 });

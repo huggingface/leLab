@@ -21,13 +21,15 @@ interface ReplayButtonProps {
   episodeIndex: number;
   /** Called once the arm starts moving, so the footage can run alongside it. */
   onStart: () => void;
+  /** Called once the arm is released, whether the replay ended, failed or was stopped. */
+  onEnd: () => void;
 }
 
 /**
  * Plays the episode's recorded actions on the selected follower arm. Only
  * shown when that arm is ready to move.
  */
-const ReplayButton: React.FC<ReplayButtonProps> = ({ repoId, episodeIndex, onStart }) => {
+const ReplayButton: React.FC<ReplayButtonProps> = ({ repoId, episodeIndex, onStart, onEnd }) => {
   const { baseUrl, fetchWithHeaders } = useApi();
   const { selectedRecord: robot } = useRobots();
   const { toast } = useToast();
@@ -55,6 +57,7 @@ const ReplayButton: React.FC<ReplayButtonProps> = ({ repoId, episodeIndex, onSta
         const status = await apiRequest<ReplayStatus>(baseUrl, fetchWithHeaders, "/replay-status");
         if (status.replay_active) return;
         setPhase("idle");
+        onEnd();
         if (status.error) {
           toast({ title: "Replay failed", description: status.error, variant: "destructive" });
         }
@@ -63,7 +66,7 @@ const ReplayButton: React.FC<ReplayButtonProps> = ({ repoId, episodeIndex, onSta
       }
     }, 500);
     return () => clearInterval(timer);
-  }, [phase, baseUrl, fetchWithHeaders, toast]);
+  }, [phase, baseUrl, fetchWithHeaders, toast, onEnd]);
 
   // Back to Play only once the status poll sees the arm released.
   const stop = async () => {

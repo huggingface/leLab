@@ -173,6 +173,11 @@ const EpisodeViewer: React.FC<EpisodeViewerProps> = ({ repoId, detail, onNavigat
     );
   }, [seekToFrame]);
 
+  const pauseFootage = useCallback(() => {
+    driverRef.current?.pause();
+    setPlaying(false);
+  }, []);
+
   // Keep the element's rate in step with the pills across re-renders and
   // camera swaps.
   useEffect(() => {
@@ -247,6 +252,7 @@ const EpisodeViewer: React.FC<EpisodeViewerProps> = ({ repoId, detail, onNavigat
             repoId={repoId}
             episodeIndex={detail.episode_index}
             onStart={playFromStart}
+            onEnd={pauseFootage}
           />
           <div className="flex rounded-md border border-gray-800 bg-gray-950 p-0.5">
             {RATES.map((r) => (
