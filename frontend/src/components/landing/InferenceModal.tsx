@@ -37,6 +37,28 @@ interface Props {
 }
 
 const DEFAULT_FPS = 30;
+// Policy types LeRobot (v0.6.1) registers itself; any other type comes from a plugin package.
+const BUILTIN_POLICY_TYPES = new Set([
+  "act",
+  "diffusion",
+  "eo1",
+  "evo1",
+  "fastwam",
+  "gaussian_actor",
+  "groot",
+  "lingbot_va",
+  "molmoact2",
+  "multi_task_dit",
+  "pi0",
+  "pi05",
+  "pi0_fast",
+  "smolvla",
+  "tdmpc",
+  "vla_jepa",
+  "vqbet",
+  "wall_x",
+  "xvla",
+]);
 
 const InferenceModal: React.FC<Props> = ({
   open,
@@ -176,10 +198,12 @@ const InferenceModal: React.FC<Props> = ({
             Pick a checkpoint and confirm hardware. The selected policy will
             drive the follower autonomously for the configured duration.
           </DialogDescription>
-          <p className="text-xs text-gray-500 text-center -mt-3">
-            Running a plugin policy? Its package must be installed alongside
-            lelab, or the run will fail to load the policy.
-          </p>
+          {policyConfig && !BUILTIN_POLICY_TYPES.has(policyConfig.policy_type ?? "") && (
+            <p className="text-xs text-gray-500 text-center -mt-3">
+              This is a plugin policy: its package must be installed alongside
+              lelab, or the run will fail to load the policy.
+            </p>
+          )}
 
           <div className="space-y-4">
             <h3 className="text-lg font-semibold text-white border-b border-gray-700 pb-2">

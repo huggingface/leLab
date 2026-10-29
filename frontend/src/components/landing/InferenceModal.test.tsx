@@ -90,6 +90,18 @@ test("an unsaved camera permits a manual rotation with a training-data reminder"
   expect(request.cameras.wrist).toMatchObject({ camera_index: 3, rotation: 90, width: 640, height: 480 });
 });
 
+test("the plugin package note shows only for a policy type LeRobot does not register", async () => {
+  await render();
+  expect(container.textContent).not.toContain("plugin policy");
+  act(() => root.unmount()); root = createRoot(container);
+  const builtin = mocks.fetcher.getMockImplementation()!;
+  mocks.fetcher.mockImplementation(async (url: string, init?: RequestInit) => url.endsWith("/policy-config")
+    ? new Response(JSON.stringify({ policy_type: "my_plugin", requires_task: true, image_features: {} }))
+    : builtin(url, init));
+  await render();
+  expect(container.textContent).toContain("This is a plugin policy");
+});
+
 test("an invalid saved rotation blocks inference and gives a visible correction instruction", async () => {
   await render({ ...robot, cameras: [{ ...robot.cameras[0], rotation: 45 as never }] });
   expect(container.textContent).toContain("Correct the camera settings in Calibration");
