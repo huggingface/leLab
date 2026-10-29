@@ -14,6 +14,7 @@
 
 import base64
 import logging
+import os
 import re
 import shutil
 import tempfile
@@ -24,7 +25,7 @@ from typing import Any
 from huggingface_hub.errors import HfHubHTTPError
 
 from lerobot.datasets import LeRobotDataset
-from lerobot.datasets.dataset_tools import merge_datasets
+from lerobot.datasets.dataset_tools import merge_datasets, modify_tasks
 
 from . import episode_media
 from .utils.hf_auth import cached_whoami, shared_hf_api
@@ -231,6 +232,63 @@ def handle_merge_local_datasets(source_repo_ids: list[str], output_name: str) ->
         "repo_id": output_repo_id,
         "num_episodes": merged.num_episodes,
         "total_frames": merged.num_frames,
+    }
+
+
+def handle_set_episode_task(repo_id: str, task: str, episode_index: int | None = None) -> dict[str, Any]:
+    """Set the task of one episode of a local dataset, or of every episode when `episode_index` is None.
+
+    LeRobot's `modify_tasks` rewrites the dataset in place, so it runs on a
+    staged copy that is swapped in afterwards: a failure leaves the source as it
+    was. Only `meta/` and `data/` are rewritten, so everything else (videos,
+    images) is hard-linked into the copy where the filesystem allows it.
+    """
+    task = task.strip()
+    if not task:
+        raise ValueError("The task cannot be empty")
+
+    try:
+        episode_media.ensure_episode_index(repo_id)
+    except episode_media.UnreadableDatasetError as exc:
+        raise ValueError(str(exc)) from exc
+    source_dir = episode_media.resolve_dataset_dir(repo_id)
+
+    total = episode_media.read_info(source_dir).get("total_episodes", 0)
+    if episode_index is not None and not 0 <= episode_index < total:
+        raise ValueError(f"Episode {episode_index} is not in {repo_id}")
+
+    def copy_or_link(src: str, dst: str) -> None:
+        if Path(src).relative_to(source_dir).parts[0] in ("meta", "data"):
+            shutil.copy2(src, dst)
+        else:
+            try:
+                os.link(src, dst)
+            except OSError:  # e.g. a filesystem without hard links
+                shutil.copy2(src, dst)
+
+    staging = Path(tempfile.mkdtemp(prefix=f".{source_dir.name}.task-", dir=source_dir.parent))
+    edited_dir = staging / "edited"
+    try:
+        shutil.copytree(source_dir, edited_dir, copy_function=copy_or_link)
+        dataset = LeRobotDataset(repo_id=repo_id, root=edited_dir)
+        if episode_index is None:
+            modify_tasks(dataset, new_task=task)
+        else:
+            modify_tasks(dataset, episode_tasks={episode_index: task})
+        source_dir.rename(staging / "old")
+        try:
+            edited_dir.rename(source_dir)
+        except OSError:
+            (staging / "old").rename(source_dir)
+            raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+    return {
+        "success": True,
+        "repo_id": repo_id,
+        "task": task,
+        "updated_episodes": total if episode_index is None else 1,
     }
 
 

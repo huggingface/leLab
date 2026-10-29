@@ -24,13 +24,13 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.datastructures import Headers
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
@@ -152,6 +152,13 @@ class StartTrainingBody(BaseModel):
 class MergeDatasetsRequest(BaseModel):
     source_repo_ids: list[str]
     output_name: str
+
+
+class EpisodeTaskRequest(BaseModel):
+    repo_id: str
+    task: Annotated[str, Field(min_length=1)]
+    # None sets the task of every episode.
+    episode_index: Annotated[int, Field(ge=0)] | None = None
 
 
 # Cache for HF Jobs hardware flavors (5-minute TTL)
@@ -452,6 +459,17 @@ def merge_local_datasets(request: MergeDatasetsRequest):
     """Merge two or more local datasets into a new local dataset."""
     try:
         return dataset_browser.handle_merge_local_datasets(request.source_repo_ids, request.output_name)
+    except (DatasetNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/datasets/episode-task")
+def set_episode_task(request: EpisodeTaskRequest):
+    """Set the task of one episode, or of every episode, of a local dataset."""
+    if _record.recording_active:
+        raise HTTPException(status_code=409, detail="Stop the recording before editing a dataset")
+    try:
+        return dataset_browser.handle_set_episode_task(request.repo_id, request.task, request.episode_index)
     except (DatasetNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
