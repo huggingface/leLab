@@ -339,6 +339,9 @@ def handle_move_episodes(
     }
 
 
+_HUB_MIRRORED_GLOBS = ["meta/**", "data/**", "videos/**"]
+
+
 def _hub_failure_reason(exc: Exception, repo_id: str) -> str:
     status = getattr(getattr(exc, "response", None), "status_code", None)
     if status == 401:
@@ -349,9 +352,15 @@ def _hub_failure_reason(exc: Exception, repo_id: str) -> str:
 
 
 def _push_edit_to_hub(repo_id: str, root: Path) -> tuple[bool, str | None]:
-    """Mirror an edit of `meta/` and `data/` to the dataset's Hub repo when it has one.
+    """Mirror the local copy of the dataset folders to its Hub repo when it has one.
 
-    Returns (pushed, error). Videos are untouched by the edit and are not sent.
+    `meta/`, `data/` and `videos/` are uploaded and the files the local copy no
+    longer has are deleted, in one commit, so a Hub copy that had diverged (episodes
+    moved out, episodes recorded without a push) ends up consistent. Unchanged files
+    are dropped from the commit by huggingface_hub, so videos are hashed, not re-sent.
+    The card and `.gitattributes` are outside those globs and stay as they are.
+
+    Returns (pushed, error).
     """
     if repo_id.split("/")[0] == LOCAL_DATASET_NAMESPACE:
         return False, None
@@ -363,7 +372,8 @@ def _push_edit_to_hub(repo_id: str, root: Path) -> tuple[bool, str | None]:
             repo_id=repo_id,
             repo_type="dataset",
             folder_path=root,
-            allow_patterns=["meta/**", "data/**"],
+            allow_patterns=_HUB_MIRRORED_GLOBS,
+            delete_patterns=_HUB_MIRRORED_GLOBS,
             commit_message="Edit episode tasks",
         )
     except Exception as exc:
