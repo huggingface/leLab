@@ -519,7 +519,7 @@ def test_set_episode_task_relabels_every_episode(tmp_lerobot_home: Path, fake_hu
     assert _episode_tasks("alice/demo") == ["pick the bowl"] * 3
 
 
-def test_set_episode_task_pushes_only_meta_and_data_when_the_repo_is_on_the_hub(
+def test_set_episode_task_mirrors_the_dataset_folders_when_the_repo_is_on_the_hub(
     tmp_lerobot_home: Path, fake_hub: MagicMock
 ) -> None:
     from lelab.datasets import handle_set_episode_task
@@ -535,7 +535,8 @@ def test_set_episode_task_pushes_only_meta_and_data_when_the_repo_is_on_the_hub(
     kwargs = fake_hub.upload_folder.call_args.kwargs
     assert kwargs["repo_id"] == "alice/demo"
     assert kwargs["folder_path"] == root
-    assert kwargs["allow_patterns"] == ["meta/**", "data/**"]
+    assert kwargs["allow_patterns"] == ["meta/**", "data/**", "videos/**"]
+    assert kwargs["delete_patterns"] == ["meta/**", "data/**", "videos/**"]
 
 
 def test_set_episode_task_does_not_contact_the_hub_for_a_local_namespace(
