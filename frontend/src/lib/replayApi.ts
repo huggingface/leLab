@@ -90,6 +90,8 @@ export interface EpisodeTaskResult {
   repo_id: string;
   task: string;
   updated_episodes: number;
+  hub_updated: boolean;
+  hub_error: string | null;
 }
 
 /** Set the task of one episode, or of every episode when `episodeIndex` is null. */
