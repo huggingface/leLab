@@ -339,13 +339,48 @@ def handle_move_episodes(
     }
 
 
+def _hub_failure_reason(exc: Exception, repo_id: str) -> str:
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status == 401:
+        return "you are not logged in to the Hub"
+    if status == 403:
+        return f"you have no write access to {repo_id}"
+    return str(exc) or type(exc).__name__
+
+
+def _push_edit_to_hub(repo_id: str, root: Path) -> tuple[bool, str | None]:
+    """Mirror an edit of `meta/` and `data/` to the dataset's Hub repo when it has one.
+
+    Returns (pushed, error). Videos are untouched by the edit and are not sent.
+    """
+    if repo_id.split("/")[0] == LOCAL_DATASET_NAMESPACE:
+        return False, None
+    api = shared_hf_api()
+    try:
+        if not api.repo_exists(repo_id, repo_type="dataset"):
+            return False, None
+        api.upload_folder(
+            repo_id=repo_id,
+            repo_type="dataset",
+            folder_path=root,
+            allow_patterns=["meta/**", "data/**"],
+            commit_message="Edit episode tasks",
+        )
+    except Exception as exc:
+        logger.warning("Hub update of %s failed: %s", repo_id, exc)
+        return False, _hub_failure_reason(exc, repo_id)
+    return True, None
+
+
 def handle_set_episode_task(repo_id: str, task: str, episode_index: int | None = None) -> dict[str, Any]:
     """Set the task of one episode of a local dataset, or of every episode when `episode_index` is None.
 
     LeRobot's `modify_tasks` rewrites the dataset in place, so it runs on a
     staged copy that is swapped in afterwards: a failure leaves the source as it
     was. Only `meta/` and `data/` are rewritten, so everything else (videos,
-    images) is hard-linked into the copy where the filesystem allows it.
+    images) is hard-linked into the copy where the filesystem allows it. Once the
+    local copy is swapped in, a dataset that also lives on the Hub is updated
+    there too; a failed push keeps the local edit and is reported in `hub_error`.
     """
     task = task.strip()
     if not task:
@@ -388,11 +423,14 @@ def handle_set_episode_task(repo_id: str, task: str, episode_index: int | None =
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
+    hub_updated, hub_error = _push_edit_to_hub(repo_id, source_dir)
     return {
         "success": True,
         "repo_id": repo_id,
         "task": task,
         "updated_episodes": total if episode_index is None else 1,
+        "hub_updated": hub_updated,
+        "hub_error": hub_error,
     }
 
 

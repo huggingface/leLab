@@ -131,12 +131,18 @@ const EditDataset = () => {
     if (!repoId) return;
     const result = await setEpisodeTask(baseUrl, fetchWithHeaders, repoId, task, targetEpisode);
     refreshEpisodes();
+    const scope =
+      targetEpisode === null
+        ? `All ${result.updated_episodes} episodes now have the task "${result.task}".`
+        : `Episode ${targetEpisode} now has the task "${result.task}".`;
     toast({
-      title: "Task saved",
-      description:
-        targetEpisode === null
-          ? `All ${result.updated_episodes} episodes now have the task "${result.task}".`
-          : `Episode ${targetEpisode} now has the task "${result.task}".`,
+      title: result.hub_error ? "Task saved locally only" : "Task saved",
+      description: result.hub_error
+        ? `${scope} The Hub copy was not updated: ${result.hub_error}.`
+        : result.hub_updated
+          ? `${scope} The Hub copy is updated too.`
+          : scope,
+      variant: result.hub_error ? "destructive" : undefined,
     });
   };
   const setEpisode = (next: number) => {

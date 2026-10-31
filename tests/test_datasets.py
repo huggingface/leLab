@@ -16,7 +16,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -472,7 +473,18 @@ def test_move_episodes_route_rejects_bad_indices_before_editing(
     assert response.status_code == 422
 
 
-def test_set_episode_task_relabels_one_episode(tmp_lerobot_home: Path) -> None:
+@pytest.fixture
+def fake_hub(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """A Hub API where no repo exists; the tests that edit tasks must never reach the real Hub."""
+    from lelab import datasets as datasets_mod
+
+    api = MagicMock()
+    api.repo_exists.return_value = False
+    monkeypatch.setattr(datasets_mod, "shared_hf_api", lambda: api)
+    return api
+
+
+def test_set_episode_task_relabels_one_episode(tmp_lerobot_home: Path, fake_hub: MagicMock) -> None:
     from lelab.datasets import handle_set_episode_task
 
     root = _record_dataset("alice/demo", episodes=3)
@@ -488,13 +500,15 @@ def test_set_episode_task_relabels_one_episode(tmp_lerobot_home: Path) -> None:
         "repo_id": "alice/demo",
         "task": "pick the bowl",
         "updated_episodes": 1,
+        "hub_updated": False,
+        "hub_error": None,
     }
     assert _episode_tasks("alice/demo") == ["task 0", "pick the bowl", "task 2"]
     assert (root / "videos" / "clip.mp4").stat().st_ino == inode
     assert not list((tmp_lerobot_home / "alice").glob(".demo.task-*"))
 
 
-def test_set_episode_task_relabels_every_episode(tmp_lerobot_home: Path) -> None:
+def test_set_episode_task_relabels_every_episode(tmp_lerobot_home: Path, fake_hub: MagicMock) -> None:
     from lelab.datasets import handle_set_episode_task
 
     _record_dataset("alice/demo", episodes=3)
@@ -503,6 +517,61 @@ def test_set_episode_task_relabels_every_episode(tmp_lerobot_home: Path) -> None
 
     assert result["updated_episodes"] == 3
     assert _episode_tasks("alice/demo") == ["pick the bowl"] * 3
+
+
+def test_set_episode_task_pushes_only_meta_and_data_when_the_repo_is_on_the_hub(
+    tmp_lerobot_home: Path, fake_hub: MagicMock
+) -> None:
+    from lelab.datasets import handle_set_episode_task
+
+    root = _record_dataset("alice/demo", episodes=2)
+    fake_hub.repo_exists.return_value = True
+
+    result = handle_set_episode_task("alice/demo", "pick the bowl")
+
+    assert result["hub_updated"] is True
+    assert result["hub_error"] is None
+    fake_hub.upload_folder.assert_called_once()
+    kwargs = fake_hub.upload_folder.call_args.kwargs
+    assert kwargs["repo_id"] == "alice/demo"
+    assert kwargs["folder_path"] == root
+    assert kwargs["allow_patterns"] == ["meta/**", "data/**"]
+
+
+def test_set_episode_task_does_not_contact_the_hub_for_a_local_namespace(
+    tmp_lerobot_home: Path, fake_hub: MagicMock
+) -> None:
+    from lelab.datasets import handle_set_episode_task
+
+    _record_dataset("local/demo", episodes=2)
+
+    result = handle_set_episode_task("local/demo", "pick the bowl")
+
+    assert result["hub_updated"] is False
+    fake_hub.repo_exists.assert_not_called()
+    fake_hub.upload_folder.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("status", "reason"),
+    [(401, "not logged in"), (403, "no write access to alice/demo"), (500, "hub exploded")],
+)
+def test_set_episode_task_keeps_the_local_edit_when_the_hub_push_fails(
+    tmp_lerobot_home: Path, fake_hub: MagicMock, status: int, reason: str
+) -> None:
+    from lelab.datasets import handle_set_episode_task
+
+    _record_dataset("alice/demo", episodes=2)
+    fake_hub.repo_exists.return_value = True
+    error = RuntimeError("hub exploded")
+    error.response = SimpleNamespace(status_code=status)
+    fake_hub.upload_folder.side_effect = error
+
+    result = handle_set_episode_task("alice/demo", "pick the bowl")
+
+    assert result["hub_updated"] is False
+    assert reason in result["hub_error"]
+    assert _episode_tasks("alice/demo") == ["pick the bowl"] * 2
 
 
 @pytest.mark.parametrize(
