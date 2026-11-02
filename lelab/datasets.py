@@ -394,7 +394,9 @@ def _push_edit_to_hub(repo_id: str, root: Path) -> tuple[bool, str | None]:
     return True, None
 
 
-def _rewrite_tasks(repo_id: str, source_dir: Path, default_task: str | None, episode_tasks: dict[int, str]) -> None:
+def _rewrite_tasks(
+    repo_id: str, source_dir: Path, default_task: str | None, episode_tasks: dict[int, str]
+) -> None:
     """Apply task edits with one `modify_tasks` call on a staged copy swapped in on success.
 
     `modify_tasks` rewrites the dataset in place, so a failure here would leave
@@ -522,7 +524,9 @@ def handle_set_episode_task(repo_id: str, task: str, episode_index: int | None =
             edits.episode_tasks[episode_index] = task
         if not edits.running:
             edits.running = True
-            threading.Thread(target=_task_edits_worker, args=(repo_id, source_dir, edits), daemon=True).start()
+            threading.Thread(
+                target=_task_edits_worker, args=(repo_id, source_dir, edits), daemon=True
+            ).start()
     return {"success": True, "repo_id": repo_id, "queued": True}
 
 
