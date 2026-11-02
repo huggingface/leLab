@@ -544,9 +544,7 @@ def test_set_episode_task_returns_before_the_write(
     _record_dataset("alice/demo", episodes=2)
     gate = threading.Event()
     real_rewrite = datasets_mod._rewrite_tasks
-    monkeypatch.setattr(
-        datasets_mod, "_rewrite_tasks", lambda *args: (gate.wait(30), real_rewrite(*args))[1]
-    )
+    monkeypatch.setattr(datasets_mod, "_rewrite_tasks", lambda *args: (gate.wait(30), real_rewrite(*args))[1])
 
     result = datasets_mod.handle_set_episode_task("alice/demo", "pick the bowl", 0)
 
@@ -680,9 +678,7 @@ def test_moves_and_task_edits_of_the_same_dataset_exclude_each_other(
     _record_dataset("alice/demo", episodes=3)
     gate = threading.Event()
     real_rewrite = datasets_mod._rewrite_tasks
-    monkeypatch.setattr(
-        datasets_mod, "_rewrite_tasks", lambda *args: (gate.wait(30), real_rewrite(*args))[1]
-    )
+    monkeypatch.setattr(datasets_mod, "_rewrite_tasks", lambda *args: (gate.wait(30), real_rewrite(*args))[1])
     datasets_mod.handle_set_episode_task("alice/demo", "pick the bowl", 0)
 
     with pytest.raises(ValueError, match="being edited"):
@@ -691,9 +687,8 @@ def test_moves_and_task_edits_of_the_same_dataset_exclude_each_other(
     _edit_tasks("alice/demo")
 
     # Mid-move, an edit of the same dataset is refused.
-    with datasets_mod._exclusive_rewrite("alice/demo"):
-        with pytest.raises(ValueError, match="being edited"):
-            datasets_mod.handle_set_episode_task("alice/demo", "x", 0)
+    with datasets_mod._exclusive_rewrite("alice/demo"), pytest.raises(ValueError, match="being edited"):
+        datasets_mod.handle_set_episode_task("alice/demo", "x", 0)
 
 
 def test_episode_task_route_refuses_while_recording(
