@@ -49,9 +49,23 @@ export const useEpisodes = (repoId: string | null) => {
 
   const refresh = useCallback(() => setVersion((v) => v + 1), []);
 
+  /** Show a task edit right away, before the backend has written it. */
+  const applyTask = useCallback(
+    (task: string, episodeIndex: number | null) =>
+      setData((d) =>
+        d && {
+          ...d,
+          episodes: d.episodes.map((ep) =>
+            episodeIndex === null || ep.episode_index === episodeIndex ? { ...ep, tasks: [task] } : ep,
+          ),
+        },
+      ),
+    [],
+  );
+
   // Effects run after render: do not let the new dataset auto-select an
   // episode from the old list before this effect clears it.
-  return { data: data?.repo_id === repoId ? data : null, loading, error, refresh };
+  return { data: data?.repo_id === repoId ? data : null, loading, error, refresh, applyTask };
 };
 
 /** One episode's detail. Either arg null → idle. */

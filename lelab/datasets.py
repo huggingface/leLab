@@ -18,6 +18,8 @@ import os
 import re
 import shutil
 import tempfile
+import threading
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -267,6 +269,16 @@ def handle_move_episodes(
     existing target is merged with the moved episodes, which keeps its own
     episodes first and refuses a target whose fps, features or robot type differ.
     """
+    with _exclusive_rewrite(*(r for r in (repo_id, target_repo_id) if r)):
+        return _move_episodes(repo_id, episode_indices, output_name, target_repo_id)
+
+
+def _move_episodes(
+    repo_id: str,
+    episode_indices: list[int],
+    output_name: str | None = None,
+    target_repo_id: str | None = None,
+) -> dict[str, Any]:
     episode_indices = sorted(set(episode_indices))
     if not episode_indices:
         raise ValueError("Select at least one episode to move")
@@ -382,29 +394,13 @@ def _push_edit_to_hub(repo_id: str, root: Path) -> tuple[bool, str | None]:
     return True, None
 
 
-def handle_set_episode_task(repo_id: str, task: str, episode_index: int | None = None) -> dict[str, Any]:
-    """Set the task of one episode of a local dataset, or of every episode when `episode_index` is None.
+def _rewrite_tasks(repo_id: str, source_dir: Path, default_task: str | None, episode_tasks: dict[int, str]) -> None:
+    """Apply task edits with one `modify_tasks` call on a staged copy swapped in on success.
 
-    LeRobot's `modify_tasks` rewrites the dataset in place, so it runs on a
-    staged copy that is swapped in afterwards: a failure leaves the source as it
-    was. Only `meta/` and `data/` are rewritten, so everything else (videos,
-    images) is hard-linked into the copy where the filesystem allows it. Once the
-    local copy is swapped in, a dataset that also lives on the Hub is updated
-    there too; a failed push keeps the local edit and is reported in `hub_error`.
+    `modify_tasks` rewrites the dataset in place, so a failure here would leave
+    the source half written. Only `meta/` and `data/` are rewritten, so everything
+    else (videos, images) is hard-linked into the copy where the filesystem allows it.
     """
-    task = task.strip()
-    if not task:
-        raise ValueError("The task cannot be empty")
-
-    try:
-        episode_media.ensure_episode_index(repo_id)
-    except episode_media.UnreadableDatasetError as exc:
-        raise ValueError(str(exc)) from exc
-    source_dir = episode_media.resolve_dataset_dir(repo_id)
-
-    total = episode_media.read_info(source_dir).get("total_episodes", 0)
-    if episode_index is not None and not 0 <= episode_index < total:
-        raise ValueError(f"Episode {episode_index} is not in {repo_id}")
 
     def copy_or_link(src: str, dst: str) -> None:
         if Path(src).relative_to(source_dir).parts[0] in ("meta", "data"):
@@ -420,10 +416,7 @@ def handle_set_episode_task(repo_id: str, task: str, episode_index: int | None =
     try:
         shutil.copytree(source_dir, edited_dir, copy_function=copy_or_link)
         dataset = LeRobotDataset(repo_id=repo_id, root=edited_dir)
-        if episode_index is None:
-            modify_tasks(dataset, new_task=task)
-        else:
-            modify_tasks(dataset, episode_tasks={episode_index: task})
+        modify_tasks(dataset, new_task=default_task, episode_tasks=episode_tasks or None)
         source_dir.rename(staging / "old")
         try:
             edited_dir.rename(source_dir)
@@ -433,15 +426,123 @@ def handle_set_episode_task(repo_id: str, task: str, episode_index: int | None =
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
-    hub_updated, hub_error = _push_edit_to_hub(repo_id, source_dir)
-    return {
-        "success": True,
-        "repo_id": repo_id,
-        "task": task,
-        "updated_episodes": total if episode_index is None else 1,
-        "hub_updated": hub_updated,
-        "hub_error": hub_error,
-    }
+
+class _TaskEdits:
+    """Task edits of one dataset, applied in order by a single worker thread."""
+
+    def __init__(self) -> None:
+        # An "apply to all" edit sets `default_task` and drops every per-episode edit queued before it.
+        self.default_task: str | None = None
+        self.episode_tasks: dict[int, str] = {}
+        self.running = False
+        self.dirty = False  # written locally, not yet mirrored to the Hub
+        self.local_error: str | None = None
+        self.hub_error: str | None = None
+        self.hub_updated = False
+
+    def queued(self) -> bool:
+        return self.default_task is not None or bool(self.episode_tasks)
+
+
+_task_edits: dict[str, _TaskEdits] = {}
+_task_edits_lock = threading.Lock()
+_moving: set[str] = set()
+
+
+def _task_edits_busy(repo_id: str) -> bool:
+    edits = _task_edits.get(repo_id)
+    return edits is not None and (edits.running or edits.queued())
+
+
+@contextmanager
+def _exclusive_rewrite(*repo_ids: str):
+    """Keep task edits and moves from rewriting the same dataset at the same time."""
+    with _task_edits_lock:
+        for repo_id in repo_ids:
+            if repo_id in _moving or _task_edits_busy(repo_id):
+                raise ValueError(f"{repo_id} is being edited, try again in a moment")
+        _moving.update(repo_ids)
+    try:
+        yield
+    finally:
+        with _task_edits_lock:
+            _moving.difference_update(repo_ids)
+
+
+def _task_edits_worker(repo_id: str, source_dir: Path, edits: _TaskEdits) -> None:
+    while True:
+        with _task_edits_lock:
+            if not edits.queued():
+                edits.running = False
+                return
+            default_task, episode_tasks = edits.default_task, edits.episode_tasks
+            edits.default_task, edits.episode_tasks = None, {}
+        try:
+            _rewrite_tasks(repo_id, source_dir, default_task, episode_tasks)
+            edits.dirty = True
+        except Exception as exc:
+            logger.exception("Task edit of %s failed", repo_id)
+            edits.local_error = str(exc) or type(exc).__name__
+        # One Hub commit per burst: push only once nothing more is queued.
+        if edits.dirty and not edits.queued():
+            edits.hub_updated, edits.hub_error = _push_edit_to_hub(repo_id, source_dir)
+            edits.dirty = False
+
+
+def handle_set_episode_task(repo_id: str, task: str, episode_index: int | None = None) -> dict[str, Any]:
+    """Queue a task edit for one episode of a local dataset, or for every episode when `episode_index` is None.
+
+    The edit is validated now and written in the background: edits queued while a
+    rewrite runs are merged into the next one (the latest wins per episode, and an
+    edit of every episode replaces what was queued before it). Once the queue is
+    idle the dataset is mirrored to the Hub if it lives there too. Poll
+    `handle_episode_task_status` for the outcome.
+    """
+    task = task.strip()
+    if not task:
+        raise ValueError("The task cannot be empty")
+
+    try:
+        episode_media.ensure_episode_index(repo_id)
+    except episode_media.UnreadableDatasetError as exc:
+        raise ValueError(str(exc)) from exc
+    source_dir = episode_media.resolve_dataset_dir(repo_id)
+
+    total = episode_media.read_info(source_dir).get("total_episodes", 0)
+    if episode_index is not None and not 0 <= episode_index < total:
+        raise ValueError(f"Episode {episode_index} is not in {repo_id}")
+
+    with _task_edits_lock:
+        if repo_id in _moving:
+            raise ValueError(f"{repo_id} is being edited, try again in a moment")
+        edits = _task_edits.setdefault(repo_id, _TaskEdits())
+        if episode_index is None:
+            edits.default_task, edits.episode_tasks = task, {}
+        else:
+            edits.episode_tasks[episode_index] = task
+        if not edits.running:
+            edits.running = True
+            threading.Thread(target=_task_edits_worker, args=(repo_id, source_dir, edits), daemon=True).start()
+    return {"success": True, "repo_id": repo_id, "queued": True}
+
+
+def handle_episode_task_status(repo_id: str) -> dict[str, Any]:
+    """Progress of the queued task edits of a dataset; the outcome is reported once, when it is idle."""
+    with _task_edits_lock:
+        edits = _task_edits.get(repo_id)
+        if edits is None:
+            return {"success": True, "pending": False}
+        if edits.running or edits.queued():
+            return {"success": True, "pending": True}
+        outcome = {
+            "success": True,
+            "pending": False,
+            "local_error": edits.local_error,
+            "hub_error": edits.hub_error,
+            "hub_updated": edits.hub_updated,
+        }
+        del _task_edits[repo_id]
+        return outcome
 
 
 # ── episode browsing ────────────────────────────────────────────────────────

@@ -85,26 +85,35 @@ export async function moveEpisodes(
   });
 }
 
-export interface EpisodeTaskResult {
-  success: true;
-  repo_id: string;
-  task: string;
-  updated_episodes: number;
-  hub_updated: boolean;
-  hub_error: string | null;
-}
+export type EpisodeTaskStatus =
+  | { pending: true }
+  | { pending: false; local_error?: string | null; hub_error?: string | null; hub_updated?: boolean };
 
-/** Set the task of one episode, or of every episode when `episodeIndex` is null. */
+/** Queue a task edit for one episode, or for every episode when `episodeIndex` is null. */
 export async function setEpisodeTask(
   baseUrl: string,
   fetcher: Fetcher,
   repoId: string,
   task: string,
   episodeIndex: number | null,
-): Promise<EpisodeTaskResult> {
-  return apiRequest<EpisodeTaskResult>(baseUrl, fetcher, "/datasets/episode-task", {
+): Promise<void> {
+  await apiRequest(baseUrl, fetcher, "/datasets/episode-task", {
     method: "POST",
     body: { repo_id: repoId, task, episode_index: episodeIndex },
     action: "Edit task",
   });
+}
+
+/** Whether the queued task edits of a dataset are still being written, and how they ended. */
+export async function getEpisodeTaskStatus(
+  baseUrl: string,
+  fetcher: Fetcher,
+  repoId: string,
+): Promise<EpisodeTaskStatus> {
+  return apiRequest<EpisodeTaskStatus>(
+    baseUrl,
+    fetcher,
+    `/datasets/episode-task-status?repo_id=${encodeURIComponent(repoId)}`,
+    { action: "Task edit status" },
+  );
 }
