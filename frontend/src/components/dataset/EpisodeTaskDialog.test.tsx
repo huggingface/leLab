@@ -22,7 +22,7 @@ test("saves the task for the browsed episode or for every episode", async () => 
           totalEpisodes={5}
           open
           onOpenChange={() => {}}
-          onSave={async (task, episodeIndex) => {
+          onSave={(task, episodeIndex) => {
             saved.push([task, episodeIndex]);
           }}
         />,

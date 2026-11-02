@@ -472,13 +472,19 @@ def merge_local_datasets(request: MergeDatasetsRequest):
 
 @app.post("/datasets/episode-task")
 def set_episode_task(request: EpisodeTaskRequest):
-    """Set the task of one episode, or of every episode, of a local dataset."""
+    """Queue a task edit for one episode, or for every episode, of a local dataset."""
     if _record.recording_active:
         raise HTTPException(status_code=409, detail="Stop the recording before editing a dataset")
     try:
         return dataset_browser.handle_set_episode_task(request.repo_id, request.task, request.episode_index)
     except (DatasetNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/datasets/episode-task-status")
+def episode_task_status(repo_id: str):
+    """Whether queued task edits of a dataset are still being written, and how they ended."""
+    return dataset_browser.handle_episode_task_status(repo_id)
 
 
 @app.post("/datasets/move-episodes")

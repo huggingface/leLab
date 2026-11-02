@@ -484,57 +484,116 @@ def fake_hub(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     return api
 
 
-def test_set_episode_task_relabels_one_episode(tmp_lerobot_home: Path, fake_hub: MagicMock) -> None:
-    from lelab.datasets import handle_set_episode_task
+def _edit_tasks(repo_id: str, *edits: tuple[str, int | None]) -> dict:
+    """Queue edits, wait for the worker to go idle and return the reported outcome."""
+    import time
 
+    from lelab.datasets import handle_episode_task_status, handle_set_episode_task
+
+    for task, episode_index in edits:
+        handle_set_episode_task(repo_id, task, episode_index)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        status = handle_episode_task_status(repo_id)
+        if not status["pending"]:
+            return status
+        time.sleep(0.02)
+    pytest.fail("task edits did not finish")
+
+
+@pytest.fixture(autouse=True)
+def _idle_task_edits():
+    from lelab import datasets as datasets_mod
+
+    yield
+    datasets_mod._task_edits.clear()
+    datasets_mod._moving.clear()
+
+
+def test_set_episode_task_relabels_one_episode(tmp_lerobot_home: Path, fake_hub: MagicMock) -> None:
     root = _record_dataset("alice/demo", episodes=3)
     # Stands in for the videos, which the edit must link rather than copy.
     (root / "videos").mkdir()
     (root / "videos" / "clip.mp4").write_bytes(b"frames")
     inode = (root / "videos" / "clip.mp4").stat().st_ino
 
-    result = handle_set_episode_task("alice/demo", "  pick the bowl ", episode_index=1)
+    status = _edit_tasks("alice/demo", ("  pick the bowl ", 1))
 
-    assert result == {
-        "success": True,
-        "repo_id": "alice/demo",
-        "task": "pick the bowl",
-        "updated_episodes": 1,
-        "hub_updated": False,
-        "hub_error": None,
-    }
+    assert status["local_error"] is None
+    assert status["hub_updated"] is False
     assert _episode_tasks("alice/demo") == ["task 0", "pick the bowl", "task 2"]
     assert (root / "videos" / "clip.mp4").stat().st_ino == inode
     assert not list((tmp_lerobot_home / "alice").glob(".demo.task-*"))
 
 
 def test_set_episode_task_relabels_every_episode(tmp_lerobot_home: Path, fake_hub: MagicMock) -> None:
-    from lelab.datasets import handle_set_episode_task
-
     _record_dataset("alice/demo", episodes=3)
 
-    result = handle_set_episode_task("alice/demo", "pick the bowl")
+    _edit_tasks("alice/demo", ("pick the bowl", None))
 
-    assert result["updated_episodes"] == 3
     assert _episode_tasks("alice/demo") == ["pick the bowl"] * 3
 
 
-def test_set_episode_task_mirrors_the_dataset_folders_when_the_repo_is_on_the_hub(
-    tmp_lerobot_home: Path, fake_hub: MagicMock
+def test_set_episode_task_returns_before_the_write(
+    tmp_lerobot_home: Path, fake_hub: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from lelab.datasets import handle_set_episode_task
+    import threading
 
-    root = _record_dataset("alice/demo", episodes=2)
+    from lelab import datasets as datasets_mod
+
+    _record_dataset("alice/demo", episodes=2)
+    gate = threading.Event()
+    real_rewrite = datasets_mod._rewrite_tasks
+    monkeypatch.setattr(
+        datasets_mod, "_rewrite_tasks", lambda *args: (gate.wait(30), real_rewrite(*args))[1]
+    )
+
+    result = datasets_mod.handle_set_episode_task("alice/demo", "pick the bowl", 0)
+
+    assert result["queued"] is True
+    assert datasets_mod.handle_episode_task_status("alice/demo") == {"success": True, "pending": True}
+    assert _episode_tasks("alice/demo") == ["task 0", "task 1"]
+    gate.set()
+    _edit_tasks("alice/demo")
+    assert _episode_tasks("alice/demo") == ["pick the bowl", "task 1"]
+
+
+def test_edits_queued_during_a_rewrite_are_merged_into_one_and_pushed_once(
+    tmp_lerobot_home: Path, fake_hub: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    from lelab import datasets as datasets_mod
+
+    _record_dataset("alice/demo", episodes=4)
     fake_hub.repo_exists.return_value = True
+    started, gate = threading.Event(), threading.Event()
+    calls = []
+    real_rewrite = datasets_mod._rewrite_tasks
 
-    result = handle_set_episode_task("alice/demo", "pick the bowl")
+    def gated_rewrite(repo_id, source_dir, default_task, episode_tasks):
+        calls.append((default_task, dict(episode_tasks)))
+        started.set()
+        gate.wait(30)
+        real_rewrite(repo_id, source_dir, default_task, episode_tasks)
 
-    assert result["hub_updated"] is True
-    assert result["hub_error"] is None
+    monkeypatch.setattr(datasets_mod, "_rewrite_tasks", gated_rewrite)
+
+    datasets_mod.handle_set_episode_task("alice/demo", "first", 0)
+    assert started.wait(30)
+    datasets_mod.handle_set_episode_task("alice/demo", "second", 1)
+    datasets_mod.handle_set_episode_task("alice/demo", "everything", None)
+    datasets_mod.handle_set_episode_task("alice/demo", "third", 2)
+    datasets_mod.handle_set_episode_task("alice/demo", "fourth", 2)
+    gate.set()
+    status = _edit_tasks("alice/demo")
+
+    # "everything" replaces the queued per-episode edits; later edits override it; latest wins.
+    assert calls == [(None, {0: "first"}), ("everything", {2: "fourth"})]
+    assert _episode_tasks("alice/demo") == ["everything", "everything", "fourth", "everything"]
+    assert status["hub_updated"] is True
     fake_hub.upload_folder.assert_called_once()
     kwargs = fake_hub.upload_folder.call_args.kwargs
-    assert kwargs["repo_id"] == "alice/demo"
-    assert kwargs["folder_path"] == root
     assert kwargs["allow_patterns"] == ["meta/**", "data/**", "videos/**"]
     assert kwargs["delete_patterns"] == ["meta/**", "data/**", "videos/**"]
 
@@ -542,36 +601,33 @@ def test_set_episode_task_mirrors_the_dataset_folders_when_the_repo_is_on_the_hu
 def test_set_episode_task_does_not_contact_the_hub_for_a_local_namespace(
     tmp_lerobot_home: Path, fake_hub: MagicMock
 ) -> None:
-    from lelab.datasets import handle_set_episode_task
-
     _record_dataset("local/demo", episodes=2)
 
-    result = handle_set_episode_task("local/demo", "pick the bowl")
+    status = _edit_tasks("local/demo", ("pick the bowl", None))
 
-    assert result["hub_updated"] is False
+    assert status["hub_updated"] is False
     fake_hub.repo_exists.assert_not_called()
     fake_hub.upload_folder.assert_not_called()
 
 
 @pytest.mark.parametrize(
-    ("status", "reason"),
+    ("status_code", "reason"),
     [(401, "not logged in"), (403, "no write access to alice/demo"), (500, "hub exploded")],
 )
 def test_set_episode_task_keeps_the_local_edit_when_the_hub_push_fails(
-    tmp_lerobot_home: Path, fake_hub: MagicMock, status: int, reason: str
+    tmp_lerobot_home: Path, fake_hub: MagicMock, status_code: int, reason: str
 ) -> None:
-    from lelab.datasets import handle_set_episode_task
-
     _record_dataset("alice/demo", episodes=2)
     fake_hub.repo_exists.return_value = True
     error = RuntimeError("hub exploded")
-    error.response = SimpleNamespace(status_code=status)
+    error.response = SimpleNamespace(status_code=status_code)
     fake_hub.upload_folder.side_effect = error
 
-    result = handle_set_episode_task("alice/demo", "pick the bowl")
+    status = _edit_tasks("alice/demo", ("pick the bowl", None))
 
-    assert result["hub_updated"] is False
-    assert reason in result["hub_error"]
+    assert status["hub_updated"] is False
+    assert reason in status["hub_error"]
+    assert status["local_error"] is None
     assert _episode_tasks("alice/demo") == ["pick the bowl"] * 2
 
 
@@ -590,12 +646,13 @@ def test_set_episode_task_rejects_invalid_request(
     assert _episode_tasks("alice/demo") == ["task 0", "task 1", "task 2"]
 
 
-def test_set_episode_task_leaves_source_untouched_on_failure(
-    tmp_lerobot_home: Path, monkeypatch: pytest.MonkeyPatch
+def test_set_episode_task_reports_a_failed_write_and_leaves_the_source_untouched(
+    tmp_lerobot_home: Path, fake_hub: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from lelab import datasets as datasets_mod
 
     _record_dataset("alice/demo", episodes=2)
+    fake_hub.repo_exists.return_value = True
     real_modify = datasets_mod.modify_tasks
 
     def failing_modify(dataset, **kwargs):
@@ -604,11 +661,39 @@ def test_set_episode_task_leaves_source_untouched_on_failure(
 
     monkeypatch.setattr(datasets_mod, "modify_tasks", failing_modify)
 
-    with pytest.raises(RuntimeError, match="disk full"):
-        datasets_mod.handle_set_episode_task("alice/demo", "pick the bowl")
+    status = _edit_tasks("alice/demo", ("pick the bowl", None))
 
+    assert status["local_error"] == "disk full"
+    assert status["hub_updated"] is False
+    fake_hub.upload_folder.assert_not_called()
     assert _episode_tasks("alice/demo") == ["task 0", "task 1"]
     assert not list((tmp_lerobot_home / "alice").glob(".demo.task-*"))
+
+
+def test_moves_and_task_edits_of_the_same_dataset_exclude_each_other(
+    tmp_lerobot_home: Path, fake_hub: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    from lelab import datasets as datasets_mod
+
+    _record_dataset("alice/demo", episodes=3)
+    gate = threading.Event()
+    real_rewrite = datasets_mod._rewrite_tasks
+    monkeypatch.setattr(
+        datasets_mod, "_rewrite_tasks", lambda *args: (gate.wait(30), real_rewrite(*args))[1]
+    )
+    datasets_mod.handle_set_episode_task("alice/demo", "pick the bowl", 0)
+
+    with pytest.raises(ValueError, match="being edited"):
+        datasets_mod.handle_move_episodes("alice/demo", [1], "rejected")
+    gate.set()
+    _edit_tasks("alice/demo")
+
+    # Mid-move, an edit of the same dataset is refused.
+    with datasets_mod._exclusive_rewrite("alice/demo"):
+        with pytest.raises(ValueError, match="being edited"):
+            datasets_mod.handle_set_episode_task("alice/demo", "x", 0)
 
 
 def test_episode_task_route_refuses_while_recording(

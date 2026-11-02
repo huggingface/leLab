@@ -30,7 +30,7 @@ import { useRobots } from "@/hooks/useRobots";
 import { useToast } from "@/hooks/use-toast";
 import { formatDuration } from "@/lib/datasetApi";
 import { openHubViewer } from "@/lib/hubViewer";
-import { DatasetItem, MoveDestination, mergeLocalDatasets, moveEpisodes, setEpisodeTask } from "@/lib/replayApi";
+import { DatasetItem, MoveDestination, mergeLocalDatasets, getEpisodeTaskStatus, moveEpisodes, setEpisodeTask } from "@/lib/replayApi";
 
 // The robot_type LeRobot stores for the SO-101 follower.
 const FOLLOWER_ROBOT_TYPE = "so_follower";
@@ -72,7 +72,7 @@ const EditDataset = () => {
   const selectedSource = datasets.find((d) => d.repo_id === repoId)?.source;
   const selectedIsLocal = selectedSource === "local" || selectedSource === "both";
 
-  const { data, loading, error, refresh: refreshEpisodes } = useEpisodes(repoId);
+  const { data, loading, error, refresh: refreshEpisodes, applyTask } = useEpisodes(repoId);
   const {
     detail,
     loading: detailLoading,
@@ -127,24 +127,57 @@ const EditDataset = () => {
       description: `${result.moved_episodes} moved to ${result.repo_id}, ${result.remaining_episodes} left in ${repoId}.`,
     });
   };
-  const handleSaveTask = async (task: string, targetEpisode: number | null) => {
+  // The dataset whose queued task edits are still being written; polled until the backend reports it idle.
+  const [savingRepo, setSavingRepo] = useState<string | null>(null);
+  const handleSaveTask = (task: string, targetEpisode: number | null) => {
     if (!repoId) return;
-    const result = await setEpisodeTask(baseUrl, fetchWithHeaders, repoId, task, targetEpisode);
-    refreshEpisodes();
-    const scope =
-      targetEpisode === null
-        ? `All ${result.updated_episodes} episodes now have the task "${result.task}".`
-        : `Episode ${targetEpisode} now has the task "${result.task}".`;
-    toast({
-      title: result.hub_error ? "Task saved locally only" : "Task saved",
-      description: result.hub_error
-        ? `${scope} The Hub copy was not updated: ${result.hub_error}.`
-        : result.hub_updated
-          ? `${scope} The Hub copy is updated too.`
-          : scope,
-      variant: result.hub_error ? "destructive" : undefined,
-    });
+    const edited = repoId;
+    applyTask(task, targetEpisode);
+    setEpisodeTask(baseUrl, fetchWithHeaders, edited, task, targetEpisode).then(
+      () => setSavingRepo(edited),
+      (e) => {
+        refreshEpisodes();
+        toast({
+          title: "Task not saved",
+          description: e instanceof Error ? e.message : "Could not save the task.",
+          variant: "destructive",
+        });
+      },
+    );
   };
+  useEffect(() => {
+    if (!savingRepo) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const status = await getEpisodeTaskStatus(baseUrl, fetchWithHeaders, savingRepo);
+        if (status.pending) return;
+        setSavingRepo(null);
+        if (status.local_error) {
+          refreshEpisodes();
+          toast({ title: "Task not saved", description: status.local_error, variant: "destructive" });
+        } else if (status.hub_error) {
+          toast({
+            title: "Task saved locally only",
+            description: `The Hub copy was not updated: ${status.hub_error}.`,
+            variant: "destructive",
+          });
+        } else {
+          toast({
+            title: "Tasks saved",
+            description: status.hub_updated ? "The Hub copy is updated too." : undefined,
+          });
+        }
+      } catch (e) {
+        setSavingRepo(null);
+        toast({
+          title: "Could not check the task edits",
+          description: e instanceof Error ? e.message : undefined,
+          variant: "destructive",
+        });
+      }
+    }, 700);
+    return () => window.clearInterval(timer);
+  }, [savingRepo, baseUrl, fetchWithHeaders, refreshEpisodes, toast]);
   const setEpisode = (next: number) => {
     if (!repoId) return;
     setSearchParams(withApi({ dataset: repoId, episode: String(next) }));
@@ -323,6 +356,7 @@ const EditDataset = () => {
               <Stat label="Robot" value={data.robot_type ?? "—"} />
               <Stat label="Cameras" value={Object.keys(data.image_features).join(", ") || "—"} />
               {detail && <Stat label="This episode" value={formatDuration(detail.duration_s)} />}
+              {savingRepo === repoId && <span className="text-gray-500">Saving tasks…</span>}
             </div>
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-[260px_1fr]">
