@@ -330,16 +330,16 @@ def test_cleanup_device_force_releases_and_clears_when_disconnect_fails() -> Non
     device handle — otherwise the COM port stays busy and blocks the next run."""
     from lelab.calibrate import CalibrationManager
 
-    class PortHandler:
+    class Bus:
         def __init__(self) -> None:
-            self.closed = False
+            self.released = False
 
-        def closePort(self) -> None:  # noqa: N802 - mirrors LeRobot port handler API
-            self.closed = True
+        def disconnect(self) -> None:
+            self.released = True
 
     class Device:
         def __init__(self) -> None:
-            self.bus = type("Bus", (), {"port_handler": PortHandler()})()
+            self.bus = Bus()
 
         def disconnect(self) -> None:
             raise RuntimeError("Failed to write 'Torque_Enable' on id_=6")
@@ -350,5 +350,5 @@ def test_cleanup_device_force_releases_and_clears_when_disconnect_fails() -> Non
 
     mgr._cleanup_device()
 
-    assert device.bus.port_handler.closed is True  # force-released despite failure
+    assert device.bus.released is True  # force-released despite failure
     assert mgr.device is None  # handle cleared so a new calibration can start
