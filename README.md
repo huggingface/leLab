@@ -24,6 +24,8 @@ Grab the one-liner from the [LeLab Space](https://huggingface.co/spaces/lerobot/
 
 A page will automatically open in your browser and you are ready to go.
 
+To drive the robot from another device on your network (a laptop or tablet next to the arm), start the server with `lelab --host 0.0.0.0` and open `http://<server-ip>:8000` from that device's browser.
+
 ## What you can do
 
 <div align="center">

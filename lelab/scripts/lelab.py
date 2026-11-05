@@ -330,19 +330,24 @@ def _monitor_processes(processes: Sequence[tuple[str, subprocess.Popen]]) -> Non
                 raise SystemExit(returncode)
 
 
-def _run_prod(*, no_open: bool = False, rebuild: bool = False) -> None:
+def _run_prod(*, no_open: bool = False, rebuild: bool = False, host: str = HOST) -> None:
     """Serve built frontend from backend on a single port."""
-    _ensure_port_available("Backend", BACKEND_PORT)
+    _ensure_port_available("Backend", BACKEND_PORT, host=host)
     if rebuild:
         _run_frontend_build()
     _ensure_frontend_dist()
 
     logger.info("Starting LeLab on http://localhost:%d ...", BACKEND_PORT)
+    if host not in ("127.0.0.1", "localhost"):
+        logger.info(
+            "Bound to %s: the UI and API accept connections from other machines on the network.",
+            host,
+        )
     threading.Thread(target=_open_browser_when_ready, args=(BACKEND_PORT, no_open), daemon=True).start()
 
     config = uvicorn.Config(
         "lelab.server:app",
-        host=HOST,
+        host=host,
         port=BACKEND_PORT,
         log_level="info",
         reload=False,
@@ -387,13 +392,13 @@ def _run_prod(*, no_open: bool = False, rebuild: bool = False) -> None:
     server.run()
 
 
-def _run_dev(*, no_open: bool = False) -> None:
+def _run_dev(*, no_open: bool = False, host: str = HOST) -> None:
     """Start Vite HMR plus uvicorn reload."""
     _ensure_frontend_path()
     _require_command("node")
     _require_command("npm")
-    _ensure_port_available("Backend", BACKEND_PORT)
-    _ensure_port_available("Frontend", FRONTEND_DEV_PORT)
+    _ensure_port_available("Backend", BACKEND_PORT, host=host)
+    _ensure_port_available("Frontend", FRONTEND_DEV_PORT, host=host)
     _ensure_frontend_deps()
 
     processes: list[tuple[str, subprocess.Popen]] = []
@@ -402,7 +407,7 @@ def _run_dev(*, no_open: bool = False) -> None:
     try:
         frontend_process = _start_process(
             "frontend",
-            ["npm", "run", "dev", "--", "--host", HOST, "--port", str(FRONTEND_DEV_PORT)],
+            ["npm", "run", "dev", "--", "--host", host, "--port", str(FRONTEND_DEV_PORT)],
             FRONTEND_PATH,
         )
         processes.append(("frontend", frontend_process))
@@ -421,7 +426,7 @@ def _run_dev(*, no_open: bool = False) -> None:
                 "uvicorn",
                 "lelab.server:app",
                 "--host",
-                HOST,
+                host,
                 "--port",
                 str(BACKEND_PORT),
                 "--reload",
@@ -471,6 +476,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Do not open a browser automatically.",
     )
     parser.add_argument(
+        "--host",
+        default=HOST,
+        help="Address to bind the backend (and, in --dev, the Vite server) to. "
+        "Use 0.0.0.0 to make LeLab reachable from other machines on the network.",
+    )
+    parser.add_argument(
         "--stop",
         action="store_true",
         help="Stop a running LeLab (free ports 8000/8080) and exit.",
@@ -490,9 +501,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.error("--rebuild is for production mode; dev mode serves from Vite.")
 
     if args.dev:
-        _run_dev(no_open=args.no_open)
+        _run_dev(no_open=args.no_open, host=args.host)
     else:
-        _run_prod(no_open=args.no_open, rebuild=args.rebuild)
+        _run_prod(no_open=args.no_open, rebuild=args.rebuild, host=args.host)
 
 
 if __name__ == "__main__":
