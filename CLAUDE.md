@@ -16,7 +16,7 @@ Install (editable, requires Python ≥3.10):
 pip install -e .
 ```
 
-`lerobot` is pinned to a release tag on `huggingface/lerobot` (currently `v0.6.1`, see [pyproject.toml](pyproject.toml)) — installed from git rather than PyPI because the published wheels don't expose the `lerobot-rollout` script that [lelab/rollout.py](lelab/rollout.py) shells out to. Bump the tag when you want a newer upstream release; expect import-path drift (e.g. `lerobot.configs.dataset`, `lerobot.utils.feature_utils`, `lerobot.common.control_utils`) and adjust call sites accordingly.
+`lerobot` is pinned to a ref on `huggingface/lerobot` (currently `v0.7.0`, see [pyproject.toml](pyproject.toml)), installed from git rather than PyPI because the published wheels don't expose the `lerobot-rollout` script that [lelab/rollout.py](lelab/rollout.py) shells out to. Bump the ref when you want a newer upstream release; expect import-path drift (e.g. `lerobot.configs.dataset`, `lerobot.utils.feature_utils`, `lerobot.common.control_utils`) and CLI flag renames (v0.7.0 replaced `--wandb.*` with `--trackio.*`). [tests/test_lerobot_cli.py](tests/test_lerobot_cli.py) runs the training and rollout argv LeLab builds through the installed LeRobot's parsers, so run the tests right after a bump. Since v0.7.0 the arms' motors go through LeRobot's rustypot-backed `SerialMotorsBus`: use its public methods (`set_operating_mode`, `set_half_turn_homings`, `disconnect`), not Feetech SDK internals.
 
 Run servers (entry point defined in [pyproject.toml](pyproject.toml)):
 
@@ -35,8 +35,8 @@ Run the Python tests with `pytest` (config in [pyproject.toml](pyproject.toml); 
 
 [server.py](lelab/server.py) is a thin FastAPI router. Each feature lives in its own module that owns its global state and exposes `handle_*` functions plus a Pydantic request model:
 
-- [record.py](lelab/record.py) — dataset recording (wraps `lerobot.record.record`); patches `lerobot.common.utils.control_utils` keyboard listener so frontend buttons replace arrow-key controls. The worker is a daemon thread, so the server's shutdown hook calls `stop_recording_and_wait()` to let an active session finalize on Ctrl+C.
-- [teleoperate.py](lelab/teleoperate.py) — leader→follower teleoperation (wraps `lerobot.teleoperate`).
+- [record.py](lelab/record.py): dataset recording around LeRobot's `record_loop`; frontend buttons set the same `events` dict LeRobot's keyboard listener would. The worker is a daemon thread, so the server's shutdown hook calls `stop_recording_and_wait()` to let an active session finalize on Ctrl+C.
+- [teleoperate.py](lelab/teleoperate.py): leader→follower teleoperation loop over LeRobot's SO-101 leader and follower.
 - [replay.py](lelab/replay.py): plays a recorded episode's actions on the follower arm, an in-process take on `lerobot-replay` so the dataset browser can stop it.
 - [calibrate.py](lelab/calibrate.py) — step-by-step web calibration with a `CalibrationManager` singleton and `_step_complete` threading.Event.
 - [train.py](lelab/train.py) — wraps the LeRobot training CLI as a subprocess (psutil for lifecycle, queue for log streaming).
