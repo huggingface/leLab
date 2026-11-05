@@ -21,8 +21,10 @@ import subprocess
 import sys
 import threading
 import time
+from importlib import metadata
 from typing import Any
 
+from packaging.requirements import Requirement
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -175,29 +177,62 @@ def handle_install_training_extra_status() -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # Some LeRobot policies import an optional extra at construction time; training
 # (or inference) otherwise dies with a buried ImportError once the subprocess is
-# already running. Map each such policy to the module we probe and the
-# ``pip install lerobot[extra]`` target. Policies not listed (act, vqbet, tdmpc)
-# need nothing extra.
-POLICY_EXTRAS: dict[str, tuple[str, str]] = {
-    # policy_type: (probe_module, install_target)
-    "smolvla": ("transformers", "lerobot[smolvla]"),
-    "pi0": ("transformers", "lerobot[pi]"),
-    "pi0_fast": ("transformers", "lerobot[pi]"),
-    "pi05": ("transformers", "lerobot[pi]"),
-    "xvla": ("transformers", "lerobot[xvla]"),
-    "evo1": ("transformers", "lerobot[evo1]"),
-    "eo1": ("qwen_vl_utils", "lerobot[eo1]"),
-    "vla_jepa": ("qwen_vl_utils", "lerobot[vla_jepa]"),
-    "molmoact2": ("peft", "lerobot[molmoact2]"),
-    "wall_x": ("torchdiffeq", "lerobot[wallx]"),
-    "multi_task_dit": ("diffusers", "lerobot[multi_task_dit]"),
-    "fastwam": ("diffusers", "lerobot[fastwam]"),
-    "lingbot_va": ("diffusers", "lerobot[lingbot_va]"),
-    "diffusion": ("diffusers", "lerobot[diffusion]"),
-    # groot pulls in peft (LoRA), diffusers, timm, dm-tree and decord; peft is a
-    # reliable, cross-platform stand-in for "the lerobot[groot] extra is present".
-    "groot": ("peft", "lerobot[groot]"),
+# already running. Map each such policy to its ``lerobot[extra]``; what the
+# extra requires is read from lerobot's own metadata. Policies not listed (act,
+# vqbet, tdmpc) need nothing extra.
+POLICY_EXTRAS: dict[str, str] = {
+    "smolvla": "smolvla",
+    "pi0": "pi",
+    "pi0_fast": "pi",
+    "pi05": "pi",
+    "xvla": "xvla",
+    "evo1": "evo1",
+    "eo1": "eo1",
+    "vla_jepa": "vla_jepa",
+    "molmoact2": "molmoact2",
+    "wall_x": "wallx",
+    "multi_task_dit": "multi_task_dit",
+    "fastwam": "fastwam",
+    "lingbot_va": "lingbot_va",
+    "diffusion": "diffusion",
+    "groot": "groot",
 }
+
+
+def _unmet_requirements(extra: str) -> list[Requirement]:
+    """Requirements of ``lerobot[extra]`` this environment lacks or holds at a version out of range.
+
+    A version check, not only an import probe: an environment upgraded from an older LeRobot
+    can still import a package the new extra pins to a different range.
+    """
+    requires = [Requirement(r) for r in metadata.requires("lerobot") or []]
+    unmet: list[Requirement] = []
+    pending, seen = [extra], set()
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        for req in requires:
+            # Skip core requirements, whose markers hold with or without an extra.
+            if (
+                req.marker is None
+                or not req.marker.evaluate({"extra": name})
+                or req.marker.evaluate({"extra": ""})
+            ):
+                continue
+            if req.name == "lerobot":  # an extra built from other extras
+                pending.extend(req.extras)
+                continue
+            try:
+                installed = metadata.version(req.name)
+            except metadata.PackageNotFoundError:
+                unmet.append(req)
+                continue
+            if not req.specifier.contains(installed, prereleases=True):
+                unmet.append(req)
+    return unmet
+
 
 # One install manager per install target (lerobot[smolvla] / lerobot[pi] / …),
 # created lazily so pi0 and pi0_fast share the lerobot[pi] install.
@@ -205,10 +240,10 @@ _policy_install_managers: dict[str, InstallManager] = {}
 
 
 def _policy_install_manager(policy_type: str) -> InstallManager | None:
-    spec = POLICY_EXTRAS.get(policy_type)
-    if spec is None:
+    extra = POLICY_EXTRAS.get(policy_type)
+    if extra is None:
         return None
-    target = spec[1]
+    target = f"lerobot[{extra}]"
     mgr = _policy_install_managers.get(target)
     if mgr is None:
         mgr = InstallManager(target)
@@ -217,14 +252,14 @@ def _policy_install_manager(policy_type: str) -> InstallManager | None:
 
 
 def handle_get_policy_extra(policy_type: str) -> dict[str, Any]:
-    """Whether the optional extra a policy needs is importable right now.
+    """Whether the optional extra a policy needs is installed right now.
 
-    Probed live (not cached at import) so a restart after installing is picked
+    Checked live (not cached at import) so a restart after installing is picked
     up. Policies that need nothing report ``available`` so the UI never blocks
     them.
     """
-    spec = POLICY_EXTRAS.get(policy_type)
-    if spec is None:
+    extra = POLICY_EXTRAS.get(policy_type)
+    if extra is None:
         return {
             "policy_type": policy_type,
             "needs_extra": False,
@@ -233,16 +268,13 @@ def handle_get_policy_extra(policy_type: str) -> dict[str, Any]:
             "install_target": "",
             "install_hint": "",
         }
-    probe, target = spec
-    try:
-        available = importlib.util.find_spec(probe) is not None
-    except (ImportError, ValueError):
-        available = False
+    target = f"lerobot[{extra}]"
+    unmet = _unmet_requirements(extra)
     return {
         "policy_type": policy_type,
         "needs_extra": True,
-        "available": available,
-        "package": probe,
+        "available": not unmet,
+        "package": ", ".join(f"{req.name}{req.specifier}" for req in unmet),
         "install_target": target,
         "install_hint": f"pip install '{target}'",
     }
