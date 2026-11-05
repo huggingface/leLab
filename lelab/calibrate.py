@@ -22,7 +22,6 @@ but adapted for the web interface with step-by-step guidance.
 import logging
 import threading
 import time
-import traceback
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -313,8 +312,7 @@ class CalibrationManager:
             self._update_status(error=str(e))
             self._cleanup_and_finish(str(e), status="error")
         except Exception as e:
-            logger.error(f"Calibration error: {e}")
-            logger.error(traceback.format_exc())
+            logger.exception(f"Calibration error: {e}")
             # Ensure cleanup happens even on error
             self._cleanup_and_finish(f"Calibration failed: {e}", status="error")
         finally:
