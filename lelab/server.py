@@ -109,13 +109,10 @@ from .utils.system import (
     handle_get_cuda_status,
     handle_get_policy_extra,
     handle_get_training_extra,
-    handle_get_wandb_extra,
     handle_install_policy_extra,
     handle_install_policy_extra_status,
     handle_install_training_extra,
     handle_install_training_extra_status,
-    handle_install_wandb_extra,
-    handle_install_wandb_extra_status,
     warn_if_cuda_mismatch,
 )
 
@@ -935,24 +932,6 @@ def install_training_extra():
 def install_training_extra_status():
     """Return current install state plus any pending log lines (drained on read)."""
     return handle_install_training_extra_status()
-
-
-@app.get("/system/wandb-extra")
-def get_wandb_extra():
-    """Return whether the `wandb` package is importable in this lelab process."""
-    return handle_get_wandb_extra()
-
-
-@app.post("/system/wandb-extra/install")
-def install_wandb_extra():
-    """Spawn `pip install wandb` as a background subprocess. No-op if already running."""
-    return handle_install_wandb_extra()
-
-
-@app.get("/system/wandb-extra/install-status")
-def install_wandb_extra_status():
-    """Return current wandb install state plus any pending log lines (drained on read)."""
-    return handle_install_wandb_extra_status()
 
 
 @app.get("/system/policy-extra/{policy_type}")
