@@ -24,7 +24,17 @@ Grab the one-liner from the [LeLab Space](https://huggingface.co/spaces/lerobot/
 
 A page will automatically open in your browser and you are ready to go.
 
-To drive the robot from another device on your network (a laptop or tablet next to the arm), start the server with `lelab --host 0.0.0.0` and open `http://<server-ip>:8000` from that device's browser.
+### Custom host and port
+
+By default LeLab serves the UI and API on `127.0.0.1:8000`, reachable only from the machine it runs on. Two flags change that:
+
+```bash
+lelab --host 0.0.0.0              # also listen on the network, e.g. for a laptop or tablet next to the arm
+lelab --port 9000                 # serve on a different port
+lelab --host 0.0.0.0 --port 9000  # both at once
+```
+
+Then open `http://<server-ip>:<port>` from any device on the same network. `lelab --stop` frees the ports again; pass `--port` too if you started on a custom port. In `--dev` mode, `--host` applies to the Vite dev server (`:8080`) as well, and `--port` selects the backend port that the dev frontend talks to.
 
 ## What you can do
 

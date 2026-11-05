@@ -446,6 +446,7 @@ def test_parser_defaults_host_to_loopback() -> None:
     args = launcher._build_parser().parse_args([])
 
     assert args.host == "127.0.0.1"
+    assert args.port == 8000
 
 
 def test_parser_accepts_custom_host() -> None:
@@ -454,6 +455,14 @@ def test_parser_accepts_custom_host() -> None:
     args = launcher._build_parser().parse_args(["--host", "0.0.0.0"])
 
     assert args.host == "0.0.0.0"
+
+
+def test_parser_accepts_custom_port() -> None:
+    import lelab.scripts.lelab as launcher
+
+    args = launcher._build_parser().parse_args(["--port", "9000"])
+
+    assert args.port == 9000
 
 
 def test_run_prod_binds_requested_host(
@@ -478,10 +487,10 @@ def test_run_prod_binds_requested_host(
     monkeypatch.setattr(launcher.uvicorn, "Server", lambda _config: MagicMock())
     monkeypatch.setattr(launcher.signal, "signal", lambda *_a, **_k: None)
 
-    launcher._run_prod(no_open=True, host="0.0.0.0")
+    launcher._run_prod(no_open=True, host="0.0.0.0", port=9000)
 
     assert captured["host"] == "0.0.0.0"
-    assert captured["port"] == 8000
+    assert captured["port"] == 9000
 
 
 def test_dev_launcher_binds_requested_host(
@@ -493,6 +502,7 @@ def test_dev_launcher_binds_requested_host(
     frontend = tmp_path / "frontend"
     frontend.mkdir()
     started: list[tuple[str, list[str], Path]] = []
+    browser_open = MagicMock()
 
     def fake_start_process(name, command, cwd, env=None):
         started.append((name, list(command), cwd))
@@ -510,11 +520,31 @@ def test_dev_launcher_binds_requested_host(
         launcher, "_monitor_processes", lambda _processes: (_ for _ in ()).throw(SystemExit(0))
     )
     monkeypatch.setattr(launcher, "_terminate_tree", lambda _pid, _timeout=5: None)
+    monkeypatch.setattr(launcher.webbrowser, "open", browser_open)
 
     with pytest.raises(SystemExit):
-        launcher._run_dev(no_open=True, host="0.0.0.0")
+        launcher._run_dev(host="0.0.0.0", port=9000)
 
     vite_args = started[0][1]
     assert vite_args[vite_args.index("--host") + 1] == "0.0.0.0"
     uvicorn_args = started[1][1]
     assert uvicorn_args[uvicorn_args.index("--host") + 1] == "0.0.0.0"
+    assert uvicorn_args[uvicorn_args.index("--port") + 1] == "9000"
+    opened_url = browser_open.call_args.args[0]
+    assert opened_url == "http://localhost:8080/?api=http://localhost:9000"
+
+
+def test_stop_frees_custom_backend_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    import lelab.scripts.lelab as launcher
+
+    captured: dict[object, object] = {}
+
+    def fake_find_pids(ports=None):
+        captured["ports"] = ports
+        return {}
+
+    monkeypatch.setattr(launcher, "_find_lelab_pids", fake_find_pids)
+
+    launcher._run_stop(port=9000)
+
+    assert captured["ports"] == {9000, launcher.FRONTEND_DEV_PORT}

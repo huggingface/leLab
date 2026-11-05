@@ -82,7 +82,7 @@ def _ensure_port_available(name: str, port: int, host: str = HOST) -> None:
     )
 
 
-def _find_lelab_pids() -> dict[int, str]:
+def _find_lelab_pids(ports: set[int] | None = None) -> dict[int, str]:
     """PIDs that look like a running LeLab dev backend/frontend, with a reason.
 
     On Windows the uvicorn --reload worker inherits the listening socket from
@@ -93,11 +93,12 @@ def _find_lelab_pids() -> dict[int, str]:
       1. cmdline runs `uvicorn ... lelab.server`  (the reload supervisor / prod)
       2. an orphaned reload worker (`multiprocessing.spawn`) whose cwd is this
          project
-      3. anything actually LISTENING on :8000 / :8080  (per-process scan, which
-         is more reliable than the global table on Windows)
+      3. anything actually LISTENING on the LeLab ports  (per-process scan,
+         which is more reliable than the global table on Windows)
     """
     me = os.getpid()
-    ports = {BACKEND_PORT, FRONTEND_DEV_PORT}
+    if ports is None:
+        ports = {BACKEND_PORT, FRONTEND_DEV_PORT}
     targets: dict[int, str] = {}
     for proc in psutil.process_iter(["pid", "cmdline"]):
         pid = proc.info["pid"]
@@ -125,15 +126,15 @@ def _find_lelab_pids() -> dict[int, str]:
     return targets
 
 
-def _run_stop() -> None:
-    """Stop a running LeLab and free :8000 / :8080.
+def _run_stop(port: int = BACKEND_PORT) -> None:
+    """Stop a running LeLab and free the backend port and :8080.
 
     The escape hatch for when a previous run left an orphaned Vite or uvicorn
     process holding the ports.
     """
-    targets = _find_lelab_pids()
+    targets = _find_lelab_pids({port, FRONTEND_DEV_PORT})
     if not targets:
-        logger.info("Nothing to stop: no LeLab process found on :%d / :%d.", BACKEND_PORT, FRONTEND_DEV_PORT)
+        logger.info("Nothing to stop: no LeLab process found on :%d / :%d.", port, FRONTEND_DEV_PORT)
         return
     for pid, reason in targets.items():
         logger.info("Stopping pid %d (%s)...", pid, reason)
@@ -330,25 +331,31 @@ def _monitor_processes(processes: Sequence[tuple[str, subprocess.Popen]]) -> Non
                 raise SystemExit(returncode)
 
 
-def _run_prod(*, no_open: bool = False, rebuild: bool = False, host: str = HOST) -> None:
+def _run_prod(
+    *,
+    no_open: bool = False,
+    rebuild: bool = False,
+    host: str = HOST,
+    port: int = BACKEND_PORT,
+) -> None:
     """Serve built frontend from backend on a single port."""
-    _ensure_port_available("Backend", BACKEND_PORT, host=host)
+    _ensure_port_available("Backend", port, host=host)
     if rebuild:
         _run_frontend_build()
     _ensure_frontend_dist()
 
-    logger.info("Starting LeLab on http://localhost:%d ...", BACKEND_PORT)
+    logger.info("Starting LeLab on http://localhost:%d ...", port)
     if host not in ("127.0.0.1", "localhost"):
         logger.info(
             "Bound to %s: the UI and API accept connections from other machines on the network.",
             host,
         )
-    threading.Thread(target=_open_browser_when_ready, args=(BACKEND_PORT, no_open), daemon=True).start()
+    threading.Thread(target=_open_browser_when_ready, args=(port, no_open), daemon=True).start()
 
     config = uvicorn.Config(
         "lelab.server:app",
         host=host,
-        port=BACKEND_PORT,
+        port=port,
         log_level="info",
         reload=False,
         timeout_graceful_shutdown=2,
@@ -392,17 +399,17 @@ def _run_prod(*, no_open: bool = False, rebuild: bool = False, host: str = HOST)
     server.run()
 
 
-def _run_dev(*, no_open: bool = False, host: str = HOST) -> None:
+def _run_dev(*, no_open: bool = False, host: str = HOST, port: int = BACKEND_PORT) -> None:
     """Start Vite HMR plus uvicorn reload."""
     _ensure_frontend_path()
     _require_command("node")
     _require_command("npm")
-    _ensure_port_available("Backend", BACKEND_PORT, host=host)
+    _ensure_port_available("Backend", port, host=host)
     _ensure_port_available("Frontend", FRONTEND_DEV_PORT, host=host)
     _ensure_frontend_deps()
 
     processes: list[tuple[str, subprocess.Popen]] = []
-    frontend_url = f"http://localhost:{FRONTEND_DEV_PORT}/?api=http://localhost:{BACKEND_PORT}"
+    frontend_url = f"http://localhost:{FRONTEND_DEV_PORT}/?api=http://localhost:{port}"
 
     try:
         frontend_process = _start_process(
@@ -428,7 +435,7 @@ def _run_dev(*, no_open: bool = False, host: str = HOST) -> None:
                 "--host",
                 host,
                 "--port",
-                str(BACKEND_PORT),
+                str(port),
                 "--reload",
                 # Same as prod: an open /camera-feed stream would otherwise
                 # hold off the shutdown hook that saves an active recording.
@@ -439,17 +446,17 @@ def _run_dev(*, no_open: bool = False, host: str = HOST) -> None:
             env=os.environ.copy(),
         )
         processes.append(("backend", backend_process))
-        if not _wait_for_port(BACKEND_PORT, timeout=15):
+        if not _wait_for_port(port, timeout=15):
             if backend_process.poll() is not None:
                 _fail(
                     f"Backend exited early with code {backend_process.returncode}. Check the uvicorn output above."
                 )
-            _fail(f"Backend never became ready on http://localhost:{BACKEND_PORT}.")
+            _fail(f"Backend never became ready on http://localhost:{port}.")
 
         _open_browser_url(frontend_url, no_open=no_open)
         logger.info("Dev mode running. Press Ctrl+C to stop.")
         logger.info("Frontend: http://localhost:%d", FRONTEND_DEV_PORT)
-        logger.info("Backend:  http://localhost:%d", BACKEND_PORT)
+        logger.info("Backend:  http://localhost:%d", port)
         _install_signal_handlers()
         _monitor_processes(processes)
     except BaseException:
@@ -482,9 +489,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "Use 0.0.0.0 to make LeLab reachable from other machines on the network.",
     )
     parser.add_argument(
+        "--port",
+        type=int,
+        default=BACKEND_PORT,
+        help="Port to serve the backend (UI and API) on.",
+    )
+    parser.add_argument(
         "--stop",
         action="store_true",
-        help="Stop a running LeLab (free ports 8000/8080) and exit.",
+        help="Stop a running LeLab and free its ports. Pass --port to match a custom backend port.",
     )
     return parser
 
@@ -494,16 +507,16 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     if args.stop:
-        _run_stop()
+        _run_stop(port=args.port)
         return
 
     if args.dev and args.rebuild:
         parser.error("--rebuild is for production mode; dev mode serves from Vite.")
 
     if args.dev:
-        _run_dev(no_open=args.no_open, host=args.host)
+        _run_dev(no_open=args.no_open, host=args.host, port=args.port)
     else:
-        _run_prod(no_open=args.no_open, rebuild=args.rebuild, host=args.host)
+        _run_prod(no_open=args.no_open, rebuild=args.rebuild, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":
