@@ -151,11 +151,18 @@ def build_training_command(
     # LeRobot defaults push_to_hub=True and demands --policy.repo_id when so.
     # submit_to_hf also resets policy.device so the pod picks its own device.
     is_cloud = job_target is not None and job_target.runner == "hf_cloud"
+    device = None if is_cloud else request.policy_device or auto_select_torch_device().type
     if not is_cloud:
-        cmd.extend(["--policy.device", request.policy_device or auto_select_torch_device().type])
+        cmd.extend(["--policy.device", device])
         cmd.extend(["--policy.push_to_hub", "true" if request.policy_push_to_hub else "false"])
         if request.policy_push_to_hub and request.policy_repo_id:
             cmd.extend(["--policy.repo_id", request.policy_repo_id])
+    # Training takes mixed precision from accelerate alone (huggingface/lerobot#4010); use_amp
+    # above stays for the saved config, which evaluation and inference read. fp16 matches the
+    # torch.autocast default they run under on CUDA, and works on pre-Ampere GPUs such as the
+    # T4. HF Jobs pods are GPUs.
+    if request.policy_use_amp and (is_cloud or device == "cuda"):
+        cmd.extend(["--accelerator.mixed_precision", "fp16"])
 
     # GR00T-specific policy flags. These options only exist on the groot config,
     # so emit them only for --policy.type=groot; sending them to another policy

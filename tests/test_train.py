@@ -198,6 +198,25 @@ def test_local_run_keeps_explicit_device() -> None:
     assert _arg_value(cmd, "--policy.device") == "cpu"
 
 
+@pytest.mark.parametrize(
+    ("device", "runner", "expected"),
+    [("cuda", "local", "fp16"), ("cpu", "local", None), ("mps", "local", None), (None, "hf_cloud", "fp16")],
+)
+def test_amp_trains_in_fp16_on_gpus(device, runner, expected) -> None:
+    from lelab.jobs import JobTarget
+    from lelab.train import TrainingRequest, build_training_command
+
+    target = JobTarget(runner=runner, flavor="a10g-small") if runner == "hf_cloud" else None
+    req = TrainingRequest(dataset_repo_id="x", policy_device=device, policy_use_amp=True)
+    cmd = build_training_command(req, "/tmp/out", job_target=target)
+
+    assert _arg_value(cmd, "--policy.use_amp") == "true"
+    if expected is None:
+        assert "--accelerator.mixed_precision" not in cmd
+    else:
+        assert _arg_value(cmd, "--accelerator.mixed_precision") == expected
+
+
 def test_groot_policy_flags_are_emitted_only_for_groot() -> None:
     from lelab.train import TrainingRequest, build_training_command
 
