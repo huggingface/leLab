@@ -18,6 +18,8 @@ from __future__ import annotations
 import logging
 import sys
 
+import pytest
+
 
 def test_build_install_cmd_contains_pip_and_package() -> None:
     from lelab.utils.system import _build_install_cmd
@@ -130,20 +132,69 @@ def test_cuda_status_endpoint_returns_expected_shape(client) -> None:
 
 
 def test_policy_extra_maps_policies_to_install_targets() -> None:
-    """smolvla/pi0/pi0_fast/diffusion map to the right probe module + lerobot[extra]."""
     from lelab.utils.system import handle_get_policy_extra
 
     smol = handle_get_policy_extra("smolvla")
     assert smol["needs_extra"] is True
-    assert smol["package"] == "transformers"
     assert smol["install_target"] == "lerobot[smolvla]"
     assert "lerobot[smolvla]" in smol["install_hint"]
 
-    # pi0 and pi0_fast share the lerobot[pi] extra; diffusion uses diffusers.
+    # pi0, pi0_fast and pi05 share the lerobot[pi] extra.
     assert handle_get_policy_extra("pi0")["install_target"] == "lerobot[pi]"
     assert handle_get_policy_extra("pi0_fast")["install_target"] == "lerobot[pi]"
-    assert handle_get_policy_extra("diffusion")["package"] == "diffusers"
-    assert handle_get_policy_extra("diffusion")["install_target"] == "lerobot[diffusion]"
+    assert handle_get_policy_extra("wall_x")["install_target"] == "lerobot[wallx]"
+
+
+def test_every_policy_extra_exists_in_the_installed_lerobot() -> None:
+    """Catches an extra LeRobot renames or drops on the next version bump."""
+    from importlib import metadata
+
+    from packaging.utils import canonicalize_name
+
+    from lelab.utils.system import POLICY_EXTRAS
+
+    provided = {canonicalize_name(e) for e in metadata.metadata("lerobot").get_all("Provides-Extra")}
+    assert {e for e in POLICY_EXTRAS.values() if canonicalize_name(e) not in provided} == set()
+
+
+def _fake_lerobot_requires(monkeypatch, installed: dict[str, str]) -> None:
+    from lelab.utils import system
+
+    requires = [
+        'torchcodec<0.18.0; sys_platform == "darwin" or sys_platform != "darwin"',  # core requirement
+        'transformers<5.23.0,>=5.22.0; extra == "transformers-dep"',
+        'num2words<0.6.0,>=0.5.14; extra == "smolvla"',
+        'lerobot[transformers-dep]; extra == "smolvla"',
+    ]
+
+    def version(name: str) -> str:
+        if name not in installed:
+            raise system.metadata.PackageNotFoundError(name)
+        return installed[name]
+
+    monkeypatch.setattr(system.metadata, "requires", lambda _dist: requires)
+    monkeypatch.setattr(system.metadata, "version", version)
+
+
+@pytest.mark.parametrize(
+    ("installed", "available", "package"),
+    [
+        ({"transformers": "5.22.0", "num2words": "0.5.14"}, True, ""),
+        ({"transformers": "5.5.0", "num2words": "0.5.14"}, False, "transformers<5.23.0,>=5.22.0"),
+        ({"transformers": "5.22.0"}, False, "num2words<0.6.0,>=0.5.14"),
+    ],
+)
+def test_policy_extra_checks_versions_through_nested_extras(
+    monkeypatch, installed, available, package
+) -> None:
+    """A missing core requirement (torchcodec here) is not the extra's to report."""
+    from lelab.utils import system
+
+    _fake_lerobot_requires(monkeypatch, installed)
+    status = system.handle_get_policy_extra("smolvla")
+
+    assert status["available"] is available
+    assert status["package"] == package
 
 
 def test_policy_extra_core_policy_needs_nothing() -> None:
@@ -153,17 +204,6 @@ def test_policy_extra_core_policy_needs_nothing() -> None:
     assert act["needs_extra"] is False
     assert act["available"] is True
     assert act["install_target"] == ""
-
-
-def test_policy_extra_available_reflects_find_spec(monkeypatch) -> None:
-    import importlib.util
-
-    from lelab.utils import system
-
-    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
-    assert system.handle_get_policy_extra("smolvla")["available"] is True
-    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
-    assert system.handle_get_policy_extra("smolvla")["available"] is False
 
 
 def test_policy_extra_install_is_noop_for_core_policy() -> None:
