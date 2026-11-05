@@ -88,6 +88,8 @@ def handle_start_replay(request: ReplayRequest) -> dict[str, Any]:
                 f"Could not connect to the follower arm on {request.follower_port}. "
                 "Make sure it's plugged in and powered on, then try again."
             ) from e
+        # Feetech motors only store calibration registers with the torque off.
+        robot.bus.disable_torque()
         robot.bus.write_calibration(robot.calibration)
         robot.configure()
     except Exception as e:

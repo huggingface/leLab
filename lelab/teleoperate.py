@@ -179,9 +179,12 @@ def handle_start_teleoperation(request: TeleoperateRequest, websocket_manager=No
                 "Make sure it's plugged in and powered on, then try again."
             ) from e
 
-        # Write calibration to motors' memory
+        # Feetech motors only store calibration registers with the torque off,
+        # which also opens their EEPROM lock.
         logger.info("Writing calibration to motors...")
+        robot.bus.disable_torque()
         robot.bus.write_calibration(robot.calibration)
+        teleop_device.bus.disable_torque()
         teleop_device.bus.write_calibration(teleop_device.calibration)
 
         # Connect cameras and configure motors

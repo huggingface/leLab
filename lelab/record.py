@@ -875,11 +875,13 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
                 logger.error(f"❌ TELEOP CONNECTION: Failed to connect teleoperator: {e}")
                 raise
 
-        # Torque is still disabled at this point, which is what writing the
-        # calibration registers requires.
+        # Feetech motors only store calibration registers with the torque off,
+        # which also opens their EEPROM lock.
         logger.info("Writing calibration to motors...")
+        robot.bus.disable_torque()
         robot.bus.write_calibration(robot.calibration)
         if teleop is not None:
+            teleop.bus.disable_torque()
             teleop.bus.write_calibration(teleop.calibration)
 
         try:
