@@ -2,21 +2,32 @@ from __future__ import annotations
 
 import logging
 
+from lerobot.motors import Motor, MotorNormMode, SerialMotorsBus
 
-def test_safe_disconnect_force_closes_serial_port_after_disconnect_failure() -> None:
+
+class _UnresponsiveRustypotBus:
+    """Stands in for an open rustypot.Bus whose motors no longer answer."""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def set_torque(self, ids, enabled, retries=0):
+        return dict.fromkeys(ids, "no status packet")
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _connected_bus() -> SerialMotorsBus:
+    bus = SerialMotorsBus(
+        port="/dev/null", motors={"gripper": Motor(6, "sts3215", MotorNormMode.RANGE_0_100)}
+    )
+    bus._bus = _UnresponsiveRustypotBus()
+    return bus
+
+
+def test_safe_disconnect_releases_serial_port_after_disconnect_failure() -> None:
     from lelab.utils.devices import safe_disconnect_device
-
-    class PortHandler:
-        def __init__(self) -> None:
-            self.cleared = False
-            self.closed = False
-            self.is_using = True
-
-        def clearPort(self) -> None:  # noqa: N802 - mirrors LeRobot port handler API
-            self.cleared = True
-
-        def closePort(self) -> None:  # noqa: N802 - mirrors LeRobot port handler API
-            self.closed = True
 
     class Camera:
         def __init__(self) -> None:
@@ -27,34 +38,27 @@ def test_safe_disconnect_force_closes_serial_port_after_disconnect_failure() -> 
 
     class Device:
         def __init__(self) -> None:
-            self.bus = type("Bus", (), {"port_handler": PortHandler()})()
+            self.bus = _connected_bus()
             self.cameras = {"cam": Camera()}
 
         def disconnect(self) -> None:
-            raise RuntimeError("Failed to write 'Torque_Enable' on id_=6")
+            raise RuntimeError("camera is not connected")
 
     device = Device()
+    port = device.bus._bus
     safe_disconnect_device(device, logging.getLogger(__name__))
 
-    assert device.bus.port_handler.cleared is True
-    assert device.bus.port_handler.is_using is False
-    assert device.bus.port_handler.closed is True
+    assert port.closed is True  # released even though disabling the torque failed
+    assert device.bus.is_connected is False
     assert device.cameras["cam"].disconnected is True
 
 
 def test_safe_disconnect_uses_normal_disconnect_when_it_succeeds() -> None:
     from lelab.utils.devices import safe_disconnect_device
 
-    class PortHandler:
-        def __init__(self) -> None:
-            self.closed = False
-
-        def closePort(self) -> None:  # noqa: N802 - mirrors LeRobot port handler API
-            self.closed = True
-
     class Device:
         def __init__(self) -> None:
-            self.bus = type("Bus", (), {"port_handler": PortHandler()})()
+            self.bus = _connected_bus()
             self.disconnected = False
 
         def disconnect(self) -> None:
@@ -64,4 +68,4 @@ def test_safe_disconnect_uses_normal_disconnect_when_it_succeeds() -> None:
     safe_disconnect_device(device, logging.getLogger(__name__))
 
     assert device.disconnected is True
-    assert device.bus.port_handler.closed is False
+    assert device.bus.is_connected is True  # the fallback did not run

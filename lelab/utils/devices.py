@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 import threading
-from contextlib import suppress
 from typing import Any
 
 # Recording, teleoperation, inference and replay all drive the follower: each
@@ -35,17 +34,13 @@ def safe_disconnect_device(device: Any, logger: logging.Logger, context: str = "
 def _force_close_device_resources(device: Any, logger: logging.Logger) -> None:
     """Best-effort release for serial/camera resources after disconnect fails."""
     bus = getattr(device, "bus", None)
-    port_handler = getattr(bus, "port_handler", None)
-    if port_handler is not None:
-        with suppress(Exception):
-            port_handler.clearPort()
-        with suppress(Exception):
-            port_handler.is_using = False
+    if bus is not None:
+        # SerialMotorsBus.disconnect() closes the port even when disabling the torque fails.
         try:
-            port_handler.closePort()
-            logger.info("Force-closed serial port after disconnect failure")
+            bus.disconnect()
+            logger.info("Released serial port after disconnect failure")
         except Exception as exc:
-            logger.warning("Failed to force-close serial port after disconnect failure: %s", exc)
+            logger.warning("Serial port released, but disabling the torque failed: %s", exc)
 
     cameras = getattr(device, "cameras", None)
     if isinstance(cameras, dict):
