@@ -253,6 +253,34 @@ def test_handle_start_inference_closes_log_when_popen_fails(monkeypatch, tmp_pat
     assert rollout.inference_active is False
 
 
+@pytest.mark.parametrize("task", ['put "it" in: the box', "step 1: grab the cube", "yes", "null", ""])
+def test_handle_start_inference_passes_the_task_verbatim(monkeypatch, tmp_path, task) -> None:
+    """draccus decodes a string flag as YAML, so the task must reach it quoted."""
+    from dataclasses import dataclass
+
+    import draccus
+
+    from lelab import rollout
+
+    monkeypatch.setattr(rollout, "setup_follower_calibration_file", lambda cfg: "robot_a")
+    monkeypatch.setattr(rollout, "_resolve_policy_path", lambda ref: str(tmp_path / "model"))
+    commands: list[list[str]] = []
+
+    def capture(cmd, **kwargs):
+        commands.append(cmd)
+        raise OSError("stop before spawning")
+
+    monkeypatch.setattr(rollout.subprocess, "Popen", capture)
+    rollout.handle_start_inference(_stub_request().model_copy(update={"task": task}))
+
+    @dataclass
+    class RolloutTask:
+        task: str = ""
+
+    task_arg = next(arg for arg in commands[0] if arg.startswith("--task="))
+    assert draccus.parse(RolloutTask, args=[task_arg]).task == task
+
+
 def test_classify_outcome_ok_warns_and_fails() -> None:
     from lelab.rollout import _classify_outcome
 

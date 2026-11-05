@@ -344,7 +344,8 @@ def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
             "--robot.type=so101_follower",
             f"--robot.port={request.follower_port}",
             f"--robot.id={follower_id}",
-            f"--task={request.task}",
+            # JSON-quoted: draccus decodes a string as YAML, so "step 1: grab it" became a dict.
+            f"--task={json.dumps(request.task)}",
             f"--duration={request.duration_s}",
             *_rollout_inference_args(policy_path),
         ]
