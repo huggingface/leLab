@@ -281,6 +281,30 @@ def test_handle_start_inference_passes_the_task_verbatim(monkeypatch, tmp_path, 
     assert draccus.parse(RolloutTask, args=[task_arg]).task == task
 
 
+@pytest.mark.parametrize(
+    ("rollout_started_at", "grace"), [(None, "_SETUP_STOP_GRACE_S"), (123.0, "_STOP_GRACE_S")]
+)
+def test_stop_gives_setup_longer_to_exit(monkeypatch, rollout_started_at, grace) -> None:
+    """Killed mid-setup, LeRobot may be connecting the arm and leave it powered."""
+    from lelab import rollout
+
+    waits: list[float] = []
+
+    class Proc:
+        def terminate(self) -> None:
+            pass
+
+        def wait(self, timeout=None) -> None:
+            waits.append(timeout)
+
+    monkeypatch.setattr(rollout, "inference_active", True)
+    monkeypatch.setattr(rollout, "_inference_proc", Proc())
+    monkeypatch.setattr(rollout, "_inference_rollout_started_at", rollout_started_at)
+
+    assert rollout.handle_stop_inference()["success"] is True
+    assert waits == [getattr(rollout, grace)]
+
+
 def test_classify_outcome_ok_warns_and_fails() -> None:
     from lelab.rollout import _classify_outcome
 

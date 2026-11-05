@@ -75,6 +75,13 @@ _HUB_ROOT_REF_RE = re.compile(r"^(?P<repo>[^@]+)@root$")
 # UI can present a "rollout time" separate from the multi-second policy
 # load + bus connect + camera connect setup overhead.
 _ROLLOUT_START_MARKER = "Rollout setup complete"
+# How long Stop waits for a graceful exit before killing. Once the loop runs,
+# teardown (back to the start pose, then disconnect) takes about 4s. During
+# setup LeRobot only notes the signal and keeps loading the policy, then
+# connecting the arm (huggingface/lerobot#4866), before tearing down: killing it
+# mid-connect would leave the arm powered.
+_STOP_GRACE_S = 5
+_SETUP_STOP_GRACE_S = 60
 
 
 def _pump_stdout(proc: subprocess.Popen, log_handle) -> None:
@@ -418,13 +425,14 @@ def handle_stop_inference() -> dict[str, Any]:
         if not inference_active or _inference_proc is None:
             return {"success": False, "status_code": 409, "message": "No inference is active"}
         proc = _inference_proc
+        grace_s = _STOP_GRACE_S if _inference_rollout_started_at is not None else _SETUP_STOP_GRACE_S
 
     try:
         proc.terminate()
         try:
-            proc.wait(timeout=5)
+            proc.wait(timeout=grace_s)
         except subprocess.TimeoutExpired:
-            logger.warning("Inference did not exit in 5s; killing")
+            logger.warning("Inference did not exit in %ss; killing", grace_s)
             proc.kill()
             proc.wait()
     except Exception as exc:
