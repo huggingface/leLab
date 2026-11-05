@@ -26,7 +26,7 @@ export interface UseInstallExtraResult {
 }
 
 /**
- * Drives the backend extra-install flow (`accelerate`, `wandb`, …). Seeds state
+ * Drives the backend extra-install flow (`accelerate`, policy extras, …). Seeds state
  * from `${endpointPrefix}/install-status`, polls while installing, and exposes
  * install/retry handlers. Pass `enabled=false` to gate seeding on dialog open.
  */

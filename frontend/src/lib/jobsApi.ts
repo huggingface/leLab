@@ -36,12 +36,9 @@ export interface TrainingRequest {
   save_freq: number;
   save_checkpoint: boolean;
   resume: boolean;
-  wandb_enable: boolean;
-  wandb_project?: string;
-  wandb_entity?: string;
-  wandb_notes?: string;
-  wandb_mode?: string;
-  wandb_disable_artifact: boolean;
+  trackio_enable: boolean;
+  trackio_project?: string;
+  trackio_space_id?: string;
   policy_device?: string;
   policy_use_amp: boolean;
   optimizer_type?: string;
@@ -79,7 +76,7 @@ export interface JobRecord {
   hf_flavor: string | null;
   hf_repo_id: string | null;
   hf_job_url: string | null;
-  wandb_run_url: string | null;
+  tracking_url: string | null;
   checkpoint_count: number;
 }
 
@@ -89,7 +86,7 @@ export interface JobProgressSnapshot {
   id: string;
   state: JobState;
   metrics: TrainingMetrics;
-  wandb_run_url: string | null;
+  tracking_url: string | null;
   checkpoint_count: number;
 }
 

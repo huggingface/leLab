@@ -21,18 +21,66 @@ import json as _json
 import pytest
 
 
-def test_extract_wandb_run_url_finds_canonical_url() -> None:
-    from lelab.jobs import extract_wandb_run_url
+def test_extract_tracking_url_finds_the_space_url() -> None:
+    from lelab.jobs import extract_tracking_url
 
-    line = "wandb: \U0001f680 View run at https://wandb.ai/me/myproj/runs/abc123 trailing text"
-    assert extract_wandb_run_url(line) == "https://wandb.ai/me/myproj/runs/abc123"
+    line = "INFO 2026-11-05 15:03:26 io_utils.py:101 Track this run --> https://huggingface.co/spaces/me/lelab-trackio"
+    assert extract_tracking_url(line) == "https://huggingface.co/spaces/me/lelab-trackio"
 
 
-def test_extract_wandb_run_url_returns_none_when_absent() -> None:
-    from lelab.jobs import extract_wandb_run_url
+def test_extract_tracking_url_ignores_a_local_database_run() -> None:
+    from lelab.jobs import extract_tracking_url
 
-    assert extract_wandb_run_url("nothing here") is None
-    assert extract_wandb_run_url("https://example.com/runs/abc") is None
+    assert extract_tracking_url('Track this run --> trackio show --project "lerobot"') is None
+    assert extract_tracking_url("https://huggingface.co/spaces/me/other") is None
+
+
+def test_job_record_reads_a_legacy_wandb_run_url() -> None:
+    from lelab.jobs import JobRecord
+    from lelab.train import TrainingRequest
+
+    record = JobRecord.model_validate(
+        {
+            "id": "j",
+            "name": "n",
+            "state": "done",
+            "config": TrainingRequest(dataset_repo_id="x").model_dump(),
+            "output_dir": "/tmp/out",
+            "started_at": 0.0,
+            "wandb_run_url": "https://wandb.ai/me/p/runs/abc",
+        }
+    )
+    assert record.tracking_url == "https://wandb.ai/me/p/runs/abc"
+    assert "wandb_run_url" not in record.model_dump()
+
+
+@pytest.mark.parametrize(
+    ("whoami", "space_id", "expected"),
+    [
+        ({"name": "me"}, None, "me/lelab-trackio"),
+        ({"name": "me"}, "team/runs", "team/runs"),  # an explicit Space wins
+        (None, None, None),  # signed out: the run stays in the local database
+    ],
+)
+def test_tracked_runs_default_to_the_users_trackio_space(monkeypatch, whoami, space_id, expected) -> None:
+    from lelab import jobs
+    from lelab.train import TrainingRequest
+    from lelab.utils import hf_auth
+
+    monkeypatch.setattr(hf_auth, "cached_whoami", lambda: whoami)
+    config = TrainingRequest(dataset_repo_id="x", trackio_enable=True, trackio_space_id=space_id)
+
+    assert jobs._with_default_trackio_space(config).trackio_space_id == expected
+
+
+def test_untracked_runs_get_no_trackio_space(monkeypatch) -> None:
+    from lelab import jobs
+    from lelab.train import TrainingRequest
+    from lelab.utils import hf_auth
+
+    monkeypatch.setattr(hf_auth, "cached_whoami", lambda: {"name": "me"})
+
+    assert jobs._with_default_trackio_space(TrainingRequest(dataset_repo_id="x")).trackio_space_id is None
 
 
 def test_parse_duration_handles_mm_ss_and_hh_mm_ss() -> None:

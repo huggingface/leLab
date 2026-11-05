@@ -251,74 +251,33 @@ const AdvancedCard: React.FC<ConfigComponentProps> = ({ config, updateConfig }) 
             </div>
           </section>
 
-          {config.wandb_enable && (
+          {config.trackio_enable && (
             <>
               <Separator className="bg-slate-700" />
               <section className="space-y-4">
-                <SectionHeading>Weights & Biases</SectionHeading>
+                <SectionHeading>Trackio</SectionHeading>
                 <div>
-                  <Label htmlFor="wandb_entity" className="text-slate-300">
-                    W&B Entity (optional)
+                  <Label htmlFor="trackio_space_id" className="text-slate-300">
+                    Trackio Space (optional)
                   </Label>
                   <Input
-                    id="wandb_entity"
-                    value={config.wandb_entity || ''}
+                    id="trackio_space_id"
+                    value={config.trackio_space_id || ''}
                     onChange={(e) =>
-                      updateConfig('wandb_entity', e.target.value || undefined)
+                      updateConfig('trackio_space_id', e.target.value || undefined)
                     }
-                    placeholder="your-username"
+                    placeholder="your-username/lelab-trackio"
                     className="bg-slate-900 border-slate-600 text-white rounded-lg"
                   />
-                </div>
-                <div>
-                  <Label htmlFor="wandb_notes" className="text-slate-300">
-                    W&B Notes (optional)
-                  </Label>
-                  <Input
-                    id="wandb_notes"
-                    value={config.wandb_notes || ''}
-                    onChange={(e) =>
-                      updateConfig('wandb_notes', e.target.value || undefined)
-                    }
-                    placeholder="Training run notes..."
-                    className="bg-slate-900 border-slate-600 text-white rounded-lg"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="wandb_mode" className="text-slate-300">
-                    W&B Mode
-                  </Label>
-                  <Select
-                    value={config.wandb_mode || 'online'}
-                    onValueChange={(value) => updateConfig('wandb_mode', value)}
-                  >
-                    <SelectTrigger id="wandb_mode" className="bg-slate-900 border-slate-600 text-white rounded-lg">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="bg-slate-800 border-slate-600 text-white">
-                      <SelectItem value="online">Online</SelectItem>
-                      <SelectItem value="offline">Offline</SelectItem>
-                      <SelectItem value="disabled">Disabled</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex items-center space-x-3">
-                  <Switch
-                    id="wandb_disable_artifact"
-                    checked={config.wandb_disable_artifact}
-                    onCheckedChange={(checked) =>
-                      updateConfig('wandb_disable_artifact', checked)
-                    }
-                  />
-                  <Label htmlFor="wandb_disable_artifact" className="text-slate-300">
-                    Disable Artifacts
-                  </Label>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Signed in, runs sync to a private lelab-trackio Space on your account by default.
+                  </p>
                 </div>
               </section>
             </>
           )}
 
-          {!config.wandb_enable && <Separator className="bg-slate-700" />}
+          {!config.trackio_enable && <Separator className="bg-slate-700" />}
 
           {/* Misc */}
           <section className="space-y-4">
