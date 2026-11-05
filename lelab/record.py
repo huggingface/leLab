@@ -17,7 +17,6 @@ import re
 import shutil
 import threading
 import time
-import traceback
 from datetime import datetime
 from typing import Any
 
@@ -347,10 +346,7 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
                     "robot_type": getattr(dataset.meta, "robot_type", "Unknown robot"),
                 }
             except Exception as e:
-                # lerobot's init_logging() installs a root formatter that only
-                # renders the message, so logger.exception() would drop the
-                # traceback. Fold it into the message instead.
-                logger.error("Recording session failed: %s\n%s", e, traceback.format_exc())
+                logger.exception("Recording session failed: %s", e)
                 current_phase = "error"
                 if recording_start_time:
                     session_end_elapsed_seconds = int(time.time() - recording_start_time)
@@ -760,8 +756,7 @@ def handle_upload_dataset(request: UploadRequest) -> dict[str, Any]:
         return {"success": False, "message": str(e)}
 
     except Exception as e:
-        logger.error(f"Error uploading dataset {request.dataset_repo_id}: {e}")
-        logger.error(f"Full traceback: {traceback.format_exc()}")
+        logger.exception(f"Error uploading dataset {request.dataset_repo_id}: {e}")
 
         err_text = str(e).lower()
         looks_like_auth = any(
