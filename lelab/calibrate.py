@@ -28,7 +28,6 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from lerobot.motors import MotorCalibration
-from lerobot.motors.feetech import OperatingMode
 from lerobot.robots import (
     Robot,
     make_robot_from_config,
@@ -333,18 +332,11 @@ class CalibrationManager:
 
         # Disable torque to allow manual movement during recording
         self.device.bus.disable_torque()
-        for motor in self.device.bus.motors:
-            self.device.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
+        self.device.bus.set_operating_mode("position")
 
-        self.device.bus.reset_calibration()
-        actual_positions = self.device.bus.sync_read("Present_Position", normalize=False)
-        logger.info(f"Current positions for homing: {actual_positions}")
-
-        self._homing_offsets = self.device.bus._get_half_turn_homings(actual_positions)
+        # Resets the calibration, then writes the offsets that center each present position.
+        self._homing_offsets = self.device.bus.set_half_turn_homings()
         logger.info(f"Calculated homing offsets: {self._homing_offsets}")
-
-        for motor, offset in self._homing_offsets.items():
-            self.device.bus.write("Homing_Offset", motor, offset)
 
     def _step_range_recording(self):
         """Record range of motion as the user moves all joints."""
@@ -397,18 +389,7 @@ class CalibrationManager:
         # Record positions until user completes step
         while not self._step_complete.is_set() and not self.stop_calibration:
             try:
-                # Try reading positions with retry on port contention
-                positions = None
-                for attempt in range(3):  # Try up to 3 times
-                    try:
-                        positions = self.device.bus.sync_read("Present_Position", normalize=False)
-                        break  # Success, exit retry loop
-                    except Exception as read_error:
-                        if "Port is in use" in str(read_error) and attempt < 2:
-                            time.sleep(0.01)  # Short delay before retry
-                            continue
-                        else:
-                            raise read_error  # Re-raise if not port contention or final attempt
+                positions = self.device.bus.sync_read("Present_Position", normalize=False)
 
                 if positions:
                     # Validate the readings - filter out invalid/zero values
@@ -444,11 +425,7 @@ class CalibrationManager:
             except CalibrationDiscontinuityError:
                 raise
             except Exception as e:
-                if "Port is in use" in str(e):
-                    logger.debug(f"Port busy during position read: {e}")
-                else:
-                    logger.warning(f"Error reading positions during recording: {e}")
-                # Increase sleep time on error to reduce port contention
+                logger.warning(f"Error reading positions during recording: {e}")
                 time.sleep(0.2)
 
         if self.stop_calibration:

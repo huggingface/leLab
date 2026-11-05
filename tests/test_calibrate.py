@@ -139,6 +139,25 @@ def test_get_status_returns_independent_recorded_ranges_snapshot() -> None:
     }
 
 
+def test_step_homing_uses_the_serial_bus_api() -> None:
+    """Autospec checks every bus call against LeRobot's SerialMotorsBus signatures."""
+    from unittest.mock import create_autospec
+
+    from lelab.calibrate import CalibrationManager
+    from lerobot.motors import SerialMotorsBus
+
+    bus = create_autospec(SerialMotorsBus, instance=True)
+    bus.set_half_turn_homings.return_value = {"shoulder_pan": -12}
+    mgr = CalibrationManager()
+    mgr.device = type("Device", (), {"bus": bus})()
+
+    mgr._step_homing()
+
+    bus.disable_torque.assert_called_once_with()
+    bus.set_operating_mode.assert_called_once_with("position")
+    assert mgr._homing_offsets == {"shoulder_pan": -12}
+
+
 def test_status_polling_does_not_wait_for_recording_bus_read() -> None:
     """A slow recording read does not block status polling."""
     from lelab.calibrate import CalibrationManager
