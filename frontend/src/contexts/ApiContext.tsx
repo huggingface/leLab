@@ -1,4 +1,5 @@
 import React, { createContext, useContext, ReactNode, useState, useCallback, useMemo } from "react";
+import { isHostedSpace } from "@/lib/isHostedSpace";
 
 interface ApiContextType {
   baseUrl: string;
@@ -31,7 +32,13 @@ const resolveInitialBaseUrl = (): string => {
     }
   }
 
-  return DEFAULT_LOCALHOST;
+  // Production `lelab` serves the UI and the API on the same origin, so the
+  // page origin is the right default — a hardcoded localhost default breaks
+  // plain-HTTP LAN access (http://<host-ip>:8000). Dev keeps the API on :8000
+  // behind Vite's :8080, and the HF Space serves only the UI and relies on
+  // ?api=, so both keep the localhost default.
+  if (import.meta.env.DEV || isHostedSpace()) return DEFAULT_LOCALHOST;
+  return window.location.origin;
 };
 
 export const ApiProvider: React.FC<{ children: ReactNode }> = ({

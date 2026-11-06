@@ -7,6 +7,19 @@ const CHANNEL = "lelab-tabs-v1";
 const HEARTBEAT_MS = 1000;
 const PEER_TIMEOUT_MS = 3000;
 
+// `crypto.randomUUID` is only exposed in secure contexts (HTTPS or localhost),
+// so plain-HTTP LAN access (e.g. http://<host-ip>:8000) needs a v4 fallback.
+const generateTabId = (): string => {
+  if (typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; // UUID version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // UUID variant 10xx
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+};
+
 const SingleTabGuard = ({ children }: { children: ReactNode }) => {
   const [isPrimary, setIsPrimary] = useState(true);
   const peersRef = useRef<Map<string, Peer>>(new Map());
@@ -39,7 +52,7 @@ const SingleTabGuard = ({ children }: { children: ReactNode }) => {
       return;
     }
 
-    myIdRef.current = crypto.randomUUID();
+    myIdRef.current = generateTabId();
     myOpenedAtRef.current = Date.now();
 
     const channel = new BroadcastChannel(CHANNEL);

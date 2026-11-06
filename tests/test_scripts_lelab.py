@@ -212,7 +212,7 @@ def test_run_prod_no_open_reaches_uvicorn_without_browser(
         return MagicMock()
 
     monkeypatch.setattr(launcher, "FRONTEND_DIST", dist)
-    monkeypatch.setattr(launcher, "_ensure_port_available", lambda _name, _port: None)
+    monkeypatch.setattr(launcher, "_ensure_port_available", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(launcher.threading, "Thread", _ImmediateThread)
     monkeypatch.setattr(launcher.uvicorn, "Config", fake_config)
     monkeypatch.setattr(launcher.uvicorn, "Server", lambda _config: server)
@@ -241,7 +241,7 @@ def test_run_prod_rebuilds_before_starting_uvicorn(
     server.run.side_effect = lambda: order.append("uvicorn")
 
     monkeypatch.setattr(launcher, "FRONTEND_DIST", dist)
-    monkeypatch.setattr(launcher, "_ensure_port_available", lambda _name, _port: None)
+    monkeypatch.setattr(launcher, "_ensure_port_available", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(launcher, "_run_frontend_build", lambda: order.append("build"))
     monkeypatch.setattr(launcher.threading, "Thread", _ImmediateThread)
     monkeypatch.setattr(launcher.uvicorn, "Config", lambda *_a, **_k: MagicMock())
@@ -274,7 +274,7 @@ def test_dev_launcher_builds_expected_subprocess_commands(
     monkeypatch.setattr(launcher, "FRONTEND_PATH", frontend)
     monkeypatch.setattr(launcher, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(launcher, "_require_command", lambda _command: _command)
-    monkeypatch.setattr(launcher, "_ensure_port_available", lambda _name, _port: None)
+    monkeypatch.setattr(launcher, "_ensure_port_available", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(launcher, "_ensure_frontend_deps", lambda: None)
     monkeypatch.setattr(launcher, "_wait_for_port", lambda _port, timeout=30: True)
     monkeypatch.setattr(launcher, "_start_process", fake_start_process)
@@ -428,7 +428,7 @@ def test_dev_launcher_reports_frontend_exit_before_ready(
 
     monkeypatch.setattr(launcher, "FRONTEND_PATH", frontend)
     monkeypatch.setattr(launcher, "_require_command", lambda _command: _command)
-    monkeypatch.setattr(launcher, "_ensure_port_available", lambda _name, _port: None)
+    monkeypatch.setattr(launcher, "_ensure_port_available", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(launcher, "_ensure_frontend_deps", lambda: None)
     monkeypatch.setattr(launcher, "_wait_for_port", lambda _port, timeout=30: False)
     monkeypatch.setattr(launcher, "_start_process", lambda *_args, **_kwargs: FakeProcess(returncode=7))
@@ -438,3 +438,113 @@ def test_dev_launcher_reports_frontend_exit_before_ready(
 
     assert "Frontend exited early with code 7" in caplog.text
     assert "Check the Vite output above" in caplog.text
+
+
+def test_parser_defaults_host_to_loopback() -> None:
+    import lelab.scripts.lelab as launcher
+
+    args = launcher._build_parser().parse_args([])
+
+    assert args.host == "127.0.0.1"
+    assert args.port == 8000
+
+
+def test_parser_accepts_custom_host() -> None:
+    import lelab.scripts.lelab as launcher
+
+    args = launcher._build_parser().parse_args(["--host", "0.0.0.0"])
+
+    assert args.host == "0.0.0.0"
+
+
+def test_parser_accepts_custom_port() -> None:
+    import lelab.scripts.lelab as launcher
+
+    args = launcher._build_parser().parse_args(["--port", "9000"])
+
+    assert args.port == 9000
+
+
+def test_run_prod_binds_requested_host(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import lelab.scripts.lelab as launcher
+
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html></html>")
+    captured: dict[str, object] = {}
+
+    def fake_config(_app, **kwargs):
+        captured.update(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr(launcher, "FRONTEND_DIST", dist)
+    monkeypatch.setattr(launcher, "_ensure_port_available", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(launcher.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(launcher.uvicorn, "Config", fake_config)
+    monkeypatch.setattr(launcher.uvicorn, "Server", lambda _config: MagicMock())
+    monkeypatch.setattr(launcher.signal, "signal", lambda *_a, **_k: None)
+
+    launcher._run_prod(no_open=True, host="0.0.0.0", port=9000)
+
+    assert captured["host"] == "0.0.0.0"
+    assert captured["port"] == 9000
+
+
+def test_dev_launcher_binds_requested_host(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import lelab.scripts.lelab as launcher
+
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    started: list[tuple[str, list[str], Path]] = []
+    browser_open = MagicMock()
+
+    def fake_start_process(name, command, cwd, env=None):
+        started.append((name, list(command), cwd))
+        return FakeProcess()
+
+    monkeypatch.setattr(launcher, "FRONTEND_PATH", frontend)
+    monkeypatch.setattr(launcher, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(launcher, "_require_command", lambda _command: _command)
+    monkeypatch.setattr(launcher, "_ensure_port_available", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(launcher, "_ensure_frontend_deps", lambda: None)
+    monkeypatch.setattr(launcher, "_wait_for_port", lambda _port, timeout=30: True)
+    monkeypatch.setattr(launcher, "_start_process", fake_start_process)
+    monkeypatch.setattr(launcher, "_install_signal_handlers", lambda: None)
+    monkeypatch.setattr(
+        launcher, "_monitor_processes", lambda _processes: (_ for _ in ()).throw(SystemExit(0))
+    )
+    monkeypatch.setattr(launcher, "_terminate_tree", lambda _pid, _timeout=5: None)
+    monkeypatch.setattr(launcher.webbrowser, "open", browser_open)
+
+    with pytest.raises(SystemExit):
+        launcher._run_dev(host="0.0.0.0", port=9000)
+
+    vite_args = started[0][1]
+    assert vite_args[vite_args.index("--host") + 1] == "0.0.0.0"
+    uvicorn_args = started[1][1]
+    assert uvicorn_args[uvicorn_args.index("--host") + 1] == "0.0.0.0"
+    assert uvicorn_args[uvicorn_args.index("--port") + 1] == "9000"
+    opened_url = browser_open.call_args.args[0]
+    assert opened_url == "http://localhost:8080/?api=http://localhost:9000"
+
+
+def test_stop_frees_custom_backend_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    import lelab.scripts.lelab as launcher
+
+    captured: dict[object, object] = {}
+
+    def fake_find_pids(ports=None):
+        captured["ports"] = ports
+        return {}
+
+    monkeypatch.setattr(launcher, "_find_lelab_pids", fake_find_pids)
+
+    launcher._run_stop(port=9000)
+
+    assert captured["ports"] == {9000, launcher.FRONTEND_DEV_PORT}
