@@ -8,6 +8,8 @@ vi.mock("@/hooks/useAvailableCameras", () => ({ useAvailableCameras: () => ({ ca
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 const reference = { url: null as string | null, error: null, save: vi.fn(), clear: vi.fn() };
 vi.mock("@/hooks/useCameraReference", () => ({ useCameraReference: () => reference }));
+const scores = { alignment: null as number | null, lighting: null as { match: number; brightnessDiff: number; colorDiff: number } | null };
+vi.mock("@/hooks/useReferenceScores", () => ({ useReferenceScores: () => scores }));
 vi.mock("@/hooks/useCameraStream", () => ({ useCameraStream: () => ({ videoRef: React.createRef<HTMLVideoElement>(), hasError: false }) }));
 let root: Root;
 let container: HTMLDivElement;
@@ -58,4 +60,20 @@ test("reference controls appear only for a named robot in read-only mode", () =>
   const slider = container.querySelector<HTMLInputElement>('input[type="range"]')!;
   expect(slider).not.toBeNull();
   reference.url = null;
+});
+
+test("with a reference, the live scores show and the preview gets a halo by alignment", () => {
+  reference.url = "blob:ref";
+  scores.alignment = 95;
+  scores.lighting = { match: 72, brightnessDiff: 7.04, colorDiff: 0.3 };
+  act(() => root.render(<CameraConfiguration cameras={[camera]} onCamerasChange={vi.fn()} readOnly robotName="arm" />));
+  expect(container.textContent).toContain("Alignment 95% · Lighting 72% (brightness 7.0%, color 0.3%)");
+  const preview = () => container.querySelector("video")!.parentElement!.parentElement!;
+  expect(preview().className).toContain("border-green-500");
+  scores.alignment = 60;
+  act(() => root.render(<CameraConfiguration cameras={[camera]} onCamerasChange={vi.fn()} readOnly robotName="arm" />));
+  expect(preview().className).toContain("border-orange-500");
+  reference.url = null;
+  scores.alignment = null;
+  scores.lighting = null;
 });

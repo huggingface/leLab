@@ -19,9 +19,11 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useAvailableCameras } from "@/hooks/useAvailableCameras";
 import { useCameraReference } from "@/hooks/useCameraReference";
+import { useReferenceScores } from "@/hooks/useReferenceScores";
 import BrowserCameraPreview from "@/components/control/BrowserCameraPreview";
 import CameraRotationSelect from "@/components/control/CameraRotationSelect";
 import CameraReferenceControls from "@/components/recording/CameraReferenceControls";
+import { ALIGNED_SCORE } from "@/lib/cameraReferenceScore";
 import {
   CameraConfig,
   cameraRotation,
@@ -361,9 +363,15 @@ const CameraPreview: React.FC<CameraPreviewProps> = ({
   const rotationError = cameraRotationError(camera);
   const rotation = rotationError ? null : cameraRotation(camera.rotation);
   const output = rotation === null ? null : rotatedDimensions(camera.width, camera.height, rotation);
+  const scores = useReferenceScores(previewRef, reference.url, !paused && !rotationError);
+  // Halo around the preview: green once the framing lines up with the reference, orange while it's off.
+  const halo =
+    scores.alignment === null
+      ? ""
+      : `border-2 ${scores.alignment >= ALIGNED_SCORE ? "border-green-500" : "border-orange-500"}`;
   return (
     <div className="bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
-      <div ref={previewRef}>
+      <div ref={previewRef} className={halo}>
       <BrowserCameraPreview
         deviceId={deviceId}
         paused={paused}
@@ -404,6 +412,7 @@ const CameraPreview: React.FC<CameraPreviewProps> = ({
             onClear={() => void reference.clear()}
             disabled={paused || !!rotationError}
             error={reference.error}
+            scores={scores}
           />
         )}
         {rotationError && <p role="alert" className="text-xs text-red-400">{rotationError} Select a valid rotation.</p>}
