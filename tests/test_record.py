@@ -360,6 +360,136 @@ def _record(repo_id: str):
     return dataset.root
 
 
+@pytest.mark.parametrize(
+    ("source_id", "hub_id", "private"),
+    [
+        ("local/sushi2", "alice/sushi2", False),
+        ("local/sushi2", "alice/sushi2", True),
+        ("acme/sushi2", "acme/sushi2", True),
+    ],
+)
+def test_upload_dataset_keeps_local_files_and_uses_hub_destination(
+    client, tmp_lerobot_home, monkeypatch: pytest.MonkeyPatch, source_id: str, hub_id: str, private: bool
+) -> None:
+    from lelab.utils import hf_auth
+    from lerobot.datasets import lerobot_dataset
+
+    source_root = _record(source_id)
+    identity = MagicMock(return_value={"name": "alice"})
+    hub = MagicMock()
+    hub.dataset_info.return_value.private = private
+    card = MagicMock()
+    monkeypatch.setattr(hf_auth, "cached_whoami", identity)
+    monkeypatch.setattr(hf_auth, "shared_hf_api", lambda: hub)
+    monkeypatch.setattr(lerobot_dataset, "HfApi", lambda: hub)
+    monkeypatch.setattr(lerobot_dataset, "create_lerobot_dataset_card", card)
+
+    response = client.post(
+        "/upload-dataset", json={"dataset_repo_id": source_id, "tags": ["sushi"], "private": private}
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["success"] is True
+    hub.create_repo.assert_called_with(repo_id=hub_id, private=private, repo_type="dataset", exist_ok=True)
+    if source_id != hub_id and private:
+        hub.dataset_info.assert_called_once_with(hub_id)
+    else:
+        hub.dataset_info.assert_not_called()
+    hub.upload_folder.assert_called_once()
+    assert hub.upload_folder.call_args.kwargs["folder_path"] == source_root
+    assert hub.upload_folder.call_args.kwargs["repo_id"] == hub_id
+    assert "sushi" in card.call_args.kwargs["tags"]
+    assert result["hub_repo_id"] == hub_id
+    assert result["dataset_url"] == f"https://huggingface.co/datasets/{hub_id}"
+    assert result["num_episodes"] == EPISODES
+    assert source_root.is_dir()
+    if source_id != hub_id:
+        identity.assert_called_once_with()
+        assert not (tmp_lerobot_home / hub_id).exists()
+    else:
+        identity.assert_not_called()
+
+
+@pytest.mark.parametrize("visibility", [False, None])
+def test_private_local_upload_requires_private_hub_destination(
+    client, tmp_lerobot_home, monkeypatch: pytest.MonkeyPatch, visibility: bool | None
+) -> None:
+    from lelab.utils import hf_auth
+    from lerobot.datasets import lerobot_dataset
+
+    _record("local/sushi2")
+    hub = MagicMock()
+    hub.dataset_info.return_value.private = visibility
+    monkeypatch.setattr(hf_auth, "cached_whoami", lambda: {"name": "alice"})
+    monkeypatch.setattr(hf_auth, "shared_hf_api", lambda: hub)
+    monkeypatch.setattr(lerobot_dataset, "HfApi", lambda: hub)
+    monkeypatch.setattr(lerobot_dataset, "create_lerobot_dataset_card", MagicMock())
+
+    result = client.post("/upload-dataset", json={"dataset_repo_id": "local/sushi2", "private": True}).json()
+
+    assert result["success"] is False
+    assert "Cannot upload privately to alice/sushi2" in result["message"]
+    hub.dataset_info.assert_called_once_with("alice/sushi2")
+    hub.upload_folder.assert_not_called()
+
+
+def test_upload_local_dataset_requires_hub_identity(
+    client, tmp_lerobot_home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lelab.utils import hf_auth
+    from lerobot.datasets import lerobot_dataset
+
+    _record("local/sushi2")
+    api = MagicMock()
+    monkeypatch.setattr(hf_auth, "cached_whoami", lambda: None)
+    monkeypatch.setattr(lerobot_dataset, "HfApi", api)
+
+    result = client.post("/upload-dataset", json={"dataset_repo_id": "local/sushi2"}).json()
+
+    assert result["success"] is False
+    assert "not logged into the Hugging Face Hub" in result["message"]
+    api.assert_not_called()
+
+
+def test_upload_missing_local_dataset_does_not_load_from_the_hub(
+    client, tmp_lerobot_home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lelab.utils import hf_auth
+    from lerobot.datasets import LeRobotDataset
+
+    load_dataset = MagicMock(side_effect=AssertionError("missing local dataset must not be loaded"))
+    monkeypatch.setattr(hf_auth, "cached_whoami", lambda: {"name": "alice"})
+    monkeypatch.setattr(LeRobotDataset, "__init__", load_dataset)
+
+    result = client.post("/upload-dataset", json={"dataset_repo_id": "local/missing"}).json()
+
+    assert result["success"] is False
+    assert "Dataset not found locally" in result["message"]
+    load_dataset.assert_not_called()
+
+
+def test_upload_rejects_a_dataset_loaded_outside_its_local_directory(
+    client, tmp_lerobot_home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lelab.utils import hf_auth
+    from lerobot import datasets
+
+    source_id = "local/sushi2"
+    _record(source_id)
+    hub_copy = MagicMock(root=tmp_lerobot_home / "other-cache" / "sushi2", num_episodes=EPISODES)
+    load_dataset = MagicMock(return_value=hub_copy)
+    monkeypatch.setattr(hf_auth, "cached_whoami", lambda: {"name": "alice"})
+    monkeypatch.setattr(datasets, "LeRobotDataset", load_dataset)
+
+    result = client.post("/upload-dataset", json={"dataset_repo_id": source_id}).json()
+
+    assert result["success"] is False
+    assert "could not be loaded from its local directory" in result["message"]
+    load_dataset.assert_called_once_with(source_id)
+    hub_copy.push_to_hub.assert_not_called()
+
+
 def _resume_request(repo_id: str):
     from lelab.record import RecordingRequest
 

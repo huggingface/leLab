@@ -60,8 +60,9 @@ const Upload = () => {
 
   const [tagsInput, setTagsInput] = useState(uploadConfig.tags.join(", "));
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadSuccess, setUploadSuccess] = useState(false);
+  const [uploadedDataset, setUploadedDataset] = useState<{ repoId: string; private: boolean } | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const uploadSuccess = uploadedDataset !== null;
 
   // Load actual dataset information from backend
   React.useEffect(() => {
@@ -122,12 +123,12 @@ const Upload = () => {
     loadDatasetInfo();
   }, [initialDatasetInfo, navigate, toast]);
 
-  const openInHubViewer = (repoId: string) => {
+  const openInHubViewer = (repoId: string, requiresLogin = true) => {
     const spacePath = `/spaces/lerobot/visualize_dataset?path=${encodeURIComponent(`/${repoId}`)}`;
-    // The user owns/manages the dataset (it appears under their hub
-    // listing), so login-redirect always works whether public or
-    // private. Avoids passing `private` through navigation state.
-    const target = `https://huggingface.co/login?next=${encodeURIComponent(spacePath)}`;
+    // Use the login redirect when the dataset is private or its visibility is unknown.
+    const target = requiresLogin
+      ? `https://huggingface.co/login?next=${encodeURIComponent(spacePath)}`
+      : `https://huggingface.co${spacePath}`;
     window.open(target, "_blank", "noopener,noreferrer");
   };
 
@@ -148,6 +149,7 @@ const Upload = () => {
   const handleUploadToHub = async () => {
     if (!datasetInfo) return;
 
+    const isPrivate = uploadConfig.private;
     setIsUploading(true);
     try {
       // Parse tags from input
@@ -161,17 +163,18 @@ const Upload = () => {
         body: JSON.stringify({
           dataset_repo_id: datasetInfo.dataset_repo_id,
           tags,
-          private: uploadConfig.private,
+          private: isPrivate,
         }),
       });
 
       const data = await response.json();
 
       if (response.ok && data.success) {
-        setUploadSuccess(true);
+        const hubRepoId = data.hub_repo_id ?? datasetInfo.dataset_repo_id;
+        setUploadedDataset({ repoId: hubRepoId, private: isPrivate });
         toast({
           title: "Upload Successful!",
-          description: `Dataset ${datasetInfo.dataset_repo_id} has been uploaded to HuggingFace Hub.`,
+          description: `Dataset ${hubRepoId} has been uploaded to HuggingFace Hub.`,
         });
       } else {
         const fallback = "Failed to upload dataset to HuggingFace Hub.";
@@ -267,7 +270,7 @@ const Upload = () => {
         </div>
 
         {/* Success State */}
-        {uploadSuccess && (
+        {uploadedDataset !== null && (
           <div className="bg-green-900/20 border border-green-600 rounded-lg p-6 mb-8">
             <div className="flex items-center gap-3 mb-4">
               <CheckCircle className="w-6 h-6 text-green-500" />
@@ -281,15 +284,7 @@ const Upload = () => {
             </p>
             <div className="flex flex-col sm:flex-row gap-4">
               <Button
-                onClick={() => {
-                  const spacePath = `/spaces/lerobot/visualize_dataset?path=${encodeURIComponent(
-                    `/${datasetInfo.dataset_repo_id}`
-                  )}`;
-                  const target = uploadConfig.private
-                    ? `https://huggingface.co/login?next=${encodeURIComponent(spacePath)}`
-                    : `https://huggingface.co${spacePath}`;
-                  window.open(target, "_blank", "noopener,noreferrer");
-                }}
+                onClick={() => openInHubViewer(uploadedDataset.repoId, uploadedDataset.private)}
                 className="bg-blue-500 hover:bg-blue-600 text-white"
               >
                 <ExternalLink className="w-4 h-4 mr-2" />

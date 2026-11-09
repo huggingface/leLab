@@ -20,6 +20,7 @@ import time
 from datetime import datetime
 from typing import Any
 
+from huggingface_hub.utils import validate_repo_id
 from pydantic import BaseModel, field_validator
 
 from lerobot.configs.dataset import DatasetRecordConfig
@@ -31,7 +32,8 @@ from lerobot.scripts.lerobot_record import RecordConfig
 from lerobot.teleoperators.so_leader import SO101LeaderConfig
 
 from .camera_config import lerobot_camera_settings, validate_camera_rotations
-from .episode_media import UnreadableDatasetError, ensure_episode_index
+from .episode_media import UnreadableDatasetError, ensure_episode_index, resolve_dataset_dir
+from .utils import hf_auth
 from .utils.config import setup_calibration_files, with_lelab_tag
 from .utils.devices import follower_lock, safe_disconnect_device
 
@@ -722,18 +724,52 @@ def handle_delete_dataset(request: DatasetInfoRequest) -> dict[str, Any]:
     return {"success": True, "message": f"Deleted {repo_id}"}
 
 
+def _upload_login_required() -> dict[str, Any]:
+    return {
+        "success": False,
+        "message": "You're not logged into the Hugging Face Hub. Run `hf auth login` in your terminal, then retry.",
+        "docs_url": "https://huggingface.co/docs/huggingface_hub/en/quick-start#authentication",
+    }
+
+
 def handle_upload_dataset(request: UploadRequest) -> dict[str, Any]:
     """Handle dataset upload to HuggingFace Hub"""
     try:
         # Import LeRobotDataset to load and upload the dataset
         from lerobot.datasets import LeRobotDataset
 
-        ensure_episode_index(request.dataset_repo_id)
+        source_repo_id = request.dataset_repo_id
+        hub_repo_id = source_repo_id
+        source_root = None
+        ensure_episode_index(source_repo_id)
 
-        logger.info(f"Loading dataset {request.dataset_repo_id} for upload")
+        if source_repo_id.startswith(f"{LOCAL_DATASET_NAMESPACE}/"):
+            source_root = resolve_dataset_dir(source_repo_id)
+            account = hf_auth.cached_whoami()
+            if not account or not account.get("name"):
+                return _upload_login_required()
+            hub_repo_id = f"{account['name']}/{source_repo_id.split('/', 1)[1]}"
+            validate_repo_id(hub_repo_id)
 
-        # Load the dataset from local storage
-        dataset = LeRobotDataset(request.dataset_repo_id)
+        logger.info(f"Loading dataset {source_repo_id} for upload")
+        dataset = LeRobotDataset(source_repo_id)
+        if source_root is not None:
+            if dataset.root.resolve() != source_root:
+                raise UnreadableDatasetError(f"{source_repo_id} could not be loaded from its local directory")
+            if request.private:
+                # Hub ignores private=True when the repository already exists.
+                api = hf_auth.shared_hf_api()
+                api.create_repo(repo_id=hub_repo_id, repo_type="dataset", private=True, exist_ok=True)
+                if api.dataset_info(hub_repo_id).private is not True:
+                    return {
+                        "success": False,
+                        "message": (
+                            f"Cannot upload privately to {hub_repo_id}: the destination must be private. "
+                            "Set the repository to private on the Hub or use another dataset name."
+                        ),
+                    }
+            # Keep the source ID while reading. The uploader uses repo_id for the destination.
+            dataset.repo_id = hub_repo_id
 
         logger.info(f"Dataset loaded with {dataset.num_episodes} episodes")
         tags = with_lelab_tag(request.tags)
@@ -742,12 +778,13 @@ def handle_upload_dataset(request: UploadRequest) -> dict[str, Any]:
         # Upload dataset to HuggingFace Hub
         dataset.push_to_hub(tags=tags, private=request.private)
 
-        logger.info(f"Dataset {request.dataset_repo_id} uploaded successfully to HuggingFace Hub")
+        logger.info(f"Dataset {hub_repo_id} uploaded successfully to HuggingFace Hub")
 
         return {
             "success": True,
-            "message": f"Dataset {request.dataset_repo_id} uploaded successfully to HuggingFace Hub",
-            "dataset_url": f"https://huggingface.co/datasets/{request.dataset_repo_id}",
+            "message": f"Dataset {hub_repo_id} uploaded successfully to HuggingFace Hub",
+            "hub_repo_id": hub_repo_id,
+            "dataset_url": f"https://huggingface.co/datasets/{hub_repo_id}",
             "num_episodes": dataset.num_episodes,
         }
 
@@ -764,11 +801,7 @@ def handle_upload_dataset(request: UploadRequest) -> dict[str, Any]:
             for m in ("401", "you must be authenticated", "authentication required", "huggingfacehub_token")
         )
         if looks_like_auth:
-            return {
-                "success": False,
-                "message": "You're not logged into the Hugging Face Hub. Run `hf auth login` in your terminal, then retry.",
-                "docs_url": "https://huggingface.co/docs/huggingface_hub/en/quick-start#authentication",
-            }
+            return _upload_login_required()
         return {"success": False, "message": f"Failed to upload dataset: {str(e)}"}
 
 
