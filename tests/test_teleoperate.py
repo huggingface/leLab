@@ -81,12 +81,12 @@ def test_get_joint_positions_maps_degrees_to_radians_without_correction() -> Non
 
     positions = get_joint_positions_from_robot(_Robot())
 
-    assert positions["Rotation"] == pytest.approx(0.0)
-    assert positions["Pitch"] == pytest.approx(math.radians(90.0))
-    assert positions["Elbow"] == pytest.approx(math.radians(-45.0))
-    assert positions["Wrist_Pitch"] == pytest.approx(math.radians(30.0))
-    assert positions["Wrist_Roll"] == pytest.approx(math.radians(12.0))
-    assert positions["Jaw"] == pytest.approx(math.radians(50.0))
+    assert positions["shoulder_pan"] == pytest.approx(0.0)
+    assert positions["shoulder_lift"] == pytest.approx(math.radians(90.0))
+    assert positions["elbow_flex"] == pytest.approx(math.radians(-45.0))
+    assert positions["wrist_flex"] == pytest.approx(math.radians(30.0))
+    assert positions["wrist_roll"] == pytest.approx(math.radians(12.0))
+    assert positions["gripper"] == pytest.approx(math.radians(50.0))
 
 
 def test_start_teleoperation_reports_connection_failure(
