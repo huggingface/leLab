@@ -51,7 +51,9 @@ def get_joint_positions_from_robot(robot) -> dict[str, float]:
     to the calibration center — which is also the URDF's zero pose. The URDF
     joint value is therefore just that angle converted to radians, for every
     joint. (The gripper reports 0–100 rather than degrees, but that range lands
-    inside the Jaw limit, matching the open/closed sweep.)
+    inside the gripper limit, matching the open/closed sweep.)
+
+    The URDF names its joints after the motors, so no renaming is needed.
 
     Args:
         robot: The robot instance (SO101Follower)
@@ -59,30 +61,30 @@ def get_joint_positions_from_robot(robot) -> dict[str, float]:
     Returns:
         Dictionary mapping URDF joint names to radian values
     """
-    motor_to_urdf_mapping = {
-        "shoulder_pan": "Rotation",
-        "shoulder_lift": "Pitch",
-        "elbow_flex": "Elbow",
-        "wrist_flex": "Wrist_Pitch",
-        "wrist_roll": "Wrist_Roll",
-        "gripper": "Jaw",
-    }
+    motor_names = (
+        "shoulder_pan",
+        "shoulder_lift",
+        "elbow_flex",
+        "wrist_flex",
+        "wrist_roll",
+        "gripper",
+    )
 
     try:
         observation = robot.get_observation()
 
         joint_positions: dict[str, float] = {}
         debug_rows = []
-        for motor_name, urdf_joint_name in motor_to_urdf_mapping.items():
+        for motor_name in motor_names:
             motor_key = f"{motor_name}.pos"
             if motor_key not in observation:
                 logger.warning(f"Motor {motor_key} not found in observation")
-                joint_positions[urdf_joint_name] = 0.0
+                joint_positions[motor_name] = 0.0
                 continue
 
             angle_degrees = observation[motor_key]
-            joint_positions[urdf_joint_name] = angle_degrees * math.pi / 180.0
-            debug_rows.append(f"{motor_name:14s} {angle_degrees:+8.2f}° → {urdf_joint_name:11s}")
+            joint_positions[motor_name] = angle_degrees * math.pi / 180.0
+            debug_rows.append(f"{motor_name:14s} {angle_degrees:+8.2f}°")
 
         # Throttled debug print (~once per second at 20 Hz broadcast).
         now = time.time()
@@ -94,7 +96,7 @@ def get_joint_positions_from_robot(robot) -> dict[str, float]:
 
     except Exception as e:
         logger.error(f"Error getting joint positions: {e}")
-        return dict.fromkeys(motor_to_urdf_mapping.values(), 0.0)
+        return dict.fromkeys(motor_names, 0.0)
 
 
 def _safe_disconnect(device) -> None:
