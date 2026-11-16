@@ -271,6 +271,11 @@ const Home = () => {
     </div>
     </FadeIn>
 
+    <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border p-4">
+      <div><h2 className="text-sm font-semibold">Camera checkerboard</h2><p className="mt-1 text-sm text-muted-foreground">Open the measured screen target on a phone to prepare front or overhead camera calibration.</p></div>
+      <a href="/nori/calibration-target" className="inline-flex min-h-11 items-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground">Open target →</a>
+    </div>
+
     {/* FEATURES — the website's three-step tinted card rhythm, linking into the app. */}
     <div className="mt-6 grid gap-4 md:grid-cols-3">
       {FEATURES.map((f, i) => (

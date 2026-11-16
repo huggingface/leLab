@@ -187,6 +187,7 @@ const NoriLayout = () => {
                 {item.label}
               </Link>
             ))}
+            <a href="/nori/calibration-target" className="rounded-md px-3 py-2.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">Calibration Tools</a>
             <button
               type="button"
               onClick={() => { setMenuOpen(false); void openDocs(); }}
