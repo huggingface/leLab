@@ -366,18 +366,53 @@ export class MockDaemonSim {
   // record_status while the session is open, cleared when it closes. A real
   // robot enforces one matched frame rate on the front + overhead cameras.
   private recStereo = false;
+  private recReviewRequired = false;
+  private recPending = new Map<string, { task: string }>();
+  private recDecisions = new Map<string, string>();
+  private recReplies = new Map<string, Frame[]>();
+  private recTask = "";
+
   private handleRecord(frame: Frame): Frame[] {
+    const id = typeof frame.request_id === "string" ? frame.request_id : "";
+    if (id && this.recReplies.has(id)) return this.recReplies.get(id)!;
+    const replies = this.handleRecordInner(frame).map((reply) => id ? { ...reply, request_id: id } : reply);
+    if (id) {
+      this.recReplies.set(id, replies);
+      if (this.recReplies.size > 128) this.recReplies.delete(this.recReplies.keys().next().value!);
+    }
+    return replies;
+  }
+
+  private handleRecordInner(frame: Frame): Frame[] {
     const status = (ok: boolean, error?: string): Frame => {
       const s: Frame = {
         type: "record_status", ok, recording: this.recEpisode !== null,
         session_open: this.recSessionOpen, episode: this.recEpisode ?? undefined,
-        episodes_kept: this.recKept, free_gb: 42.0,
+        episodes_kept: this.recKept, free_gb: 42.0, review_supported: true,
+        episode_id: this.recEpisode ?? undefined,
+        active_review_episode_id: this.recReviewRequired ? this.recEpisode ?? "" : "",
+        pending_reviews: [...this.recPending].map(([episode_id, item]) => ({ episode_id, task: item.task })),
       };
       if (this.recStereo) s.stereo = true;
       if (error) s.error = error;
       return s;
     };
     const a = frame.action;
+    if (a === "review_status") {
+      if (this.recPending.size || this.recEpisode) this.recSessionOpen = true;
+      return [status(true)];
+    }
+    if (a === "episode_keep" || a === "episode_reject") {
+      const id = String(frame.episode_id ?? "");
+      const decision = a === "episode_keep" ? "keep" : "reject";
+      const prior = this.recDecisions.get(id);
+      if (prior) return [status(prior === decision, prior === decision ? undefined : "episode already has a different review decision")];
+      if (!this.recPending.has(id)) return [status(false, "episode is not awaiting review")];
+      this.recPending.delete(id);
+      this.recDecisions.set(id, decision);
+      if (decision === "keep") this.recKept += 1;
+      return [{ ...status(true), episode_id: id }];
+    }
     // --- session/episode protocol ---
     if (a === "session_start" || a === "start") {
       if (this.recSessionOpen) return [status(false, "session already open")];
@@ -398,13 +433,19 @@ export class MockDaemonSim {
       if (this.recEpisode !== null) return [status(false, "already recording an episode")];
       this.recSeq += 1;
       this.recEpisode = this.epId();
+      this.recReviewRequired = frame.review_required === true;
+      this.recTask = String(frame.task ?? "");
       return [status(true)];
     }
     if (a === "episode_stop") {
       if (this.recEpisode === null) return [status(false, "not recording an episode")];
+      const id = this.recEpisode;
+      if (frame.episode_id && frame.episode_id !== id) return [status(false, "episode does not match active recording")];
+      if (this.recReviewRequired) this.recPending.set(id, { task: this.recTask });
+      else this.recKept += 1;
       this.recEpisode = null;
-      this.recKept += 1;
-      return [status(true)];
+      this.recReviewRequired = false;
+      return [{ ...status(true), episode_id: id }];
     }
     if (a === "episode_discard") {
       if (!this.recSessionOpen) return [status(false, "no session open")];

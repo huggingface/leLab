@@ -1,22 +1,11 @@
 // "Record training dataset" card on the Remote page (W2.11).
 //
-// Records to the ROBOT, not the laptop. The full-quality training copy is made
-// on the robot (rpi5/media/recorder.py: full-res frames + 50 Hz state + actions)
-// and ships itself to the cloud once the robot idles (docs/offline_recorder_
-// design.md). Recorded episodes appear on My Stuff ("Robot recordings").
-//
-// UX — a two-tier SESSION → EPISODES flow, matching how you collect data:
-//   1. Start a session with a task label (the grouping key; all its episodes
-//      share it, and assembly groups by it into one LeRobot dataset).
-//   2. Within the session, record episodes one at a time: Start episode → drive
-//      → Stop episode → EPHEMERAL in-browser preview (the degraded live view —
-//      all the laptop has) → Keep or Reject. Reject deletes the robot's copy too
-//      (record("discard_last")) before it can upload.
-//   3. Finish the session when done.
-// Each episode is one robot start/stop; Keep leaves it to ship, Reject discards
-// it on the robot. The card never spools to the laptop (contrast datasetCapture.ts).
+// Supporting robots hold app takes for acknowledged review. Older robots keep
+// the legacy recording flow; review there cannot guarantee robot-side deletion.
+// The browser preview is ephemeral and is never the dataset.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { RecordState, PendingEpisodeReview } from "@nori/sdk";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useApi } from "@/contexts/ApiContext";
@@ -30,18 +19,20 @@ import {
 
 const STEREO_PREF_KEY = "nori.datasetCapture.stereo";
 
+type RecordingMode = "legacy" | "review";
+type Capture = { mode: "legacy"; episodeId?: never } | { mode: "review"; episodeId: string };
 type Phase =
   | { kind: "idle" }                              // no session
   | { kind: "session" }                           // session open, between episodes
-  | { kind: "recording" }                         // an episode is recording
-  | { kind: "review"; url: string | null };       // just-stopped episode awaiting Keep/Reject
+  | ({ kind: "recording" } & Capture)
+  | ({ kind: "review"; url: string | null; decision?: "keep" | "reject" } & Capture);
 
 // defaultOpen: start expanded — for layouts that already put the card behind
 // their own drawer/tab, where a second collapsed header inside reads as broken.
 export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: boolean } = {}) {
-  const { teleop, running, connState, recordState } = useTeleopSession();
+  const { teleop, running, connState, controlActive, recordState } = useTeleopSession();
   const { baseUrl, fetchWithHeaders } = useApi();
-  const connected = running && connState === "connected";
+  const connected = running && connState === "connected" && controlActive;
 
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [task, setTask] = useState("");
@@ -65,6 +56,8 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
   }, []);
   const [busy, setBusy] = useState(false);        // start/stop round-trip in flight
   const [reviewBusy, setReviewBusy] = useState(false);
+  const [recordingMode, setRecordingMode] = useState<RecordingMode | null>(null);
+  const [pendingReviews, setPendingReviews] = useState<PendingEpisodeReview[]>([]);
   const [previewNote, setPreviewNote] = useState<string>("");   // why a preview was empty
   const [episodeCount, setEpisodeCount] = useState(0);   // kept episodes this session
   const [error, setError] = useState<string | null>(null);
@@ -78,10 +71,16 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
   const [pendingSessions, setPendingSessions] = useState(() => pendingNameCount());
   const [namesApplied, setNamesApplied] = useState(false);
 
+  const recoveryRequestRef = useRef<Promise<RecordState> | null>(null);
   const previewRef = useRef<EphemeralEpisodeRecorder>(new EphemeralEpisodeRecorder());
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
 
   const recording = phase.kind === "recording";
   const inSession = phase.kind !== "idle";
+  const legacyRecording = phase.kind === "recording" || phase.kind === "review"
+    ? phase.mode === "legacy" : recordingMode === "legacy";
+  const reviewUnavailable = phase.kind === "review" && phase.mode === "review" && recordingMode !== "review";
 
   // Keep the controls visible whenever a session is open.
   useEffect(() => {
@@ -104,34 +103,97 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
     return () => preview.cancel();
   }, []);
 
-  const startSession = useCallback(() => {
-    if (!teleop) return;
-    setEpisodeCount(0);
-    setError(null);
-    namesRef.current = [];
-    setNameDraft("");
-    setNamesApplied(false);
-    sessionStartRef.current = new Date().toISOString();
-    // Opens ONE robot session dir; every episode below goes into it and the whole
-    // session ships as one bundle (W2.11 one-bundle-per-session).
-    teleop.record("session_start", task.trim() || "teleop session", { stereo });
-    setPhase({ kind: "session" });
-  }, [teleop, task, stereo]);
+  const recoverReview = useCallback((status: RecordState) => {
+    setRecordingMode(status.reviewSupported ? "review" : "legacy");
+    // Never reinterpret an existing take on reconnect. A held modern take must
+    // wait for review support; a legacy take cannot gain a review hold later.
+    if (!status.reviewSupported) return;
+    setPendingReviews(status.pendingReviews ?? []);
+    const previous = phaseRef.current;
+    if ((previous.kind === "recording" || previous.kind === "review") && previous.mode === "legacy") return;
+    if (status.activeReviewEpisodeId) {
+      const episodeId = status.activeReviewEpisodeId;
+      setPhase({ kind: "recording", mode: "review", episodeId });
+    } else if (status.pendingReviews?.length) {
+      const pending = status.pendingReviews[0];
+      setTask(pending.task);
+      setPhase((previous) => previous.kind === "review" && previous.episodeId === pending.episodeId
+        ? { ...previous, decision: pending.decision } : { kind: "review", mode: "review", episodeId: pending.episodeId, url: null, decision: pending.decision });
+    }
+  }, []);
 
-  const finishSession = useCallback(() => {
-    // Close the robot session — it uploads (as one bundle) when the robot idles.
-    teleop?.record("session_end");
-    // Queue any typed episode names; the poll below applies them once the
-    // bundle lands in My Stuff. The task stored MUST be the effective string
-    // sent to the robot (it's the match verifier).
-    addPendingNames({
-      startedAt: sessionStartRef.current,
-      task: task.trim() || "teleop session",
-      names: namesRef.current,
+  const discoverRecording = useCallback(async () => {
+    if (!teleop) throw new Error("Recording connection unavailable");
+    const status = await teleop.recordStatus();
+    return status.reviewSupported ? teleop.recordConfirmed("review_status") : status;
+  }, [teleop]);
+
+  const refreshReview = useCallback(async () => {
+    if (!teleop) return;
+    setBusy(true);
+    try {
+      recoverReview(await discoverRecording());
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [teleop, recoverReview, discoverRecording]);
+
+  useEffect(() => {
+    setRecordingMode(null);
+    if (!connected || !teleop) { recoveryRequestRef.current = null; return; }
+    let cancelled = false;
+    // React StrictMode may replay this effect; share its in-flight probe.
+    const request = recoveryRequestRef.current ?? discoverRecording();
+    recoveryRequestRef.current = request;
+    void request.then((status) => {
+      if (!cancelled) { recoverReview(status); setError(null); }
+    }).catch((e) => {
+      if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+    }).finally(() => {
+      if (recoveryRequestRef.current === request) recoveryRequestRef.current = null;
     });
-    setPendingSessions(pendingNameCount());
-    setPhase({ kind: "idle" });
-  }, [teleop, task]);
+    return () => { cancelled = true; };
+  }, [connected, teleop, recoverReview, discoverRecording]);
+
+  const startSession = useCallback(async () => {
+    if (!teleop || busy || !recordingMode) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (recordingMode === "legacy") teleop.record("session_start", task.trim() || "teleop session", { stereo });
+      else await teleop.recordConfirmed("session_start", { task: task.trim() || "teleop session", stereo });
+      setEpisodeCount(0);
+      namesRef.current = [];
+      setNameDraft("");
+      setNamesApplied(false);
+      sessionStartRef.current = new Date().toISOString();
+      setPhase({ kind: "session" });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [teleop, busy, recordingMode, task, stereo]);
+
+  const finishSession = useCallback(async () => {
+    if (!teleop || busy || !recordingMode) return;
+    setBusy(true);
+    try {
+      if (recordingMode === "legacy") teleop.record("session_end");
+      else await teleop.recordConfirmed("session_end");
+      addPendingNames({ startedAt: sessionStartRef.current,
+        task: task.trim() || "teleop session", names: namesRef.current });
+      setPendingSessions(pendingNameCount());
+      setPhase({ kind: "idle" });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [teleop, busy, recordingMode, task]);
 
   // Apply pending record-time names whenever some exist: once now, then every
   // 30 s while this page is open (the bundle uploads only after the robot goes
@@ -157,72 +219,98 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
     };
   }, [pendingSessions, baseUrl, fetchWithHeaders]);
 
-  const startEpisode = useCallback(() => {
-    if (!teleop || busy) return;
+  const startEpisode = useCallback(async () => {
+    if (!teleop || busy || !recordingMode) return;
     setBusy(true);
     setError(null);
     try {
       const stream = teleop.videoStream();
       if (!stream) throw new Error("no video stream — is video enabled?");
-      // Browser preview FIRST: if the stream is stale/missing it throws here and
-      // the robot never starts, so the two can't diverge.
       previewRef.current.start(stream);
-      // Task on episode_start too — recovers a dropped session_start (the robot
-      // auto-opens a session and keeps the task).
-      teleop.record("episode_start", task.trim() || "teleop session", { stereo });
-      setPhase({ kind: "recording" });
+      if (recordingMode === "legacy") {
+        teleop.record("episode_start", task.trim() || "teleop session", { stereo });
+        setPhase({ kind: "recording", mode: "legacy" });
+      } else {
+        const status = await teleop.recordConfirmed("episode_start", {
+          task: task.trim() || "teleop session", stereo, reviewRequired: true,
+        });
+        if (!status.episodeId) throw new Error("Robot did not return an episode ID; refresh recording state");
+        setPhase({ kind: "recording", mode: "review", episodeId: status.episodeId });
+      }
     } catch (e) {
       previewRef.current.cancel();
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
-  }, [teleop, busy, task, stereo]);
+  }, [teleop, busy, recordingMode, task, stereo]);
 
   const stopEpisode = useCallback(async () => {
-    if (!teleop || busy) return;
+    if (!teleop || busy || phase.kind !== "recording") return;
     setBusy(true);
+    setError(null);
     try {
-      teleop.record("episode_stop");
-      const blob = await previewRef.current.stop();
-      // ALWAYS surface the Keep/Reject decision, even if the preview came back
-      // empty (a null url just renders a "no preview" note) — the operator must
-      // always get to reject a bad take, never have it silently kept.
+      const status = phase.mode === "legacy" ? (teleop.record("episode_stop"), null)
+        : await teleop.recordConfirmed("episode_stop", { episodeId: phase.episodeId });
+      if (status?.episodeRemoved) {
+        previewRef.current.cancel();
+        setPhase({ kind: "session" });
+        setError("The episode contained no recorded data and was removed");
+        return;
+      }
+      // A failed browser preview must never hide the review decision after a
+      // successful robot stop. Recovered episodes have no browser preview.
+      let blob: Blob | null = null;
+      try { blob = await previewRef.current.stop(); }
+      catch { previewRef.current.cancel(); }
       setPreviewNote(blob ? "" : previewRef.current.diagnostic);
-      setPhase({ kind: "review", url: blob ? URL.createObjectURL(blob) : null });
+      setPhase({ ...phase, kind: "review",
+        url: blob ? URL.createObjectURL(blob) : null });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-      setPhase({ kind: "session" });
     } finally {
       setBusy(false);
     }
-  }, [teleop, busy]);
+  }, [teleop, busy, phase]);
 
-  const keepEpisode = useCallback(() => {
-    if (phase.kind === "review" && phase.url) URL.revokeObjectURL(phase.url);
-    // Names array stays parallel to KEPT episodes in order — push even when
-    // empty so later names land on the right episode index.
-    namesRef.current.push(nameDraft.trim());
-    setNameDraft("");
-    setEpisodeCount((n) => n + 1);
-    setPhase({ kind: "session" });
-  }, [phase, nameDraft]);
-
-  const rejectEpisode = useCallback(() => {
-    if (phase.kind !== "review") return;
+  const resolveReview = useCallback(async (decision: "keep" | "reject") => {
+    if (!teleop || phase.kind !== "review" || reviewBusy || !recordingMode) return;
+    if (phase.mode === "review" && recordingMode !== "review") return;
     setReviewBusy(true);
+    setError(null);
     try {
-      // Delete just this episode's robot copy; other kept episodes in the session
-      // stay. Safe: still connected, so the idle-gated shipper hasn't shipped the
-      // session yet (recorder.py _episode_discard).
-      teleop?.record("episode_discard");
-      if (phase.url) URL.revokeObjectURL(phase.url);
+      const status = phase.mode === "legacy" ? null : await teleop.recordConfirmed(
+        decision === "keep" ? "episode_keep" : "episode_reject", { episodeId: phase.episodeId });
+      if (phase.mode === "legacy" && decision === "reject") teleop.record("episode_discard");
+      if (decision === "keep") {
+        namesRef.current.push(nameDraft.trim());
+        setEpisodeCount((n) => n + 1);
+      }
       setNameDraft("");
-      setPhase({ kind: "session" });
+      const remaining = phase.mode === "legacy" ? pendingReviews
+        : status?.pendingReviews ?? pendingReviews.filter((p) => p.episodeId !== phase.episodeId);
+      setPendingReviews(remaining);
+      if (remaining.length) {
+        const next = remaining[0];
+        setTask(next.task);
+        setPhase({ kind: "review", mode: "review", episodeId: next.episodeId, url: null, decision: next.decision });
+      } else {
+        setPhase({ kind: "session" });
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      // If an operation reached disk but cleanup failed, only that same
+      // decision can be retried; refresh also restores this after reconnect.
+      const pending = teleop.recordState()?.pendingReviews?.find((p) => p.episodeId === phase.episodeId);
+      if (pending?.decision) setPhase({ ...phase, decision: pending.decision });
+      // Preserve the preview and ID until acknowledged.
     } finally {
       setReviewBusy(false);
     }
-  }, [phase, teleop]);
+  }, [teleop, phase, reviewBusy, recordingMode, nameDraft, pendingReviews]);
+
+  const keepEpisode = useCallback(() => resolveReview("keep"), [resolveReview]);
+  const rejectEpisode = useCallback(() => resolveReview("reject"), [resolveReview]);
 
   // Robot recorder status line (record_status replies via onRecord).
   const robotLine = (() => {
@@ -271,12 +359,29 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
 
       {open && (
         <div className="mt-3 space-y-3">
+          {legacyRecording && (
+            <p className="text-sm text-amber-900 dark:text-amber-300">
+              Review unavailable on this robot. Stopped recordings may upload before you
+              choose Keep or Reject. Reject may not delete the robot's copy.
+            </p>
+          )}
+          {reviewUnavailable && connected && recordingMode === "legacy" && (
+            <p className="text-sm text-amber-900 dark:text-amber-300">
+              Review unavailable on this robot. This take is still held for review.
+              Refresh when review is available again to Keep or Reject it.
+            </p>
+          )}
+          {error && connected && (
+            <Button variant="outline" size="sm" onClick={refreshReview} disabled={busy || reviewBusy}>
+              Refresh recording state
+            </Button>
+          )}
           {/* ---- no session: choose a task and start ---- */}
           {phase.kind === "idle" && (
             <>
               <p className="text-sm leading-relaxed text-nori-h6f6858">
                 Record demonstrations of a task: each episode is saved on Nori at full
-                quality and will upload to My Stuff when powered on and idle (disconnected).
+                quality. Upload and discard behavior depends on the robot's recording support.
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 <input
@@ -286,7 +391,7 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
                   value={task}
                   onChange={(e) => setTask(e.target.value)}
                 />
-                <Button onClick={startSession} disabled={!connected || !task.trim()}>
+                <Button onClick={startSession} disabled={busy || !connected || !recordingMode || !task.trim()}>
                   Start session
                 </Button>
               </div>
@@ -324,7 +429,7 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
                     </span>
                   )}
                 </p>
-                <Button size="sm" variant="ghost" onClick={finishSession}>
+                <Button size="sm" variant="ghost" onClick={finishSession} disabled={busy || !connected || !recordingMode}>
                   Finish session
                 </Button>
               </div>
@@ -339,7 +444,7 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
                 className="w-full max-w-md rounded-md border border-nori-h14131a/15 bg-white/70 dark:bg-white/10 px-3 py-1.5 text-sm text-nori-h14131a placeholder:text-nori-h857b6b focus:outline-none focus:ring-1 focus:ring-nori-hb06a1c"
               />
               <div className="flex flex-wrap items-center gap-2">
-                <Button onClick={startEpisode} disabled={busy || !connected}>
+                <Button onClick={startEpisode} disabled={busy || !connected || !recordingMode}>
                   {busy ? "Starting…" : "Start episode"}
                 </Button>
                 <span className="text-sm text-nori-h6f6858">
@@ -348,14 +453,15 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
               </div>
               <div className="rounded-md border border-amber-400/50 bg-amber-50/70 px-3 py-2 text-xs text-nori-h6f6858 dark:border-amber-500/30 dark:bg-amber-500/10">
                 <p className="font-semibold text-amber-900 dark:text-amber-300">
-                  {episodeCount > 0
-                    ? `${episodeCount} episode${episodeCount === 1 ? "" : "s"} saved on Nori — not uploaded yet.`
-                    : "Episodes save on Nori as you record — nothing uploads yet."}
+                  {legacyRecording ? "Legacy recording: stopped takes follow this robot's existing upload behavior."
+                    : episodeCount > 0
+                    ? `${episodeCount} episode${episodeCount === 1 ? "" : "s"} kept and eligible for upload.`
+                    : "New episodes stay on Nori until you Keep or Reject them."}
                 </p>
                 <p className="mt-1">
-                  To upload to My Stuff, <b>Finish session</b> (or just <b>disconnect</b>), then leave
-                  Nori <b>powered on and idle</b>. <b>Don’t turn Nori off</b> until your data lands in
-                  My Stuff.
+                  {legacyRecording ? "Robot-side review and pending-review recovery are unavailable. "
+                    : "Kept episodes upload when Nori is idle, including between takes. Pending reviews stay on Nori across disconnects. "}
+                  Leave Nori powered on until recordings land in My Stuff.
                 </p>
               </div>
             </>
@@ -365,7 +471,7 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
           {phase.kind === "recording" && (
             <div className="space-y-2">
               <div className="flex flex-wrap items-center gap-2">
-                <Button onClick={() => void stopEpisode()} variant="destructive" disabled={busy}>
+                <Button onClick={() => void stopEpisode()} variant="destructive" disabled={busy || !connected}>
                   {busy ? "Stopping…" : "Stop episode"}
                 </Button>
                 <span className="text-sm text-nori-h6f6858">
@@ -407,7 +513,9 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
               ) : (
                 <div className="space-y-1">
                   <p className="text-sm italic text-muted-foreground">
-                    Preview unavailable — the robot still recorded it at full quality.
+                    {phase.mode === "legacy"
+                      ? "Preview unavailable — the robot may already have saved or uploaded this take."
+                      : "Preview unavailable — the robot copy is held until you Keep or Reject it."}
                   </p>
                   {previewNote && (
                     <p className="font-mono text-[11px] text-muted-foreground/80">{previewNote}</p>
@@ -423,14 +531,16 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
                 className="w-full max-w-md rounded-md border border-nori-h14131a/15 bg-white/70 dark:bg-white/10 px-3 py-1.5 text-sm text-nori-h14131a placeholder:text-nori-h857b6b focus:outline-none focus:ring-1 focus:ring-nori-hb06a1c"
               />
               <div className="flex flex-wrap items-center gap-3">
-                <Button onClick={keepEpisode} disabled={reviewBusy}>
+                <Button onClick={keepEpisode} disabled={busy || reviewBusy || !connected || !recordingMode || reviewUnavailable || phase.decision === "reject"}>
                   Keep
                 </Button>
-                <Button onClick={rejectEpisode} variant="destructive" disabled={reviewBusy}>
+                <Button onClick={rejectEpisode} variant="destructive" disabled={busy || reviewBusy || !connected || !recordingMode || reviewUnavailable || phase.decision === "keep"}>
                   Reject
                 </Button>
                 <span className="text-xs text-nori-h6f6858">
-                  Keep adds it to the session, reject deletes it. The name shows up on the
+                  {phase.mode === "legacy"
+                    ? "Keep adds it to the session. Reject may not delete the robot's copy. "
+                    : "Keep adds it to the session, Reject deletes the held take. "}The name shows up on the
                   episode in My Stuff (it never becomes the task).
                 </span>
               </div>

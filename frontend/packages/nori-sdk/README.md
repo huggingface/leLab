@@ -574,75 +574,85 @@ Three contracts worth knowing:
 
 ## Recording training data (on-robot episodes)
 
-`record(...)` drives the robot's **on-robot recorder** — the part of the robot that spools
-**full-quality** frames + full-rate telemetry + your commanded actions for policy training.
+Recording captures the robot's full-quality frames, observations and commanded
+actions. The browser stream is a preview; it is not the training copy.
 
-> **This is not a client-side capture.** What you're watching over WebRTC is a degraded
-> viewfinder (a low-res, network-throttled composite); it is deliberately never training data.
-> `record()` tells the *robot* to capture the good stuff locally. **Where the data goes:** when
-> you close a session and the robot next goes idle, it uploads to **your own private Hugging
-> Face dataset repo** — nothing is downloaded to your machine, and the live stream is never
-> stored. This is on-robot and cloud-bound by design; you drive it, you don't hold it.
-
-Recording is **opt-in per unit** (enabled at provisioning). A unit with recording turned off,
-or whose recorder is down, replies `{ok:false, error:"recorder unreachable"}` within ~1 s — a
-definite "no", never silence — so `record("status")` on connect is the cheap "can this unit
-record?" probe. The reply arrives via the `onRecord` option or `recordState()`.
+Use a fresh, read-only status request to discover review support:
 
 ```ts
-const teleop = new RemoteTeleop({
-  /* ...options as above... */
-  onRecord: (s) => {
-    if (!s.ok) return void console.warn("recorder:", s.error);   // e.g. "recorder unreachable"
-    console.log(s.recording ? `recording ${s.episode}` : "idle", `· ${s.freeGb ?? "?"} GB free`);
-  },
-});
-
-teleop.record("status");            // probe on connect (recordState() is null until the first reply)
-
-// One SESSION = one shippable dataset = N EPISODES (demos). Curate as you go:
-teleop.record("session_start", "fold the towel");  // open the dataset with a task label
-teleop.record("episode_start");     // ...drive a demo...
-teleop.record("episode_stop");      // keep this episode in the session
-// teleop.record("episode_discard");// ...or reject the one you just recorded (others stay)
-teleop.record("episode_start");     // next demo...
-teleop.record("episode_stop");
-teleop.record("session_end");       // close + keep; uploads when the robot next idles
-// teleop.record("session_discard");// or throw the whole session away
+const status = await teleop.recordStatus();
+if (status.reviewSupported) {
+  const recovered = await teleop.recordConfirmed("review_status");
+  // Restore any active/pending owned take before starting another recording.
+} else {
+  // Older L3 and L2 robots retain the legacy command flow below.
+}
 ```
 
-**Actions** (`record(action, task?)` — `task` is read only on `session_start`/`start`):
+`recordStatus()` sends one `status` request without a request ID and accepts a
+legacy status reply. Concurrent probes share one promise. No response within
+1.5 seconds is a connection/status error; it is not evidence that review is
+unsupported. Recorder refusals also remain errors. A successful reply with
+missing/false review support selects legacy recording. Discovery never starts,
+stops, or discards an episode and cannot acknowledge a mutation.
 
-| action | effect |
-|---|---|
-| `session_start` | Open a session (one dataset/bundle) with a `task` label; no episode yet. |
-| `episode_start` | Begin an episode (one demo) in the open session. |
-| `episode_stop` | Finalize the current episode, keeping it in the session. |
-| `episode_discard` | Drop the just-stopped (or in-progress) episode; other kept episodes stay. |
-| `session_end` | Close and keep the session; it uploads when the robot next idles. |
-| `session_discard` | Drop the whole open session. |
-| `status` | Query only, no state change — the "can this unit record?" probe. |
-| `start` / `stop` / `discard` | Legacy one-episode aliases (`start`{task} = `session_start`+`episode_start`; `stop` = `episode_stop`+`session_end`; `discard` = `session_discard`). |
+For a supporting robot, opt into durable review and target the stable ID:
 
-**`RecordState`** (the reply, one per command, via `onRecord` / `recordState()`):
+```ts
+await teleop.recordConfirmed("session_start", { task: "fold the towel" });
+const take = await teleop.recordConfirmed("episode_start", {
+  task: "fold the towel", reviewRequired: true,
+});
+if (!take.episodeId) throw new Error("Robot omitted the review episode ID");
+// ...drive a demonstration...
+await teleop.recordConfirmed("episode_stop", { episodeId: take.episodeId });
+await teleop.recordConfirmed("episode_keep", { episodeId: take.episodeId });
+// Or episode_reject for that same ID; do not send both decisions.
+await teleop.recordConfirmed("session_end");
+```
 
-| Field | Meaning |
-|---|---|
-| `ok` | Command succeeded. `false` (with `error`) on refusal or an unreachable recorder. |
-| `recording` | An episode is currently recording. |
-| `episode` | `"<session>/episode-NNNN"` while recording (absent otherwise). |
-| `freeGb` | Spool disk headroom on the robot. |
-| `error` | Present only when `ok:false` — e.g. `"recorder unreachable"`, `"session already open"`, or a disk-low refusal. |
+Stop holds an opted-in take out of the upload queue. Acknowledged Keep releases
+it; acknowledged Reject removes it from shipping and quarantines it for cleanup.
+`recordConfirmed()` matches request IDs and retries the identical request.
+Never let an unrelated legacy reply acknowledge Keep, Reject, or another
+mutation. A mutation timeout has an uncertain result: recover status before
+issuing another mutation, particularly Start.
 
-Discovery today is by probe (`record("status")` → `ok` vs `recorder unreachable`); a future
-protocol bump advertises `record` as a capability in the handshake descriptor so you can
-show/hide the feature without probing.
+For robots without review support, keep using the one-shot legacy API:
 
-> **Status:** the SDK command surface and its round-trip against the robot recorder are
-> **bench-validated** — `session_start`/`episode_*`/`session_end`/`status` round-trip, and a
-> recording-disabled unit returns `recorder unreachable` within ~1 s. The full path to a
-> *trainable* dataset in your Hugging Face repo (idle-gated upload + off-robot assembly into a
-> LeRobotDataset) is **landing**; until then, recorded sessions accumulate as raw bundles.
+```ts
+teleop.record("session_start", "fold the towel");
+teleop.record("episode_start", "fold the towel");
+// ...drive a demonstration...
+teleop.record("episode_stop");
+// Keep is a local UI choice; Reject sends the legacy command:
+// teleop.record("episode_discard");
+teleop.record("session_end");
+```
+
+Legacy commands do not require review UUIDs or correlated replies and do not
+send `review_required`. Observe replies through `onRecord` / `recordState()`;
+there is no reliable acknowledgement/retry guarantee on those peers. Do not use
+`recordConfirmed()` as a legacy fallback simply by removing `review_required`:
+an old robot may execute Start without ever completing the correlated waiter.
+
+Legacy firmware semantics differ. Old L3 Stop immediately makes a take eligible
+for upload; its `episode_discard` finalizes an active take with a retained
+DISCARDED outcome and cannot delete an already-stopped take. L2 retains its
+existing session/discard behavior. The app labels this mode "Review unavailable
+on this robot" and does not guarantee deletion through legacy Reject. Session
+discard aliases must not substitute for targeted review deletion.
+
+Keep each take's recording mode through reconnects. A held modern take must wait
+for modern review support to return; it must never fall back to legacy discard.
+A legacy take cannot acquire a review hold after it was recorded. The SDK's
+existing `record()` API remains available to other clients such as VR workflows.
+
+`RecordState` includes `ok`, `error`, `recording`, optional `sessionOpen`,
+`episodesKept`, display-only `episode`, `freeGb`, and `stereo`. Review-capable
+replies additionally provide stable `episodeId`, `pendingReviews`,
+`activeReviewEpisodeId`, and `episodeRemoved`. `reviewSupported` is true only
+when explicitly advertised by the robot. A status response is not upload status.
 
 ## Streaming audio to the robot speaker
 

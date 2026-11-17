@@ -13,6 +13,7 @@
 //     sends a room-token HMAC proof — it simply joins and handshakes
 //   * TURN is additive (STUN-direct preferred); forceRelay validates the relay path
 
+import { RecordRequests, RecordStatusProbe } from "./recordRequests";
 import type { SignalingTransport } from "./signaling";
 import { AudioLatencyProbe, audioLatencyEnabled } from "./audioLatency";
 import { VideoQualityLoop, type VideoNetState } from "./videoQuality";
@@ -517,7 +518,21 @@ export interface PolicyStreamStatus {
 // until the first reply — record({action:"status"}) on connect is the cheap probe.
 // `error` covers both refusals (disk low) and "recorder unreachable" (robot has
 // recording disabled or the recorder service is down — a definite no, not silence).
+export type RecordAction = "session_start" | "episode_start" | "episode_stop" | "episode_discard"
+  | "session_end" | "session_discard" | "start" | "stop" | "discard" | "discard_last" | "status"
+  | "review_status" | "episode_keep" | "episode_reject";
+export interface PendingEpisodeReview {
+  episodeId: string;
+  task: string;
+  decision?: "keep" | "reject";
+}
 export interface RecordState {
+  requestId?: string;
+  episodeId?: string;
+  episodeRemoved?: boolean;
+  reviewSupported?: boolean;
+  pendingReviews?: PendingEpisodeReview[];
+  activeReviewEpisodeId?: string;
   ok: boolean;
   recording: boolean;    // an episode is actively capturing right now
   sessionOpen?: boolean; // a session is open (may be between episodes, not capturing)
@@ -1052,6 +1067,9 @@ export class RemoteTeleop {
   // Composite camera layout from the bridge (Phase F vision), null until it arrives / single-cam.
   private cameraLayoutRaw: CameraLayout | null = null;
   private daemonStat: DaemonStatus | null = null;   // latest daemon_status (bridge health frame)
+  private recordRequests = new RecordRequests<RecordState>((frame) => this.dcSend(frame));
+  private recordStatusProbe = new RecordStatusProbe<RecordState>(
+    () => this.dcSend({ type: "record", action: "status" }));
   private recStat: RecordState | null = null;       // latest record_status (W2.11 recorder reply)
   private psStat: PolicyStreamStatus | null = null; // latest policy_stream_status
   private psWaiters: Array<(s: PolicyStreamStatus) => void> = []; // FIFO, one per in-flight policyStream()
@@ -1701,17 +1719,8 @@ export class RemoteTeleop {
   // arrives as onRecord / recordState(); a robot with recording disabled answers
   // {ok:false, error:"recorder unreachable"} within ~1 s rather than staying silent.
   //
-  // Two-tier protocol (W2.11 one-bundle-per-session — a session ships as ONE
-  // raw_bundle holding N episodes):
-  //   session_start {task} -> episode_start -> episode_stop [-> episode_discard]
-  //     (repeat episodes) -> session_end (keep+ship) | session_discard (drop all)
-  //   - episode_discard: Reject the just-recorded episode (deletes its robot copy;
-  //     other kept episodes stay). Safe because Reject is while still connected, so
-  //     the idle-gated shipper hasn't uploaded the session yet.
-  //   - session_end: close the session; it uploads when the robot next idles.
-  // Legacy one-episode aliases (kept for the bench page / auto mode): start {task}
-  // = session_start+episode_start; stop = episode_stop+session_end; discard /
-  // discard_last = session_discard.
+  // Legacy fire-and-forget calls stay available for existing clients. App review
+  // uses recordConfirmed: opt in at start, stop capture, then explicitly Keep/Reject.
   record(
     action:
       | "session_start" | "episode_start" | "episode_stop" | "episode_discard"
@@ -1738,6 +1747,26 @@ export class RemoteTeleop {
     }
     this.dcSend(msg);
   }
+
+  recordConfirmed(action: RecordAction, opts: {
+    task?: string; stereo?: boolean; reviewRequired?: boolean; episodeId?: string;
+  } = {}, timeoutMs = 10000): Promise<RecordState> {
+    const payload: Record<string, unknown> = {};
+    if (opts.task) payload.task = opts.task;
+    if (opts.stereo !== undefined) payload.stereo = opts.stereo;
+    if (opts.reviewRequired !== undefined) payload.review_required = opts.reviewRequired;
+    if (opts.episodeId) payload.episode_id = opts.episodeId;
+    return this.recordRequests.request(action, payload, timeoutMs);
+  }
+
+  /** Fresh read-only capability discovery, including robots without request IDs.
+   * No retry or mutation is sent. Silence is a connection error, not evidence
+   * that review is unsupported. A valid legacy reply may omit reviewSupported.
+   */
+  recordStatus(timeoutMs = 1500): Promise<RecordState> {
+    return this.recordStatusProbe.request(timeoutMs);
+  }
+
 
 
   // Pause/resume the robot's video ENCODER (not just the DOM sink). "pause" gates frames before
@@ -2240,6 +2269,8 @@ export class RemoteTeleop {
     this.emitCall();
     // Recorder knowledge is stale once disconnected (auto mode stops on camera
     // silence anyway) — a fresh session re-probes with record("status").
+    this.recordRequests.close();
+    this.recordStatusProbe.close();
     this.recStat = null;
     // Drain the waiters BEFORE clearing the caches: the robot's last reported state is
     // exactly what an unreachable status carries forward, and it is most worth having
@@ -2930,6 +2961,8 @@ export class RemoteTeleop {
   // cache it, notify. Replies are direct answers to record() commands — no dedupe
   // (a repeated "status" probe legitimately returns the same state, and free_gb drifts).
   private ingestRecordStatus(m: Record<string, unknown>) {
+    const requestId = typeof m.request_id === "string" ? m.request_id : undefined;
+    if (requestId && !this.recordRequests.owns(requestId)) return;
     const s: RecordState = {
       ok: m.ok === true,
       recording: m.recording === true,
@@ -2940,7 +2973,19 @@ export class RemoteTeleop {
     if (typeof m.free_gb === "number") s.freeGb = m.free_gb;
     if (m.stereo === true) s.stereo = true;
     if (typeof m.error === "string" && m.error) s.error = m.error;
+    s.requestId = requestId;
+    if (typeof m.episode_id === "string") s.episodeId = m.episode_id;
+    s.episodeRemoved = m.episode_removed === true;
+    s.reviewSupported = m.review_supported === true;
+    if (typeof m.active_review_episode_id === "string") s.activeReviewEpisodeId = m.active_review_episode_id;
+    if (Array.isArray(m.pending_reviews)) s.pendingReviews = m.pending_reviews.filter(
+      (p): p is { episode_id: string; task: string; decision?: "keep" | "reject" } =>
+        p !== null && typeof p === "object" && typeof p.episode_id === "string" && typeof p.task === "string",
+    ).map((p) => ({ episodeId: p.episode_id, task: p.task,
+      ...(p.decision === "keep" || p.decision === "reject" ? { decision: p.decision } : {}) }));
     this.recStat = s;
+    if (requestId) this.recordRequests.accept(requestId, s);
+    else this.recordStatusProbe.accept(s);
     this.log(s.error ? `recorder: ${s.error}`
       : s.recording ? `recording ${s.episode ?? ""} (${s.freeGb ?? "?"} GB free)`
       : "recorder idle");

@@ -224,11 +224,8 @@ const Remote = () => {
     await sessionDisconnect();
   }, [sessionDisconnect]);
 
-  // Disconnecting with a training session still open would auto-close it on the robot
-  // (camera silence, ~5 s) — but the operator may not realize a session is live, so
-  // confirm first. "Finish and save" closes the session cleanly (session_end) so it
-  // ships immediately; "Return" cancels the disconnect. A guard on sessionOpen means
-  // a normal (no-session) disconnect is unaffected.
+  // End collection bookkeeping before disconnecting. Kept episodes upload
+  // independently; unresolved reviews stay held for recovery on reconnect.
   const [confirmFinish, setConfirmFinish] = useState(false);
   const sessionOpen = recordState?.sessionOpen ?? false;
   const requestDisconnect = useCallback(() => {
@@ -236,7 +233,7 @@ const Remote = () => {
     else void disconnect();
   }, [sessionOpen, disconnect]);
   const finishAndDisconnect = useCallback(() => {
-    teleop?.record("session_end");   // immediate clean finish (vs. the ~5 s silence auto-close)
+    teleop?.record("session_end");   // does not Keep an unresolved review
     setConfirmFinish(false);
     void disconnect();
   }, [teleop, disconnect]);
@@ -567,13 +564,14 @@ const Remote = () => {
                 recordState?.episodesKept
                   ? ` with ${recordState.episodesKept} episode${recordState.episodesKept === 1 ? "" : "s"} saved`
                   : ""
-              }. Finish it before you disconnect — your episodes upload to My Stuff once
-              the robot is idle. Keep Nori powered on until they land.
+              }. Kept episodes upload to My Stuff when Nori is idle. Episodes awaiting review
+              remain on Nori until you reconnect and Keep or Reject them. Keep Nori powered on
+              until kept episodes land.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Return</AlertDialogCancel>
-            <AlertDialogAction onClick={finishAndDisconnect}>Finish and save</AlertDialogAction>
+            <AlertDialogAction onClick={finishAndDisconnect}>End session and disconnect</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

@@ -512,3 +512,24 @@ describe("MockDaemonSim record (W2.11 one-bundle-per-session emulation)", () => 
   });
 
 });
+
+
+describe("MockDaemonSim explicit episode review", () => {
+  it("holds after Stop, retries by ID, and counts only acknowledged Keep", () => {
+    const sim = new MockDaemonSim();
+    const send = (action: string, extra: Record<string, unknown> = {}) =>
+      sim.handleFrame({ type: "record", action, ...extra }, 0)[0];
+    const first = send("episode_start", { review_required: true, task: "test", request_id: "start-1" });
+    expect(send("episode_start", { review_required: true, request_id: "start-1" })).toEqual(first);
+    const id = first.episode_id;
+    expect(send("episode_stop", { episode_id: id })).toMatchObject({ episodes_kept: 0 });
+    expect(send("review_status").pending_reviews).toEqual([{ episode_id: id, task: "test" }]);
+    expect(send("episode_reject", { episode_id: id })).toMatchObject({ ok: true, episodes_kept: 0 });
+    expect(send("episode_reject", { episode_id: id }).ok).toBe(true);
+    expect(send("episode_keep", { episode_id: id }).ok).toBe(false);
+    const second = send("episode_start", { review_required: true });
+    send("episode_stop");
+    expect(send("episode_keep", { episode_id: second.episode_id }).episodes_kept).toBe(1);
+    expect(send("episode_keep", { episode_id: second.episode_id }).episodes_kept).toBe(1);
+  });
+});
