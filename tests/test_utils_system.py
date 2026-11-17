@@ -65,6 +65,7 @@ def test_detect_cuda_status_flags_mismatch_when_gpu_but_cpu_torch(monkeypatch) -
 
     monkeypatch.setattr(system, "_nvidia_gpu_present", lambda: True)
     monkeypatch.setattr(system, "_torch_cuda", lambda: (False, "2.10.0+cpu"))
+    monkeypatch.setattr(system, "_is_jetson", lambda: False)
 
     status = system.detect_cuda_status()
     assert status["gpu_present"] is True
@@ -219,3 +220,27 @@ def test_policy_extra_route_known_and_core(client) -> None:
     assert smol["install_target"] == "lerobot[smolvla]"
     core = client.get("/system/policy-extra/act").json()
     assert core["needs_extra"] is False
+
+
+def test_detect_cuda_status_on_a_jetson_points_to_nvidia_wheels(monkeypatch) -> None:
+    """On a Jetson the download.pytorch.org hint would install a CPU-only aarch64 torch."""
+    from lelab.utils import system
+
+    monkeypatch.setattr(system, "_nvidia_gpu_present", lambda: True)
+    monkeypatch.setattr(system, "_torch_cuda", lambda: (False, "2.10.0"))
+    monkeypatch.setattr(system, "_is_jetson", lambda: True)
+
+    status = system.detect_cuda_status()
+    assert status["mismatch"] is True
+    assert "download.pytorch.org/whl/cu" not in status["install_hint"]
+    assert status["docs_url"].startswith("https://docs.nvidia.com/")
+
+
+def test_is_jetson_reads_nv_tegra_release(monkeypatch, tmp_path) -> None:
+    from lelab.utils import system
+
+    marker = tmp_path / "nv_tegra_release"
+    monkeypatch.setattr(system, "_TEGRA_RELEASE", marker)
+    assert system._is_jetson() is False
+    marker.write_text("# R36 (release), REVISION: 4.3")
+    assert system._is_jetson() is True
