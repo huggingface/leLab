@@ -78,6 +78,17 @@ Before inference, select the same rotation used for the training dataset. Check 
 Checkpoint image dimensions do not establish image orientation. For example, 0° and 180° have the same dimensions.
 The setting applies to new observations; it does not change existing recordings or checkpoints.
 
+## Installing next to your own PyTorch build
+
+On a board whose PyTorch stack is built from source (an NVIDIA Jetson), a plain install replaces your `torchcodec` with a PyPI wheel built for another CUDA: LeRobot asks for `torchcodec>=0.11.0`, which a `0.11.0a0` build does not meet. Install LeLab without its dependencies and add the four it needs:
+
+```bash
+pip install --no-deps git+https://github.com/huggingface/leLab.git
+pip install "fastapi>=0.115.12" "uvicorn>=0.24.0" "websockets>=15.0.1" "psutil>=5.9.0"
+```
+
+The environment must already hold `lerobot==0.7.0` (`pip show lerobot`).
+
 ## Resources
 
 - **[LeRobot](https://github.com/huggingface/lerobot):** the underlying library — go here for everything beyond the UI.

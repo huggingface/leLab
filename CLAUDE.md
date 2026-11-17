@@ -16,7 +16,7 @@ Install (editable, requires Python ≥3.10):
 pip install -e .
 ```
 
-`lerobot` is pinned to a ref on `huggingface/lerobot` (currently `v0.7.0`, see [pyproject.toml](pyproject.toml)), installed from git rather than PyPI because the published wheels don't expose the `lerobot-rollout` script that [lelab/rollout.py](lelab/rollout.py) shells out to. Bump the ref when you want a newer upstream release; expect import-path drift (e.g. `lerobot.configs.dataset`, `lerobot.utils.feature_utils`, `lerobot.common.control_utils`) and CLI flag renames (v0.7.0 replaced `--wandb.*` with `--trackio.*`). [tests/test_lerobot_cli.py](tests/test_lerobot_cli.py) runs the training and rollout argv LeLab builds through the installed LeRobot's parsers, so run the tests right after a bump. Since v0.7.0 the arms' motors go through LeRobot's rustypot-backed `SerialMotorsBus`: use its public methods (`set_operating_mode`, `set_half_turn_homings`, `disconnect`), not Feetech SDK internals.
+`lerobot` is pinned to a PyPI release (currently `==0.7.0`, see [pyproject.toml](pyproject.toml)). Bump the version when you want a newer upstream release; expect import-path drift (e.g. `lerobot.configs.dataset`, `lerobot.utils.feature_utils`, `lerobot.common.control_utils`) and CLI flag renames (v0.7.0 replaced `--wandb.*` with `--trackio.*`). [tests/test_lerobot_cli.py](tests/test_lerobot_cli.py) runs the training and rollout argv LeLab builds through the installed LeRobot's parsers, so run the tests right after a bump. Since v0.7.0 the arms' motors go through LeRobot's rustypot-backed `SerialMotorsBus`: use its public methods (`set_operating_mode`, `set_half_turn_homings`, `disconnect`), not Feetech SDK internals.
 
 Run servers (entry point defined in [pyproject.toml](pyproject.toml)):
 
