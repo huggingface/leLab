@@ -39,7 +39,9 @@ export function useAvailableCameras({
         // ignore — we'll still try to enumerate, just without labels
       }
 
-      const browserDevices = (await navigator.mediaDevices.enumerateDevices())
+      // navigator.mediaDevices is undefined outside a secure context (plain
+      // http:// from another machine): list the backend cameras without a preview.
+      const browserDevices = ((await navigator.mediaDevices?.enumerateDevices()) ?? [])
         .filter((d) => d.kind === "videoinput")
         .map((d) => ({ deviceId: d.deviceId, label: d.label }));
 
@@ -93,9 +95,9 @@ export function useAvailableCameras({
     if (!enabled) return;
     refresh();
     const handler = () => refresh();
-    navigator.mediaDevices.addEventListener("devicechange", handler);
+    navigator.mediaDevices?.addEventListener("devicechange", handler);
     return () =>
-      navigator.mediaDevices.removeEventListener("devicechange", handler);
+      navigator.mediaDevices?.removeEventListener("devicechange", handler);
   }, [enabled, refresh]);
 
   return { cameras, isLoading, refresh };
