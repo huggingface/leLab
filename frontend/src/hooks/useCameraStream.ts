@@ -60,9 +60,9 @@ export function useCameraStream(deviceId: string, paused: boolean, size?: Camera
     const onDeviceChange = () => {
       if (hasErrorRef.current) setRetryKey((k) => k + 1);
     };
-    navigator.mediaDevices.addEventListener("devicechange", onDeviceChange);
+    navigator.mediaDevices?.addEventListener("devicechange", onDeviceChange);
     return () =>
-      navigator.mediaDevices.removeEventListener("devicechange", onDeviceChange);
+      navigator.mediaDevices?.removeEventListener("devicechange", onDeviceChange);
   }, []);
 
   useEffect(() => {

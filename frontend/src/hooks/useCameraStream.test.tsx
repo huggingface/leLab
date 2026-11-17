@@ -59,3 +59,11 @@ test("reopens at 1280x720 when the recorded size never delivers a frame", async 
   expect(getUserMedia).toHaveBeenCalledTimes(2);
   expect(requestedSize(1)).toEqual([1280, 720]);
 });
+
+test("mounts without a stream when navigator.mediaDevices is undefined", async () => {
+  // Plain http:// from another machine is not a secure context.
+  Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: undefined });
+  act(() => root.render(<Preview />));
+  await flush();
+  expect(getUserMedia).not.toHaveBeenCalled();
+});
