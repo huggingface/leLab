@@ -22,6 +22,7 @@ import sys
 import threading
 import time
 from importlib import metadata
+from pathlib import Path
 from typing import Any
 
 from packaging.requirements import Requirement
@@ -306,6 +307,24 @@ CUDA_TORCH_INSTALL_HINT = (
 )
 
 
+# The cu124 index above has no CUDA build of torch for aarch64, so on a Jetson the hint would replace
+# the CUDA torch with a CPU-only one. Point to NVIDIA's wheels, which are built for JetPack.
+JETSON_TORCH_DOCS_URL = (
+    "https://docs.nvidia.com/deeplearning/frameworks/install-pytorch-jetson-platform/index.html"
+)
+JETSON_TORCH_INSTALL_HINT = (
+    "This is a Jetson: PyTorch with CUDA comes from NVIDIA's wheels for your JetPack version "
+    f"({JETSON_TORCH_DOCS_URL}), not from download.pytorch.org. "
+    "Install that torch, then restart LeLab."
+)
+_TEGRA_RELEASE = Path("/etc/nv_tegra_release")
+
+
+def _is_jetson() -> bool:
+    """True on an NVIDIA Jetson (L4T writes /etc/nv_tegra_release)."""
+    return _TEGRA_RELEASE.exists()
+
+
 def _nvidia_gpu_present() -> bool:
     """True if an NVIDIA GPU is visible to the OS (``nvidia-smi -L`` lists one).
 
@@ -345,13 +364,14 @@ def detect_cuda_status() -> dict[str, Any]:
     """Detect the 'NVIDIA GPU present but PyTorch is CPU-only' mismatch (issue #30)."""
     gpu_present = _nvidia_gpu_present()
     cuda_available, torch_version = _torch_cuda()
+    jetson = _is_jetson()
     return {
         "gpu_present": gpu_present,
         "cuda_available": cuda_available,
         "mismatch": gpu_present and not cuda_available,
         "torch_version": torch_version,
-        "install_hint": CUDA_TORCH_INSTALL_HINT,
-        "docs_url": CUDA_TORCH_DOCS_URL,
+        "install_hint": JETSON_TORCH_INSTALL_HINT if jetson else CUDA_TORCH_INSTALL_HINT,
+        "docs_url": JETSON_TORCH_DOCS_URL if jetson else CUDA_TORCH_DOCS_URL,
     }
 
 
