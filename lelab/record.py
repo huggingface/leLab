@@ -130,7 +130,7 @@ def _platform_backend():
         # DirectShow by default, matching the order /available-cameras enumerates
         # (via pygrabber) so a camera_index always opens the previewed device.
         # LELAB_WINDOWS_CAMERA_BACKEND=MSMF switches both to Media Foundation for
-        # cameras DirectShow cannot see (see lelab/utils/camera_backend.py).
+        # cameras DirectShow cannot open (see lelab/utils/camera_backend.py).
         from lelab.utils.camera_backend import windows_camera_backend_name
 
         return Cv2Backends[windows_camera_backend_name()]

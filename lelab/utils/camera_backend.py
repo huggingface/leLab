@@ -1,8 +1,8 @@
 """Windows camera backend selection (DirectShow vs Media Foundation).
 
 Upstream LeLab pins Windows to DirectShow so that a camera index matches the
-pygrabber-enumerated DirectShow name. Some UVC cameras are only exposed through
-Media Foundation (MSMF) and never show up in DirectShow at all, e.g. the
+pygrabber-enumerated DirectShow name. Some UVC cameras can fail to open through
+DirectShow while Media Foundation (MSMF) opens them; we hit this with a
 0C45:636B "USB Camera" used as an SO-101 wrist camera. Setting
 
     LELAB_WINDOWS_CAMERA_BACKEND=MSMF
