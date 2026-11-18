@@ -78,6 +78,20 @@ Before inference, select the same rotation used for the training dataset. Check 
 Checkpoint image dimensions do not establish image orientation. For example, 0° and 180° have the same dimensions.
 The setting applies to new observations; it does not change existing recordings or checkpoints.
 
+## Windows: a camera won't open
+
+On Windows, LeLab lists and opens cameras through DirectShow. Some UVC cameras can fail to open through
+DirectShow while Media Foundation opens them. To use Media Foundation (MSMF) for listing, recording and
+inference instead, start LeLab with:
+
+```powershell
+$env:LELAB_WINDOWS_CAMERA_BACKEND = "MSMF"
+lelab
+```
+
+Camera names then come from Media Foundation in the same order OpenCV's MSMF backend opens them.
+Your OpenCV build must be able to open MSMF devices; the default stays DirectShow.
+
 ## Resources
 
 - **[LeRobot](https://github.com/huggingface/lerobot):** the underlying library — go here for everything beyond the UI.
