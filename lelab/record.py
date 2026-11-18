@@ -127,9 +127,13 @@ def _platform_backend():
     if system == "Linux":
         return Cv2Backends.V4L2
     if system == "Windows":
-        # DirectShow, matching the order /available-cameras enumerates (via
-        # pygrabber) so a camera_index always opens the previewed device.
-        return Cv2Backends.DSHOW
+        # DirectShow by default, matching the order /available-cameras enumerates
+        # (via pygrabber) so a camera_index always opens the previewed device.
+        # LELAB_WINDOWS_CAMERA_BACKEND=MSMF switches both to Media Foundation for
+        # cameras DirectShow cannot see (see lelab/utils/camera_backend.py).
+        from lelab.utils.camera_backend import windows_camera_backend_name
+
+        return Cv2Backends[windows_camera_backend_name()]
     return Cv2Backends.ANY
 
 

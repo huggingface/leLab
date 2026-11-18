@@ -193,12 +193,18 @@ def _format_cameras_arg(cameras: dict[str, dict[str, Any]]) -> str:
     """Convert native camera settings into
     lerobot's CLI dict syntax. The frontend key `camera_index` is
     remapped to lerobot's `index_or_path`."""
+    from lelab.utils.camera_backend import windows_uses_msmf
+
     parts = []
     for name, cfg in cameras.items():
         settings = lerobot_camera_settings(cfg)
         remapped = {
             ("index_or_path" if k == "camera_index" else k): v for k, v in settings.items() if v is not None
         }
+        # Pin MSMF explicitly when enabled, so lerobot-rollout opens the same device
+        # index as enumeration/recording instead of relying on cv2's CAP_ANY order.
+        if windows_uses_msmf() and "backend" not in remapped:
+            remapped["backend"] = 1400  # Cv2Backends.MSMF
         body = ", ".join(f"{k}: {v}" for k, v in remapped.items())
         parts.append(f"{name}: {{{body}}}")
     return "{" + ", ".join(parts) + "}"

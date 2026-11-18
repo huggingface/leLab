@@ -1203,7 +1203,17 @@ def _windows_cameras() -> list[dict[str, Any]]:
     frontend match each index to the browser's ``MediaDeviceInfo.label`` for the
     live preview. Falls back to generic names if pygrabber is unavailable.
     """
+    from lelab.utils.camera_backend import msmf_camera_names, windows_uses_msmf
+
     with _windows_com_initialized():
+        if windows_uses_msmf():
+            # Media Foundation order == cv2 CAP_MSMF index order.
+            import cv2
+
+            names = msmf_camera_names()
+            if names is None:
+                return _generic_cv2_cameras(cv2.CAP_MSMF)
+            return [{"index": i, "name": name, "available": True} for i, name in enumerate(names)]
         try:
             from pygrabber.dshow_graph import FilterGraph
 
