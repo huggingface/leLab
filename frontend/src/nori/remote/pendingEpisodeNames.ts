@@ -13,6 +13,7 @@ export interface PendingNameSet {
 
 const LEGACY_KEY = "nori.pendingEpisodeNames.v1";
 const KEY = "nori.pendingEpisodeNames.v2";
+const RESERVATIONS_KEY = "nori.episodeNameReservations.v1";
 const EXPIRE_MS = 48 * 3600 * 1000;
 const CLOCK_SKEW_MS = 5 * 60 * 1000;
 const RETRY_MS = 30_000;
@@ -33,6 +34,44 @@ type RetryState = {
 const retries = new WeakMap<Fetcher, Map<string, RetryState>>();
 const identityBased = (set: PendingNameSet) => Boolean(set.episodeIds?.length);
 const signature = (set: PendingNameSet) => JSON.stringify(set);
+type Reservation = { episodeId: string; task: string; startedAt: string; expiresAt: number };
+// Keep protection after a modern name is applied, including across reloads.
+// The memory copy also covers storage quota failures during this visit.
+const reservationCache = new WeakMap<Storage, Map<string, Reservation>>();
+
+function protectModernEpisodes(sets: PendingNameSet[]): Reservation[] {
+  let storage: Storage | undefined;
+  let protectedEpisodes = new Map<string, Reservation>();
+  let raw: string | null = null;
+  try {
+    storage = localStorage;
+    const cached = reservationCache.get(storage);
+    if (cached) protectedEpisodes = cached;
+    else reservationCache.set(storage, protectedEpisodes);
+    raw = storage.getItem(RESERVATIONS_KEY);
+    const stored = JSON.parse(raw || "[]");
+    if (Array.isArray(stored)) for (const r of stored) {
+      if (r && typeof r.episodeId === "string" && r.episodeId && typeof r.task === "string"
+        && typeof r.startedAt === "string" && Number.isFinite(Date.parse(r.startedAt))
+        && Number.isFinite(r.expiresAt) && r.expiresAt > Date.now()) protectedEpisodes.set(r.episodeId, r);
+    }
+  } catch { /* Use the in-memory protection when storage cannot be read. */ }
+  for (const [id, r] of protectedEpisodes) if (r.expiresAt <= Date.now()) protectedEpisodes.delete(id);
+  for (const set of sets) for (const id of set.episodeIds ?? []) {
+    if (id && !protectedEpisodes.has(id)) protectedEpisodes.set(id, {
+      episodeId: id, task: set.task, startedAt: set.startedAt, expiresAt: Date.now() + EXPIRE_MS,
+    });
+  }
+  const reservations = [...protectedEpisodes.values()];
+  if (storage) try {
+    if (!reservations.length) { if (raw !== null) storage.removeItem(RESERVATIONS_KEY); }
+    else {
+      const next = JSON.stringify(reservations);
+      if (next !== raw) storage.setItem(RESERVATIONS_KEY, next);
+    }
+  } catch { /* The client cache still protects this visit. */ }
+  return reservations;
+}
 
 class NamingRequestTimeout extends Error {
   constructor() { super("Recording naming request timed out; the name remains queued for verification"); }
@@ -102,6 +141,8 @@ function save(sets: PendingNameSet[]) {
 }
 
 export function addPendingNames(set: PendingNameSet): void {
+  // A kept modern take is not a legacy session's take, even when unnamed.
+  protectModernEpisodes([set]);
   if (!set.names.some((n) => n.trim())) return;
   const prior = load().filter((s) => !set.episodeIds?.[0] || s.episodeIds?.[0] !== set.episodeIds[0]);
   save([...prior, set]);
@@ -140,6 +181,7 @@ export function applyPendingNames(baseUrl: string, fetcher: Fetcher): Promise<Re
 }
 
 async function run(baseUrl: string, fetcher: Fetcher, sets: PendingNameSet[], state: RetryState): Promise<Result> {
+  const protectedIds = new Set(protectModernEpisodes(sets).map((r) => r.episodeId));
   const { bundles } = await namingRequest(fetcher, (bounded) => getRobotRecordings(baseUrl, bounded));
   const present = new Set(bundles.map((b) => b.session_id));
   for (const [id, entry] of state.identities) {
@@ -156,7 +198,8 @@ async function run(baseUrl: string, fetcher: Fetcher, sets: PendingNameSet[], st
     const targetId = set.episodeIds?.[0];
     const candidates = bundles.filter((b) => {
       if (b.status !== "PROMOTED" || used.has(b.session_id)) return false;
-      if (!modern) return b.episode_count === set.names.length && Date.parse(b.created_at) >= Date.parse(set.startedAt) - CLOCK_SKEW_MS;
+      if (!modern) return !protectedIds.has(b.recording_metadata?.episode_id ?? "")
+        && b.episode_count === set.names.length && Date.parse(b.created_at) >= Date.parse(set.startedAt) - CLOCK_SKEW_MS;
       if (b.recording_metadata?.episode_id) return b.recording_metadata.episode_id === targetId;
       // Older backends lack structured identity. Limit discovery to plausible
       // single-take uploads; matching still requires the actual episode UUID.
@@ -189,6 +232,22 @@ async function run(baseUrl: string, fetcher: Fetcher, sets: PendingNameSet[], st
           if (name && target.name !== name) await namingRequest(fetcher, (bounded) => nameRecordingEpisode(baseUrl, bounded, cand.session_id, target.index, name));
         } else {
           if (episodes.length !== set.names.length || !episodes.every((e) => e.task === set.task)) continue;
+          // Re-read after the network wait: a Keep may have queued a modern
+          // name while this legacy lookup was in flight. Never let heuristics
+          // consume a take reserved by identity, even after its name is saved.
+          const reservations = protectModernEpisodes(load());
+          const reserved = new Set(reservations.map((r) => r.episodeId));
+          if (reserved.has(cand.recording_metadata?.episode_id ?? "")
+            || episodes.some((e) => reserved.has(e.episode_id ?? ""))) continue;
+          const identityKnown = episodes.every((e) => e.episode_id)
+            || (episodes.length === 1 && cand.recording_metadata?.episode_id);
+          if (!identityKnown && reservations.some((r) => r.task === set.task
+            && Date.parse(cand.created_at) >= Date.parse(r.startedAt) - CLOCK_SKEW_MS)) {
+            // On an older API this may be a reserved modern take. Preserve the
+            // legacy name for manual naming / a future identity-aware retry.
+            identityUnavailable = true;
+            continue;
+          }
           for (let i = 0; i < set.names.length; i++) {
             const name = set.names[i].trim();
             if (name && episodes[i].name !== name) await namingRequest(fetcher, (bounded) => nameRecordingEpisode(baseUrl, bounded, cand.session_id, episodes[i].index, name));

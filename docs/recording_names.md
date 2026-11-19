@@ -41,6 +41,14 @@ matching. Existing legacy v1 queues still work. Identity-based entries from the
 initial issue-51 build are moved from v1 to v2 when the updated queue is read.
 Names retain the existing 48-hour expiry.
 
+Known modern episode IDs are reserved before legacy task/time matching. These
+reservations survive successful naming and browser reloads for 48 hours, so a
+delayed legacy upload cannot claim a newer modern take on a later retry. IDs are
+checked in both registration metadata and episode listings, including names
+queued during a lookup. An ambiguous same-task upload on an older backend without
+identity stays queued for manual naming; unrelated legacy queues retain their
+existing behavior. Reservations also protect kept modern takes left unnamed.
+
 Automatic naming prioritizes exact metadata IDs. For older backends, discovery
 is limited to plausible recent single-take uploads with the same task label;
 the actual episode ID must still match before a name is written. Each pass

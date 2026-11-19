@@ -18,6 +18,7 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 let fetcher = vi.fn();
 const legacyKey = "nori.pendingEpisodeNames.v1";
 const modernKey = "nori.pendingEpisodeNames.v2";
+const reservationsKey = "nori.episodeNameReservations.v1";
 const bundle = (session_id: string) => ({ session_id, status: "PROMOTED", episode_count: 1,
   label: "Same prompt", created_at: new Date().toISOString() });
 const queued = (id: string, name: string) => addPendingNames({ startedAt: new Date().toISOString(),
@@ -168,6 +169,92 @@ describe("pending per-take names", () => {
     vi.mocked(listRecordingEpisodes).mockResolvedValue({ episodes: [{ index: 0, task: "Old prompt", name: "" }] } as never);
     expect(await applyPendingNames("", fetcher)).toEqual({ applied: 1, pending: 0 });
     expect(nameRecordingEpisode).toHaveBeenCalledWith("", expect.any(Function), "old", 0, "old custom name");
+  });
+
+  it.each(["registration metadata", "viewer identity"])("preserves a delayed legacy name when modern uploads arrive first with %s", async (identitySource) => {
+    addPendingNames({ startedAt: new Date(Date.now() - 60_000).toISOString(),
+      task: "Same prompt", names: ["Legacy session name"] });
+    queued("modern-episode", "Modern take name");
+    const modern = { ...bundle("modern-upload"), ...(identitySource === "registration metadata"
+      ? { recording_metadata: { episode_id: "modern-episode" } } : {}) };
+    const saved = new Map<string, string>();
+    vi.mocked(getRobotRecordings).mockResolvedValue({ bundles: [modern] } as never);
+    vi.mocked(listRecordingEpisodes).mockImplementation(async (_base, _fetch, id) => ({
+      episodes: [{ index: 0, task: "Same prompt", episode_id: id === "modern-upload" ? "modern-episode" : "legacy-episode",
+        name: saved.get(id) ?? "" }],
+    }) as never);
+    vi.mocked(nameRecordingEpisode).mockImplementation(async (_base, _fetch, id, index, name) => {
+      saved.set(id, name); return { index, name };
+    });
+    expect(await applyPendingNames("", fetcher)).toEqual({ applied: 1, pending: 1 });
+    expect(vi.mocked(nameRecordingEpisode).mock.calls.map((call) => call.slice(2))).toEqual([
+      ["modern-upload", 0, "Modern take name"],
+    ]);
+    expect(JSON.parse(localStorage.getItem(legacyKey)!)[0].names).toEqual(["Legacy session name"]);
+    expect(localStorage.getItem(modernKey)).toBeNull();
+
+    // The completed modern queue is gone. Its protection must survive a
+    // reload and another retry while the legacy upload is still delayed.
+    vi.resetModules();
+    const reloaded = await import("./pendingEpisodeNames");
+    expect(await reloaded.applyPendingNames("", fetcher)).toEqual({ applied: 0, pending: 1 });
+    expect(nameRecordingEpisode).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    vi.mocked(getRobotRecordings).mockResolvedValue({ bundles: [modern, bundle("legacy-upload")] } as never);
+    expect(await reloaded.applyPendingNames("", fetcher)).toEqual({ applied: 1, pending: 0 });
+    expect(vi.mocked(nameRecordingEpisode).mock.calls.map((call) => call.slice(2))).toEqual([
+      ["modern-upload", 0, "Modern take name"], ["legacy-upload", 0, "Legacy session name"],
+    ]);
+    expect(saved.get("modern-upload")).toBe("Modern take name");
+    expect(reloaded.pendingNameCount()).toBe(0);
+  });
+
+  it.each(["Same prompt", "Unrelated prompt"])("handles missing backend identity safely with a modern take for %s", async (modernTask) => {
+    addPendingNames({ startedAt: new Date(Date.now() - 60_000).toISOString(), task: "Same prompt", names: ["Legacy name"] });
+    // Even an unnamed kept modern take must not receive a legacy name.
+    addPendingNames({ startedAt: new Date().toISOString(), task: modernTask, names: [""], episodeIds: ["modern-take"] });
+    vi.mocked(getRobotRecordings).mockResolvedValue({ bundles: [bundle("unknown-upload")] } as never);
+    vi.mocked(listRecordingEpisodes).mockResolvedValue({ episodes: [{ index: 0, task: "Same prompt", name: "" }] } as never);
+    if (modernTask === "Same prompt") {
+      expect(await applyPendingNames("", fetcher)).toEqual({ applied: 0, pending: 1, identityUnavailable: true });
+      expect(nameRecordingEpisode).not.toHaveBeenCalled();
+      expect(JSON.parse(localStorage.getItem(legacyKey)!)[0].names).toEqual(["Legacy name"]);
+    } else {
+      expect(await applyPendingNames("", fetcher)).toEqual({ applied: 1, pending: 0 });
+      expect(nameRecordingEpisode).toHaveBeenCalledWith("", expect.any(Function), "unknown-upload", 0, "Legacy name");
+    }
+    expect(localStorage.getItem(modernKey)).toBeNull();
+  });
+
+  it("protects a modern name queued while a legacy episode lookup is in flight", async () => {
+    addPendingNames({ startedAt: new Date(Date.now() - 60_000).toISOString(), task: "Same prompt", names: ["Legacy name"] });
+    vi.mocked(getRobotRecordings).mockResolvedValue({ bundles: [bundle("modern-upload")] } as never);
+    const listing = { episodes: [{ index: 0, episode_id: "modern-take", task: "Same prompt", name: "" }] };
+    let release!: (value: never) => void;
+    vi.mocked(listRecordingEpisodes).mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }))
+      .mockResolvedValue(listing as never);
+    const pending = applyPendingNames("", fetcher);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listRecordingEpisodes).toHaveBeenCalledTimes(1);
+    queued("modern-take", "Modern name");
+    release(listing as never);
+    expect(await pending).toEqual({ applied: 0, pending: 2 });
+    expect(nameRecordingEpisode).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(await applyPendingNames("", fetcher)).toEqual({ applied: 1, pending: 1 });
+    expect(nameRecordingEpisode).toHaveBeenCalledTimes(1);
+    expect(nameRecordingEpisode).toHaveBeenCalledWith("", expect.any(Function), "modern-upload", 0, "Modern name");
+  });
+
+  it("expires modern reservations after the legacy naming retention window", async () => {
+    addPendingNames({ startedAt: new Date().toISOString(), task: "Same prompt", names: [""], episodeIds: ["modern-take"] });
+    expect(JSON.parse(localStorage.getItem(reservationsKey)!)).toHaveLength(1);
+    expect(pendingNameCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(48 * 3600_000 + 1);
+    addPendingNames({ startedAt: new Date().toISOString(), task: "New session", names: ["New name"] });
+    expect(localStorage.getItem(reservationsKey)).toBeNull();
+    expect(pendingNameCount()).toBe(1);
   });
 
   it("aborts a stalled recordings request, releases the lock and retries queued names", async () => {
