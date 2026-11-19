@@ -463,3 +463,33 @@ def test_handle_delete_dataset_hub_failure_keeps_local_copy(
 
     assert result["success"] is False
     assert dataset_dir.exists()
+
+
+@pytest.mark.parametrize(
+    ("events", "rerecord"),
+    [
+        ({}, True),  # default: a take that reaches episode_time_s is re-recorded (unchanged)
+        ({"save_on_timeout": False}, True),
+        ({"save_on_timeout": True}, False),
+        ({"save_on_timeout": True, "rerecord_episode": True}, True),  # Re-record button
+        ({"save_on_timeout": True, "stop_recording": True}, True),  # Stop mid-episode drops the take
+    ],
+)
+def test_rerecord_after_full_take(events, rerecord) -> None:
+    from lelab.record import _rerecord_after_full_take
+
+    assert _rerecord_after_full_take(events) is rerecord
+
+
+def test_save_on_timeout_defaults_off() -> None:
+    from lelab.record import RecordingRequest
+
+    request = RecordingRequest(
+        leader_port="/dev/null",
+        follower_port="/dev/null",
+        leader_config="l",
+        follower_config="f",
+        dataset_repo_id="alice/pusht",
+        single_task="t",
+    )
+    assert request.save_on_timeout is False
