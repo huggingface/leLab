@@ -57,6 +57,14 @@ _MAX_POSITION_JUMP = 2000
 # barely moved; the user is warned their range of motion looks insufficient.
 _MIN_CALIBRATION_RANGE = 100
 
+# Motors that turn a full revolution: `lerobot-calibrate` gives them the whole
+# encoder (`record_calibration(..., full_turn_motors=["wrist_roll"])` in
+# LeRobot's SO-101 follower and leader) instead of the range they were moved
+# through. The range sets both the motors' position limits and, in degrees
+# mode, the zero of the reported angle (the middle of range_min..range_max),
+# so a recorded sweep would clamp the wrist roll and shift its angle.
+FULL_TURN_MOTORS = ("wrist_roll",)
+
 
 def _is_valid_position(pos: float) -> bool:
     """True when a raw Present_Position reading sits within the plausible encoder
@@ -368,15 +376,29 @@ class CalibrationManager:
 
         self._mins = self._start_positions.copy()
         self._maxes = self._start_positions.copy()
+        # Full-turn motors span the whole encoder, as in lerobot-calibrate; the
+        # sweep below leaves them alone.
+        full_turn = [motor for motor in self._start_positions if motor in FULL_TURN_MOTORS]
+        for motor in full_turn:
+            self._mins[motor] = 0
+            self._maxes[motor] = self.device.bus.resolution(self.device.bus.motors[motor].model) - 1
         logger.info(f"Initialized mins: {self._mins}")
         logger.info(f"Initialized maxes: {self._maxes}")
 
+        swept = [motor for motor in self._start_positions if motor not in FULL_TURN_MOTORS]
         self._update_status(
             status="recording",
             step=1,
-            message="Move ALL joints through their FULL ranges of motion - from minimum to maximum positions. Ensure each joint moves significantly from its starting position.",
+            message=(
+                f"Move {', '.join(swept)} through their FULL ranges of motion - from minimum to "
+                "maximum positions. Ensure each joint moves significantly from its starting position. "
+                f"{', '.join(full_turn)} turns a full revolution and needs no sweep."
+                if full_turn
+                else "Move ALL joints through their FULL ranges of motion - from minimum to maximum positions. "
+                "Ensure each joint moves significantly from its starting position."
+            ),
             recorded_ranges={
-                motor: {"min": pos, "max": pos, "current": pos}
+                motor: {"min": self._mins[motor], "max": self._maxes[motor], "current": pos}
                 for motor, pos in self._start_positions.items()
             },
         )
@@ -402,6 +424,11 @@ class CalibrationManager:
                     # Only update if we have valid readings
                     if valid_positions:
                         for motor, pos in valid_positions.items():
+                            if motor in FULL_TURN_MOTORS:
+                                # Crossing 0/4095 is a normal move for a full-turn
+                                # motor, and its range is already the whole encoder.
+                                prev_positions[motor] = pos
+                                continue
                             if (
                                 motor in prev_positions
                                 and abs(pos - prev_positions[motor]) > _MAX_POSITION_JUMP
