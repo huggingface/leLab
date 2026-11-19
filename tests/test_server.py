@@ -354,3 +354,50 @@ def test_joint_frames_keep_only_the_latest_and_reset_on_restart() -> None:
         assert mgr._latest_joint_frame is None
     finally:
         mgr.stop_broadcast_thread()
+
+
+def _fake_v4l2(monkeypatch: pytest.MonkeyPatch, tmp_path, nodes: dict[int, tuple[int, str] | None]):
+    from lelab import server
+
+    for i in nodes:
+        (tmp_path / f"video{i}").mkdir()
+    (tmp_path / "v4l-subdev0").mkdir()  # not a video node
+    monkeypatch.setattr(server, "_v4l2_querycap", lambda path: nodes[int(path.removeprefix("/dev/video"))])
+    monkeypatch.setattr(server, "_v4l2_camera_name", lambda i: f"cam{i}")
+    return server
+
+
+def test_linux_cameras_skips_metadata_nodes_and_keeps_high_indices(monkeypatch, tmp_path) -> None:
+    server = _fake_v4l2(
+        monkeypatch,
+        tmp_path,
+        {
+            0: (0x04200001, "usb-3610000.usb-2.1"),  # capture + streaming
+            1: (0x04A00000, "usb-3610000.usb-2.1"),  # UVC metadata node
+            12: (0x04200001, "usb-3610000.usb-2.2"),
+        },
+    )
+    cameras = server._linux_cameras(str(tmp_path))
+    assert [c["index"] for c in cameras] == [0, 12]
+    assert [c["bus_info"] for c in cameras] == ["usb-3610000.usb-2.1", "usb-3610000.usb-2.2"]
+
+
+def test_linux_cameras_does_not_open_a_stream(monkeypatch, tmp_path) -> None:
+    """A camera held by a preview or a recording still answers QUERYCAP; cv2 is not used."""
+    import sys
+
+    server = _fake_v4l2(monkeypatch, tmp_path, {0: (0x04200001, "usb-a"), 2: None})
+    monkeypatch.setitem(sys.modules, "cv2", None)  # any cv2 import would raise ImportError
+    assert [c["index"] for c in server._linux_cameras(str(tmp_path))] == [0]
+
+
+def test_linux_cameras_without_sysfs(tmp_path) -> None:
+    from lelab import server
+
+    assert server._linux_cameras(str(tmp_path / "missing")) == []
+
+
+def test_v4l2_querycap_missing_node() -> None:
+    from lelab import server
+
+    assert server._v4l2_querycap("/dev/video999999") is None

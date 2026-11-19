@@ -1225,18 +1225,64 @@ def _v4l2_camera_name(index: int) -> str | None:
         return None
 
 
-def _linux_cameras() -> list[dict[str, Any]]:
-    """Enumerate Linux cameras, naming each from sysfs (no extra deps)."""
-    import cv2
+# VIDIOC_QUERYCAP = _IOR('V', 0, struct v4l2_capability); the struct is 104 bytes:
+# driver[16] card[32] bus_info[32] version capabilities device_caps reserved[3] (u32 each).
+_VIDIOC_QUERYCAP = 0x80685600
+_V4L2_CAP_VIDEO_CAPTURE = 0x00000001
+_V4L2_CAP_DEVICE_CAPS = 0x80000000
 
+
+def _v4l2_querycap(path: str) -> tuple[int, str] | None:
+    """(capabilities of this node, bus_info) from VIDIOC_QUERYCAP, or None if the node can't be queried.
+
+    Opening the node for the ioctl does not start a stream, so a camera that a preview or a
+    recording is streaming from still answers (cv2 fails to open it and it used to vanish).
+    """
+    import fcntl
+    import struct
+
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        buf = fcntl.ioctl(fd, _VIDIOC_QUERYCAP, bytes(104))
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    bus_info = buf[48:80].split(b"\0", 1)[0].decode(errors="replace")
+    capabilities, device_caps = struct.unpack_from("<II", buf, 84)
+    caps = device_caps if capabilities & _V4L2_CAP_DEVICE_CAPS else capabilities
+    return caps, bus_info
+
+
+def _linux_cameras(sysfs: str = "/sys/class/video4linux") -> list[dict[str, Any]]:
+    """Enumerate Linux video capture nodes without opening a stream on them.
+
+    Lists every /dev/videoN from sysfs (not just 0-9), skips nodes that can't capture
+    (the UVC metadata node next to each camera), and keeps devices that are busy.
+    ``bus_info`` (the USB port path) tells apart two cameras with the same name (#119).
+    """
     cameras: list[dict[str, Any]] = []
-    for i in range(10):
-        cap = cv2.VideoCapture(i, cv2.CAP_V4L2)
-        opened = cap.isOpened()
-        cap.release()
-        if not opened:
+    try:
+        nodes = sorted(
+            int(name[len("video") :]) for name in os.listdir(sysfs) if name[len("video") :].isdigit()
+        )
+    except OSError:
+        return cameras
+    for i in nodes:
+        cap = _v4l2_querycap(f"/dev/video{i}")
+        if cap is None or not cap[0] & _V4L2_CAP_VIDEO_CAPTURE:
             continue
-        cameras.append({"index": i, "name": _v4l2_camera_name(i) or f"Camera {i}", "available": True})
+        cameras.append(
+            {
+                "index": i,
+                "name": _v4l2_camera_name(i) or f"Camera {i}",
+                "available": True,
+                "bus_info": cap[1],
+            }
+        )
     return cameras
 
 
