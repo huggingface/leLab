@@ -5,6 +5,24 @@ import { RecordRequests, RecordStatusProbe } from "../../../packages/nori-sdk/sr
 afterEach(() => vi.useRealTimers());
 
 describe("recording acknowledgements", () => {
+  it("SDK preserves collection identity and explicit task failure on the wire", async () => {
+    const t = new RemoteTeleop({ arm: "right", onLog: () => {} } as never);
+    const sent: Record<string, unknown>[] = [];
+    const raw = t as unknown as {
+      dcSend: (frame: Record<string, unknown>) => boolean;
+      ingestRecordStatus: (frame: Record<string, unknown>) => void;
+    };
+    raw.dcSend = (frame) => { sent.push(frame); return true; };
+    const pending = t.recordConfirmed("episode_start", { task: "Pick cube", collectionId: "f1b32481-c33c-497a-9854-48bfe3c71db5", reviewRequired: true });
+    expect(sent[0]).toMatchObject({ tags: ["nori:collection:f1b32481-c33c-497a-9854-48bfe3c71db5"], review_required: true });
+    expect(sent[0]).not.toHaveProperty("collection_id");
+    raw.ingestRecordStatus({ type: "record_status", request_id: sent[0].request_id, ok: true });
+    await expect(pending).resolves.toMatchObject({ ok: true });
+    const stopped = t.recordConfirmed("episode_stop", { episodeId: "take-id", outcome: "failure" });
+    expect(sent[1]).toMatchObject({ episode_id: "take-id", outcome: "failure" });
+    raw.ingestRecordStatus({ type: "record_status", request_id: sent[1].request_id, ok: true });
+    await stopped;
+  });
   it("retries the same request ID and ignores a late reply to a different verb", async () => {
     vi.useFakeTimers();
     const sent: Record<string, unknown>[] = [];

@@ -1,22 +1,6 @@
-// NORI: record-time episode names, applied once the recording reaches the cloud.
-//
-// The robot's recorder (rpi5/media/recorder.py) owns the bundle's per-episode
-// metadata and has no name field on the wire today, so names typed during a
-// recording session can't ship inside the bundle. Instead the capture card
-// stores them here (localStorage — they survive reloads) and this module
-// applies them AFTER the bundle uploads + promotes, via the raw-recording
-// naming route (PATCH …/episode/{idx}/name). From there the normal annotation
-// flow takes over (the name travels into any dataset assembled from the take).
-//
-// Matching a pending set to its uploaded bundle is deliberately conservative —
-// ALL of these must hold before any name is written:
-//   * the bundle PROMOTED after the session started (upload begins at idle,
-//     always after session_start; 5 min of clock skew tolerated),
-//   * its episode count equals the session's kept-episode count,
-//   * its episodes carry the session's exact task string (the card sends the
-//     task on every episode_start, and the robot stamps it into meta.json).
-// No match → the set stays pending (retried while the Remote page is open,
-// expired after 48 h); the fallback is always manual naming in Review episodes.
+// Record-time custom names are queued per acknowledged Keep and matched after
+// promotion by stable episode ID. Legacy stored session queues retain their
+// previous count/task/time matching. Names survive reloads for up to 48 hours.
 
 import { type Fetcher } from "@/lib/apiClient";
 import { getRobotRecordings } from "@/nori/api/client";
@@ -29,6 +13,8 @@ export interface PendingNameSet {
   task: string;
   /** Per KEPT episode, in recording order ("" = left unnamed). */
   names: string[];
+  /** Modern robot takes are matched by identity, independently of upload order. */
+  episodeIds?: string[];
 }
 
 const KEY = "nori.pendingEpisodeNames.v1";
@@ -62,25 +48,26 @@ function save(sets: PendingNameSet[]) {
   }
 }
 
-/** Queue a session's names for application. No-op if none are non-empty. */
+/** Queue one modern take or a legacy session. No-op if all names are empty. */
 export function addPendingNames(set: PendingNameSet): void {
   if (!set.names.some((n) => n)) return;
-  save([...load(), set]);
+  const prior = load().filter((pending) => !set.episodeIds?.[0] || pending.episodeIds?.[0] !== set.episodeIds[0]);
+  save([...prior, set]);
 }
 
-/** How many sessions still have names waiting to be applied. */
+/** How many naming updates are still waiting to be applied. */
 export function pendingNameCount(): number {
   return load().length;
 }
 
-/** Try to apply every pending set. Returns how many sessions were applied and
+/** Try to apply every pending set. Returns how many updates were applied and
  * how many remain (their bundles haven't uploaded/promoted yet, or no bundle
  * matched safely). Safe to call repeatedly — a set is removed only after every
  * one of its non-empty names is written. */
 export async function applyPendingNames(
   baseUrl: string,
   fetcher: Fetcher,
-): Promise<{ applied: number; pending: number }> {
+): Promise<{ applied: number; pending: number; identityUnavailable?: boolean }> {
   let sets = load();
   if (sets.length === 0) return { applied: 0, pending: 0 };
 
@@ -88,6 +75,7 @@ export async function applyPendingNames(
   const used = new Set<string>();
   const remaining: PendingNameSet[] = [];
   let applied = 0;
+  let identityUnavailable = false;
 
   // Oldest session first, matched to its oldest eligible bundle, so two
   // same-task same-count sessions pair up chronologically instead of both
@@ -100,8 +88,9 @@ export async function applyPendingNames(
         (b) =>
           b.status === "PROMOTED" &&
           !used.has(b.session_id) &&
-          b.episode_count === set.names.length &&
-          Date.parse(b.created_at) >= t0,
+          (set.episodeIds?.length
+            ? !b.recording_metadata?.episode_id || set.episodeIds.includes(b.recording_metadata.episode_id)
+            : b.episode_count === set.names.length && Date.parse(b.created_at) >= t0),
       )
       .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
 
@@ -110,6 +99,23 @@ export async function applyPendingNames(
       try {
         const listing = await listRecordingEpisodes(baseUrl, fetcher, cand.session_id);
         const eps = listing.episodes;
+        if (set.episodeIds?.length) {
+          if (eps.length && eps.every((episode) => !episode.episode_id)) {
+            identityUnavailable = true;
+            continue;
+          }
+          // Each modern queue item is one acknowledged Keep. Never guess its
+          // target using prompt text, count, timestamps or arrival order.
+          const target = eps.find((ep) => ep.episode_id === set.episodeIds![0]);
+          if (!target) continue;
+          const name = set.names[0].trim();
+          if (name && target.name !== name) await nameRecordingEpisode(
+            baseUrl, fetcher, cand.session_id, target.index, name);
+          used.add(cand.session_id);
+          applied += 1;
+          done = true;
+          break;
+        }
         if (eps.length !== set.names.length) continue;
         if (!eps.every((e) => e.task === set.task)) continue;
         for (let i = 0; i < set.names.length; i++) {
@@ -130,5 +136,5 @@ export async function applyPendingNames(
     if (!done) remaining.push(set);
   }
   save(remaining);
-  return { applied, pending: remaining.length };
+  return { applied, pending: remaining.length, ...(identityUnavailable ? { identityUnavailable: true } : {}) };
 }

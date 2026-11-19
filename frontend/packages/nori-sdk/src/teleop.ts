@@ -1735,9 +1735,13 @@ export class RemoteTeleop {
       // recovery as `task`). The robot echoes `stereo: true` in record_status
       // while enforcing; older robots ignore the field entirely.
       stereo?: boolean;
+      collectionId?: string;
+      outcome?: "success" | "failure";
     },
   ) {
     const msg: Record<string, unknown> = { type: "record", action };
+    if (opts?.collectionId && action === "episode_start") msg.tags = [`nori:collection:${opts.collectionId}`];
+    if (opts?.outcome) msg.outcome = opts.outcome;
     // Task rides episode_start too: if session_start dropped on the unreliable
     // control channel, the robot auto-opens a session on episode_start and needs
     // the task from here so it isn't lost.
@@ -1750,12 +1754,15 @@ export class RemoteTeleop {
 
   recordConfirmed(action: RecordAction, opts: {
     task?: string; stereo?: boolean; reviewRequired?: boolean; episodeId?: string;
+    collectionId?: string; outcome?: "success" | "failure";
   } = {}, timeoutMs = 10000): Promise<RecordState> {
     const payload: Record<string, unknown> = {};
     if (opts.task) payload.task = opts.task;
     if (opts.stereo !== undefined) payload.stereo = opts.stereo;
     if (opts.reviewRequired !== undefined) payload.review_required = opts.reviewRequired;
     if (opts.episodeId) payload.episode_id = opts.episodeId;
+    if (opts.collectionId && action === "episode_start") payload.tags = [`nori:collection:${opts.collectionId}`];
+    if (opts.outcome) payload.outcome = opts.outcome;
     return this.recordRequests.request(action, payload, timeoutMs);
   }
 

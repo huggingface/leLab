@@ -16,6 +16,9 @@
 import type { RobotDescriptor, WatchdogProfile } from "../teleop";
 
 export interface MockSimOptions {
+  /** Optional fixture identity/epoch; time still comes from handleFrame(nowMs). */
+  recordingPrefix?: string;
+  recordingEpochMs?: number;
   descriptor?: RobotDescriptor;
   watchdog?: WatchdogProfile;
   initialState?: Record<string, number>;
@@ -99,10 +102,14 @@ export class MockDaemonSim {
   private rng: number;
   private readonly jogRate: number;
   private readonly actionRate: number;
+  private readonly recordingPrefix: string;
+  private readonly recordingEpochMs: number;
   // Motor whose idle holding current is always reported; null on a jointless descriptor.
   private readonly idleCurrentMotor: string | null;
 
   constructor(opts?: MockSimOptions) {
+    this.recordingPrefix = opts?.recordingPrefix ?? "mock-session";
+    this.recordingEpochMs = opts?.recordingEpochMs ?? 0;
     this.descriptor = opts?.descriptor ?? defaultDescriptor();
     this.watchdog = opts?.watchdog ?? { t_warn_ms: 300, t_stop_ms: 1000 };
     this.protocolVersion = opts?.protocolVersion ?? 1;
@@ -163,7 +170,7 @@ export class MockDaemonSim {
     const t = frame.type;
     if (t === "control") return this.handleControl(frame, nowMs);
     if (t === "command") return this.handleCommand(frame);
-    if (t === "record") return this.handleRecord(frame);
+    if (t === "record") return this.handleRecord(frame, nowMs);
     if (t === "navigation") return this.handleNavigation(frame, nowMs);
     if (t === "sensor_stream") return this.handleSensorStream(frame);
     // call / video / link / unknown: a real robot ignores unknown vocabulary too.
@@ -371,11 +378,15 @@ export class MockDaemonSim {
   private recDecisions = new Map<string, string>();
   private recReplies = new Map<string, Frame[]>();
   private recTask = "";
+  private recCollection = "";
+  private recMetadata = new Map<string, { episode_id: string; collection_id: string; task: string; outcome: string; recorded_at: string }>();
+  /** Metadata-only mock results; no backend uploads or training data are created. */
+  readonly keptRecordings: Array<{ episode_id: string; collection_id: string; task: string; outcome: string; recorded_at: string }> = [];
 
-  private handleRecord(frame: Frame): Frame[] {
+  private handleRecord(frame: Frame, nowMs: number): Frame[] {
     const id = typeof frame.request_id === "string" ? frame.request_id : "";
     if (id && this.recReplies.has(id)) return this.recReplies.get(id)!;
-    const replies = this.handleRecordInner(frame).map((reply) => id ? { ...reply, request_id: id } : reply);
+    const replies = this.handleRecordInner(frame, nowMs).map((reply) => id ? { ...reply, request_id: id } : reply);
     if (id) {
       this.recReplies.set(id, replies);
       if (this.recReplies.size > 128) this.recReplies.delete(this.recReplies.keys().next().value!);
@@ -383,7 +394,7 @@ export class MockDaemonSim {
     return replies;
   }
 
-  private handleRecordInner(frame: Frame): Frame[] {
+  private handleRecordInner(frame: Frame, nowMs: number): Frame[] {
     const status = (ok: boolean, error?: string): Frame => {
       const s: Frame = {
         type: "record_status", ok, recording: this.recEpisode !== null,
@@ -410,19 +421,30 @@ export class MockDaemonSim {
       if (!this.recPending.has(id)) return [status(false, "episode is not awaiting review")];
       this.recPending.delete(id);
       this.recDecisions.set(id, decision);
-      if (decision === "keep") this.recKept += 1;
+      if (decision === "keep") {
+        this.recKept += 1;
+        const metadata = this.recMetadata.get(id);
+        if (metadata) this.keptRecordings.push({ ...metadata });
+      }
+      this.recMetadata.delete(id);
       return [{ ...status(true), episode_id: id }];
     }
     // --- session/episode protocol ---
     if (a === "session_start" || a === "start") {
       if (this.recSessionOpen) return [status(false, "session already open")];
       this.recSessionOpen = true;
+      this.recCollection = "";
       this.recKept = 0;
       this.recStereo = frame.stereo === true;
       if (a === "start") { this.recSeq += 1; this.recEpisode = this.epId(); }  // alias
       return [status(true)];
     }
     if (a === "episode_start") {
+      const tags = Array.isArray(frame.tags) ? frame.tags.filter((tag): tag is string => typeof tag === "string" && tag.startsWith("nori:collection:")) : [];
+      if (tags.length > 1) return [status(false, "only one recording collection tag is allowed")];
+      const collection = tags[0]?.slice("nori:collection:".length) ?? "";
+      if (tags.length && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(collection)) return [status(false, "recording collection tag must contain a UUID")];
+      if (collection && this.recCollection && collection !== this.recCollection) return [status(false, "episode collection does not match the open session")];
       // Resilience: auto-open a session if session_start was dropped (matches
       // recorder.py _episode_start).
       if (!this.recSessionOpen) {
@@ -433,23 +455,34 @@ export class MockDaemonSim {
       if (this.recEpisode !== null) return [status(false, "already recording an episode")];
       this.recSeq += 1;
       this.recEpisode = this.epId();
+      this.recCollection = collection || this.recCollection;
       this.recReviewRequired = frame.review_required === true;
       this.recTask = String(frame.task ?? "");
+      this.recMetadata.set(this.recEpisode, { episode_id: this.recEpisode, collection_id: this.recCollection,
+        task: this.recTask, outcome: "success", recorded_at: new Date(this.recordingEpochMs + nowMs).toISOString() });
       return [status(true)];
     }
     if (a === "episode_stop") {
       if (this.recEpisode === null) return [status(false, "not recording an episode")];
+      const outcome = String(frame.outcome ?? "success");
+      if (!["success", "failure", "aborted"].includes(outcome)) return [status(false, "unknown outcome")];
       const id = this.recEpisode;
       if (frame.episode_id && frame.episode_id !== id) return [status(false, "episode does not match active recording")];
+      const metadata = this.recMetadata.get(id);
+      if (metadata) metadata.outcome = outcome;
       if (this.recReviewRequired) this.recPending.set(id, { task: this.recTask });
-      else this.recKept += 1;
+      else {
+        this.recKept += 1;
+        if (metadata) this.keptRecordings.push({ ...metadata });
+        this.recMetadata.delete(id);
+      }
       this.recEpisode = null;
       this.recReviewRequired = false;
       return [{ ...status(true), episode_id: id }];
     }
     if (a === "episode_discard") {
       if (!this.recSessionOpen) return [status(false, "no session open")];
-      if (this.recEpisode !== null) this.recEpisode = null;  // drop in-progress
+      if (this.recEpisode !== null) { this.recMetadata.delete(this.recEpisode); this.recEpisode = null; }
       else if (this.recKept > 0) this.recKept -= 1;          // drop just-stopped
       else return [status(false, "no episode to discard")];
       return [status(true)];
@@ -458,6 +491,7 @@ export class MockDaemonSim {
       if (!this.recSessionOpen) return [status(false, "no session open")];
       if (a === "stop" && this.recEpisode !== null) { this.recEpisode = null; this.recKept += 1; }
       this.recSessionOpen = false;
+      this.recCollection = "";
       this.recEpisode = null;
       const closing = status(true);
       this.recStereo = false;
@@ -466,6 +500,7 @@ export class MockDaemonSim {
     if (a === "session_discard" || a === "discard" || a === "discard_last") {
       if (!this.recSessionOpen) return [status(false, "nothing to discard")];
       this.recSessionOpen = false;
+      this.recCollection = "";
       this.recEpisode = null;
       this.recKept = 0;
       const closing = status(true);
@@ -477,7 +512,7 @@ export class MockDaemonSim {
   }
 
   private epId(): string {
-    return `mock-session/episode-${String(this.recSeq).padStart(4, "0")}`;
+    return `${this.recordingPrefix}/episode-${String(this.recSeq).padStart(4, "0")}`;
   }
 
   private handleControl(frame: Frame, nowMs: number): Frame[] {
