@@ -47,6 +47,77 @@ def test_get_saved_robot_port_returns_none_when_unset(tmp_lerobot_home: Path) ->
     assert cfg.get_saved_robot_port("leader") is None
 
 
+class _Port:
+    def __init__(self, device: str) -> None:
+        self.device = device
+
+
+def _linux_with_ports(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, devices: list[str]) -> Path:
+    """A Linux with `devices` as pyserial's comports and an empty /dev/serial/by-id."""
+    from serial.tools import list_ports
+
+    from lelab.utils import config as cfg
+
+    monkeypatch.setattr(cfg.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(list_ports, "comports", lambda: [_Port(d) for d in devices])
+    by_id = tmp_path / "by-id"
+    by_id.mkdir()
+    monkeypatch.setattr(cfg, "SERIAL_BY_ID_DIR", by_id)
+    return by_id
+
+
+def test_linux_ports_come_from_pyserial_not_every_tty_node(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A Jetson has about 90 /dev/tty* nodes and none of them is an arm unless a USB
+    adapter is plugged in; only the serial devices pyserial knows are listed."""
+    from lelab.utils import config as cfg
+
+    _linux_with_ports(monkeypatch, tmp_path, ["/dev/ttyACM1", "/dev/ttyACM0"])
+
+    assert cfg.find_available_ports() == ["/dev/ttyACM0", "/dev/ttyACM1"]
+
+
+def test_linux_ports_use_the_stable_by_id_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The by-id link carries the adapter's serial number, so a saved port keeps
+    opening the same arm when ttyACM0 and ttyACM1 swap with plug order."""
+    from lelab.utils import config as cfg
+
+    by_id = _linux_with_ports(monkeypatch, tmp_path, ["/dev/ttyACM0", "/dev/ttyACM1"])
+    (tmp_path / "ttyACM0").touch()
+    (by_id / "usb-1a86_USB_Single_Serial_5A46-if00").symlink_to(tmp_path / "ttyACM0")
+    monkeypatch.setattr(
+        list_ports_module(), "comports", lambda: [_Port(str(tmp_path / "ttyACM0")), _Port("/dev/ttyACM1")]
+    )
+
+    ports = cfg.find_available_ports()
+
+    assert ports == sorted([str(by_id / "usb-1a86_USB_Single_Serial_5A46-if00"), "/dev/ttyACM1"])
+    # The unplug diff still names the one that vanished.
+    monkeypatch.setattr(list_ports_module(), "comports", lambda: [_Port("/dev/ttyACM1")])
+    assert cfg.detect_port_after_disconnect(ports, timeout_s=1.0, poll_interval_s=0.01) == str(
+        by_id / "usb-1a86_USB_Single_Serial_5A46-if00"
+    )
+
+
+def list_ports_module():
+    from serial.tools import list_ports
+
+    return list_ports
+
+
+def test_windows_and_macos_port_listing_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lelab.utils import config as cfg
+
+    monkeypatch.setattr(cfg.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(list_ports_module(), "comports", lambda: [_Port("COM7"), _Port("COM3")])
+    assert cfg.find_available_ports() == ["COM3", "COM7"]
+
+    monkeypatch.setattr(cfg.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(cfg.Path, "glob", lambda self, pattern: [Path("/dev/tty.usbmodem1")])
+    assert cfg.find_available_ports() == ["/dev/tty.usbmodem1"]
+
+
 def test_saved_robot_config_round_trips(tmp_lerobot_home: Path) -> None:
     from lelab.utils import config as cfg
 
