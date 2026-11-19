@@ -76,6 +76,8 @@ class RecordingRequest(BaseModel):
     private: bool = False
     resume: bool = False
     streaming_encoding: bool = True
+    # Keep a take that runs to episode_time_s instead of re-recording it (lerobot-record keeps it).
+    save_on_timeout: bool = False
     cameras: dict[str, dict[str, Any]] = {}
     test_mode: bool = False  # Skip robot connection for testing
 
@@ -294,6 +296,7 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
             "exit_early": False,  # Right arrow key -> "Skip to next episode" button
             "stop_recording": False,  # ESC key -> "Stop recording" button
             "rerecord_episode": False,  # Left arrow key -> "Re-record episode" button
+            "save_on_timeout": request.save_on_timeout,
         }
 
         record_config = create_record_config(request)
@@ -772,6 +775,17 @@ def handle_upload_dataset(request: UploadRequest) -> dict[str, Any]:
         return {"success": False, "message": f"Failed to upload dataset: {str(e)}"}
 
 
+def _rerecord_after_full_take(web_events: dict) -> bool:
+    """Whether a recording phase that was not ended by "Skip to next episode" is dropped.
+
+    Re-record and Stop always drop the take. A take that ran to ``episode_time_s`` is dropped
+    unless ``save_on_timeout`` is set, in which case it is saved like ``lerobot-record`` does.
+    """
+    if web_events.get("rerecord_episode") or web_events.get("stop_recording"):
+        return True
+    return not web_events.get("save_on_timeout", False)
+
+
 def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDataset:
     """
     Implement recording with phase tracking - exactly mirrors original record() function behavior
@@ -975,6 +989,11 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
                 )
                 # Reset our tracking flag
                 web_events["_exit_early_triggered"] = False
+            elif not _rerecord_after_full_take(web_events):
+                logger.info("⏰ RECORDING PHASE COMPLETED DUE TO TIMEOUT - saving episode (save_on_timeout)")
+                print(
+                    f"⏰ STATUS CHANGE: Recording timeout reached for episode {current_episode} - saving it"
+                )
             else:
                 # Recording completed due to timeout - trigger re-record behavior
                 logger.info("⏰ RECORDING PHASE COMPLETED DUE TO TIMEOUT - triggering re-record")
