@@ -38,6 +38,14 @@ replay_thread: threading.Thread | None = None
 replay_error: str | None = None
 _stop = threading.Event()
 
+# The arm is wherever it was left when a replay starts; the episode's first
+# action is wherever the leader was when the recording started. The gap is
+# closed at RAMP_SPEED (degrees per second for the joints, points of the 0-100
+# gripper range for the gripper), within these bounds, before playback.
+RAMP_SPEED = 60.0
+MIN_RAMP_S = 0.5
+MAX_RAMP_S = 3.0
+
 
 class ReplayRequest(BaseModel):
     follower_port: str
@@ -53,6 +61,38 @@ def _episode_actions(repo_id: str, episode_index: int) -> tuple[list[dict[str, f
     names = info["features"]["action"]["names"]
     rows = episode_media.load_episode_actions(dataset_dir, episode_index)
     return [dict(zip(names, row, strict=True)) for row in rows], info["fps"]
+
+
+def ramp_steps(present: dict[str, float], first: dict[str, float], fps: int) -> list[dict[str, float]]:
+    """The actions that take the arm from `present` to `first` before an episode plays.
+
+    `present` is keyed by motor (as `bus.sync_read` returns it), `first` by action
+    name (`<motor>.pos`). A linear move at RAMP_SPEED, MIN_RAMP_S..MAX_RAMP_S long,
+    sampled at the replay rate; the last step is `first` itself.
+    """
+    start = {name: present.get(name.removesuffix(".pos"), value) for name, value in first.items()}
+    farthest = max((abs(first[name] - start[name]) for name in first), default=0.0)
+    ramp_s = min(max(farthest / RAMP_SPEED, MIN_RAMP_S), MAX_RAMP_S)
+    steps = max(1, round(ramp_s * fps))
+    return [
+        {name: start[name] + (first[name] - start[name]) * (i / steps) for name in first}
+        for i in range(1, steps + 1)
+    ]
+
+
+def _move_to_first_action(robot, first: dict[str, float], fps: int) -> bool:
+    """Bring the arm to the episode's start pose at a safe speed. Sending the first
+    recorded action straight away makes the motors jump there at full speed from
+    wherever the arm was left, which with a gripper full of object or an arm at
+    rest on the table is a hit, not a move. Returns False when stopped midway."""
+    present = robot.bus.sync_read("Present_Position")
+    for action in ramp_steps(present, first, fps):
+        if _stop.is_set():
+            return False
+        start = time.perf_counter()
+        robot.send_action(action)
+        precise_sleep(1 / fps - (time.perf_counter() - start))
+    return True
 
 
 def handle_start_replay(request: ReplayRequest) -> dict[str, Any]:
@@ -92,6 +132,12 @@ def handle_start_replay(request: ReplayRequest) -> dict[str, Any]:
         robot.bus.disable_torque()
         robot.bus.write_calibration(robot.calibration)
         robot.configure()
+        # Before the caller is told the replay runs, so the footage it starts
+        # alongside stays in step with the arm.
+        if actions and not _move_to_first_action(robot, actions[0], fps):
+            safe_disconnect_device(robot, logger)
+            replay_active = False
+            return {"success": False, "message": "Replay stopped before the episode started"}
     except Exception as e:
         safe_disconnect_device(robot, logger)
         replay_active = False
