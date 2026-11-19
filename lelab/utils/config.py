@@ -166,6 +166,33 @@ def setup_follower_calibration_file(follower_config: str):
     return follower_config_name
 
 
+# udev keeps one symlink per USB serial adapter here, named after its vendor,
+# product and serial number, so it points at the same adapter whatever ttyUSB
+# or ttyACM number the kernel hands out this time.
+SERIAL_BY_ID_DIR = Path("/dev/serial/by-id")
+
+
+def _linux_serial_ports(list_ports) -> list[str]:
+    """Serial devices with a driver behind them, each under its stable by-id name when it has one.
+
+    `/dev/tty*` is mostly consoles, pseudo-terminals and the board's own UARTs, none
+    of which carries a motor bus (90 nodes on a Jetson Orin NX with no arm plugged in:
+    tty0-63, ttyS*, the Tegra UARTs, ttyGS0, ttyp*); pyserial's `comports()` keeps the
+    USB and platform serial devices only. Two identical adapters also trade ttyUSB0
+    and ttyUSB1 with plug order, so the leader's saved port can open the follower.
+    """
+    devices = sorted(port.device for port in list_ports.comports())
+    by_id: dict[str, str] = {}
+    if SERIAL_BY_ID_DIR.is_dir():
+        for link in sorted(SERIAL_BY_ID_DIR.iterdir()):
+            try:
+                target = str(link.resolve())
+            except OSError:
+                continue
+            by_id.setdefault(target, str(link))
+    return [by_id.get(device, device) for device in devices]
+
+
 def find_available_ports():
     """Find all available serial ports on the system"""
     try:
@@ -173,10 +200,13 @@ def find_available_ports():
     except ImportError as exc:
         raise ImportError("pyserial library is required. Install it with: pip install pyserial") from exc
 
-    if platform.system() == "Windows":
+    system = platform.system()
+    if system == "Windows":
         # List COM ports using pyserial
         ports = [port.device for port in list_ports.comports()]
-    else:  # Linux/macOS
+    elif system == "Linux":
+        ports = _linux_serial_ports(list_ports)
+    else:  # macOS
         # List /dev/tty* ports for Unix-based systems
         ports = [str(path) for path in Path("/dev").glob("tty*")]
     return sorted(ports)
