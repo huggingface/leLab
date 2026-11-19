@@ -27,10 +27,10 @@ describe("recording session identity", () => {
   });
   it("restores a group for a new client after reload and clears it on Finish", () => {
     const scope = "backend/robot-0000";
-    const session = { collectionId: newRecordingCollectionId(), task: "Same prompt", startedAt: new Date().toISOString() };
+    const session = { collectionId: newRecordingCollectionId(), task: "Same prompt", startedAt: new Date().toISOString(), episodeIds: ["take-a"] };
     rememberRecordingSession({}, scope, session);
     const reconnected = {};
-    expect(restoreRecordingSession(reconnected, scope)).toEqual(session);
+    expect(restoreRecordingSession(reconnected, scope, "take-a")).toEqual(session);
     expect(restoreRecordingSession({}, "backend/robot-0001")).toBeNull();
     expect(restoreRecordingSession({}, "other-backend/robot-0000")).toBeNull();
     forgetRecordingSession(reconnected, scope);
@@ -40,9 +40,32 @@ describe("recording session identity", () => {
   it("preserves identity across card remounts when storage is unavailable", () => {
     vi.stubGlobal("sessionStorage", { getItem() { throw Error("blocked"); }, setItem() { throw Error("blocked"); } });
     const client = {};
-    const session = { collectionId: newRecordingCollectionId(), task: "Prompt", startedAt: new Date().toISOString() };
+    const session = { collectionId: newRecordingCollectionId(), task: "Prompt", startedAt: new Date().toISOString(), episodeIds: [] };
     rememberRecordingSession(client, "robot", session);
     expect(restoreRecordingSession(client, "robot")).toEqual(session);
     expect(restoreRecordingSession(client, "other robot")).toBeNull();
+  });
+  it("discards a v1 journal rather than guessing its recovered episode membership", () => {
+    const scope = "backend/robot";
+    sessionStorage.setItem(`nori.recordingSession.v1:${scope}`, JSON.stringify({
+      collectionId: newRecordingCollectionId(), task: "Same prompt", startedAt: new Date().toISOString(),
+    }));
+    expect(restoreRecordingSession({}, scope, "unknown-take")).toBeNull();
+    // A rollback's old reader sees no incompatible or stale session entry.
+    expect(sessionStorage.getItem(`nori.recordingSession.v1:${scope}`)).toBeNull();
+    expect(sessionStorage.getItem(`nori.recordingSession.v2:${scope}`)).toBeNull();
+  });
+  it.each(["same client", "new client"])("rejects a different recovered episode on the %s even with the same task", (kind) => {
+    const owner = {};
+    const scope = "backend/robot";
+    rememberRecordingSession(owner, scope, { collectionId: newRecordingCollectionId(), task: "Same prompt",
+      startedAt: new Date().toISOString(), episodeIds: ["take-a"] });
+    expect(restoreRecordingSession(kind === "same client" ? owner : {}, scope, "take-b")).toBeNull();
+    expect(sessionStorage.getItem(`nori.recordingSession.v2:${scope}`)).toBeNull();
+  });
+  it("does not infer a new client's group from an open session without an episode ID", () => {
+    rememberRecordingSession({}, "robot", { collectionId: newRecordingCollectionId(), task: "Prompt",
+      startedAt: new Date().toISOString(), episodeIds: ["take-a"] });
+    expect(restoreRecordingSession({}, "robot")).toBeNull();
   });
 });

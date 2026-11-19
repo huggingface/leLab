@@ -18,6 +18,7 @@ const CLOCK_SKEW_MS = 5 * 60 * 1000;
 const RETRY_MS = 30_000;
 const MAX_RETRY_MS = 5 * 60_000;
 const MAX_LISTINGS = 8;
+const REQUEST_TIMEOUT_MS = 20_000;
 type Result = { applied: number; pending: number; identityUnavailable?: boolean };
 type Listing = Awaited<ReturnType<typeof listRecordingEpisodes>>;
 type RetryState = {
@@ -32,6 +33,38 @@ type RetryState = {
 const retries = new WeakMap<Fetcher, Map<string, RetryState>>();
 const identityBased = (set: PendingNameSet) => Boolean(set.episodeIds?.length);
 const signature = (set: PendingNameSet) => JSON.stringify(set);
+
+class NamingRequestTimeout extends Error {
+  constructor() { super("Recording naming request timed out; the name remains queued for verification"); }
+}
+
+/** Bound each complete API operation (including auth and JSON parsing), not
+ * just fetch headers. Abort transport and ignore late results. In particular,
+ * an uncertain PATCH stays queued until a fresh listing verifies its result. */
+async function namingRequest<T>(fetcher: Fetcher, operation: (bounded: Fetcher) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const detach: (() => void)[] = [];
+  let timer: ReturnType<typeof setTimeout>;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new NamingRequestTimeout());
+    }, REQUEST_TIMEOUT_MS);
+  });
+  const bounded: Fetcher = (url, options) => {
+    // Auth may finish after the deadline. Never send that late request.
+    if (controller.signal.aborted) return Promise.reject(new NamingRequestTimeout());
+    if (options?.signal) {
+      const upstream = options.signal;
+      const abort = () => controller.abort();
+      if (upstream.aborted) abort();
+      else { upstream.addEventListener("abort", abort, { once: true }); detach.push(() => upstream.removeEventListener("abort", abort)); }
+    }
+    return fetcher(url, { ...options, signal: controller.signal });
+  };
+  try { return await Promise.race([operation(bounded), deadline]); }
+  finally { clearTimeout(timer!); detach.forEach((remove) => remove()); }
+}
 
 function read(key: string): PendingNameSet[] {
   try {
@@ -107,7 +140,7 @@ export function applyPendingNames(baseUrl: string, fetcher: Fetcher): Promise<Re
 }
 
 async function run(baseUrl: string, fetcher: Fetcher, sets: PendingNameSet[], state: RetryState): Promise<Result> {
-  const { bundles } = await getRobotRecordings(baseUrl, fetcher);
+  const { bundles } = await namingRequest(fetcher, (bounded) => getRobotRecordings(baseUrl, bounded));
   const present = new Set(bundles.map((b) => b.session_id));
   for (const [id, entry] of state.identities) {
     if (!present.has(id) || entry.until <= Date.now()) state.identities.delete(id);
@@ -118,7 +151,7 @@ async function run(baseUrl: string, fetcher: Fetcher, sets: PendingNameSet[], st
   let requests = 0;
   let applied = 0;
   let identityUnavailable = false;
-  for (const set of [...sets].sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt))) {
+  retrySets: for (const set of [...sets].sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt))) {
     const modern = identityBased(set);
     const targetId = set.episodeIds?.[0];
     const candidates = bundles.filter((b) => {
@@ -143,7 +176,7 @@ async function run(baseUrl: string, fetcher: Fetcher, sets: PendingNameSet[], st
         if (!listing) {
           if (requests >= MAX_LISTINGS) break;
           requests++;
-          listing = listRecordingEpisodes(baseUrl, fetcher, cand.session_id);
+          listing = namingRequest(fetcher, (bounded) => listRecordingEpisodes(baseUrl, bounded, cand.session_id));
           listings.set(cand.session_id, listing);
         }
         const { episodes } = await listing;
@@ -153,19 +186,24 @@ async function run(baseUrl: string, fetcher: Fetcher, sets: PendingNameSet[], st
           const target = episodes.find((e) => e.episode_id === targetId);
           if (!target) continue;
           const name = set.names[0].trim();
-          if (name && target.name !== name) await nameRecordingEpisode(baseUrl, fetcher, cand.session_id, target.index, name);
+          if (name && target.name !== name) await namingRequest(fetcher, (bounded) => nameRecordingEpisode(baseUrl, bounded, cand.session_id, target.index, name));
         } else {
           if (episodes.length !== set.names.length || !episodes.every((e) => e.task === set.task)) continue;
           for (let i = 0; i < set.names.length; i++) {
             const name = set.names[i].trim();
-            if (name && episodes[i].name !== name) await nameRecordingEpisode(baseUrl, fetcher, cand.session_id, episodes[i].index, name);
+            if (name && episodes[i].name !== name) await namingRequest(fetcher, (bounded) => nameRecordingEpisode(baseUrl, bounded, cand.session_id, episodes[i].index, name));
           }
         }
         used.add(cand.session_id);
         completed.add(signature(set));
         applied++;
         break;
-      } catch { break; } // Keep failed writes queued; a fresh retry verifies names.
+      } catch (error) {
+        // A timeout ends this pass so an unavailable service cannot hold the
+        // retry lock for one deadline per queued name. Completed work is saved.
+        if (error instanceof NamingRequestTimeout) break retrySets;
+        break;
+      }
     }
   }
   // Preserve names queued/edited while this pass was waiting on the network.

@@ -11,7 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { useApi } from "@/contexts/ApiContext";
 import { useTeleopSession } from "@/nori/TeleopSessionContext";
 import { EphemeralEpisodeRecorder } from "@/nori/remote/episodePreview";
-import { forgetRecordingSession, newRecordingCollectionId, rememberRecordingSession, restoreRecordingSession } from "./recordingSession";
+import { forgetRecordingSession, newRecordingCollectionId, rememberRecordingEpisode, rememberRecordingSession, restoreRecordingSession } from "./recordingSession";
 import {
   addPendingNames,
   applyPendingNames,
@@ -115,8 +115,10 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
     if (!status.reviewSupported) return;
     const hasTake = Boolean(status.activeReviewEpisodeId || status.pendingReviews?.length);
     if (teleop && (status.sessionOpen || hasTake)) {
-      const saved = restoreRecordingSession(teleop, sessionScope);
+      const recoveredId = status.activeReviewEpisodeId || status.pendingReviews?.[0]?.episodeId;
+      const saved = restoreRecordingSession(teleop, sessionScope, recoveredId);
       collectionRef.current = saved?.collectionId ?? "";
+      sessionStartRef.current = saved?.startedAt ?? "";
       if (saved) {
         sessionStartRef.current = saved.startedAt;
         setTask(saved.task);
@@ -192,7 +194,7 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
       setNamesApplied(false);
       sessionStartRef.current = new Date().toISOString();
       rememberRecordingSession(teleop, sessionScope, {
-        collectionId, task: task.trim() || "teleop session", startedAt: sessionStartRef.current,
+        collectionId, task: task.trim() || "teleop session", startedAt: sessionStartRef.current, episodeIds: [],
       });
       setPhase({ kind: "session" });
     } catch (e) {
@@ -266,6 +268,7 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
           task: task.trim() || "teleop session", stereo, reviewRequired: true, collectionId,
         });
         if (!status.episodeId) throw new Error("Robot did not return an episode ID; refresh recording state");
+        rememberRecordingEpisode(teleop, sessionScope, status.episodeId);
         setPhase({ kind: "recording", mode: "review", episodeId: status.episodeId });
       }
       setOutcome("success");
@@ -275,7 +278,7 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
     } finally {
       setBusy(false);
     }
-  }, [teleop, busy, recordingMode, task, stereo]);
+  }, [teleop, busy, recordingMode, task, stereo, sessionScope]);
 
   const stopEpisode = useCallback(async () => {
     if (!teleop || busy || phase.kind !== "recording") return;
@@ -328,6 +331,9 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
       setPendingReviews(remaining);
       if (remaining.length) {
         const next = remaining[0];
+        const saved = restoreRecordingSession(teleop, sessionScope, next.episodeId);
+        collectionRef.current = saved?.collectionId ?? "";
+        sessionStartRef.current = saved?.startedAt ?? "";
         setTask(next.task);
         setPhase({ kind: "review", mode: "review", episodeId: next.episodeId, url: null, decision: next.decision });
       } else {
@@ -343,7 +349,7 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
     } finally {
       setReviewBusy(false);
     }
-  }, [teleop, phase, reviewBusy, recordingMode, nameDraft, pendingReviews, task]);
+  }, [teleop, phase, reviewBusy, recordingMode, nameDraft, pendingReviews, task, sessionScope]);
 
   const keepEpisode = useCallback(() => resolveReview("keep"), [resolveReview]);
   const rejectEpisode = useCallback(() => resolveReview("reject"), [resolveReview]);

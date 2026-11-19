@@ -263,6 +263,44 @@ describe("compatibility acceptance criteria", () => {
     expect(robot.collection).toBe("11111111-1111-4111-8111-111111111111");
   });
 
+  it.each(["navigation", "new client"])("ignores a stale group when a different take is recovered through %s", async (recovery) => {
+    const robot = new Robot("modern");
+    let ui = await mount(robot);
+    await ui.task();
+    await ui.click("Start session");
+    await ui.click("Start episode");
+    await ui.click("Stop episode");
+    await ui.unmount();
+    // Another session recorded the identical prompt while this card was away.
+    robot.collection = "22222222-2222-4222-8222-222222222222";
+    robot.pending = [{ episode_id: "different-session-take", task: "compatibility" }];
+    if (recovery === "navigation") await ui.remount();
+    else ui = await mount(robot);
+    await ui.click("Keep");
+    await ui.click("Start episode");
+    expect(robot.recording, ui.ui()).toBe(true);
+    expect(robot.collection).toBe("22222222-2222-4222-8222-222222222222");
+    expect(robot.sent.filter((f) => f.action === "episode_start").at(-1)?.tags).toBeUndefined();
+  });
+
+  it("revalidates the journal when review advances to a take from another session", async () => {
+    const robot = new Robot("modern");
+    const ui = await mount(robot);
+    await ui.task();
+    await ui.click("Start session");
+    await ui.click("Start episode");
+    await ui.click("Stop episode");
+    robot.pending.push({ episode_id: "other-session-take", task: "compatibility" });
+    robot.collection = "22222222-2222-4222-8222-222222222222";
+    await ui.remount();
+    await ui.click("Keep");
+    await ui.click("Keep");
+    await ui.click("Start episode");
+    expect(robot.recording, ui.ui()).toBe(true);
+    expect(robot.collection).toBe("22222222-2222-4222-8222-222222222222");
+    expect(robot.sent.filter((f) => f.action === "episode_start").at(-1)?.tags).toBeUndefined();
+  });
+
   it("starts and keeps recordings when the browser has no crypto.randomUUID", async () => {
     vi.stubGlobal("crypto", undefined);
     const robot = new Robot("modern");

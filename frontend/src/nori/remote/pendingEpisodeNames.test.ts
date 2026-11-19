@@ -55,7 +55,7 @@ describe("pending per-take names", () => {
     expect(await applyPendingNames("", fetcher)).toEqual({ applied: 0, pending: 1 });
     await vi.advanceTimersByTimeAsync(30_000);
     expect(await applyPendingNames("", fetcher)).toEqual({ applied: 1, pending: 0 });
-    expect(nameRecordingEpisode).toHaveBeenLastCalledWith("", fetcher, "upload", 0, "new name");
+    expect(nameRecordingEpisode).toHaveBeenLastCalledWith("", expect.any(Function), "upload", 0, "new name");
   });
   it("falls back to manual naming when an older backend omits episode IDs", async () => {
     queued("wanted", "My name");
@@ -122,7 +122,7 @@ describe("pending per-take names", () => {
     let release!: (value: never) => void;
     vi.mocked(getRobotRecordings).mockReturnValue(new Promise((resolve) => { release = resolve; }));
     const first = applyPendingNames("", fetcher);
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(applyPendingNames("", fetcher)).toBe(first);
     expect(getRobotRecordings).toHaveBeenCalledTimes(1);
     queued("episode-b", "Second");
@@ -143,7 +143,7 @@ describe("pending per-take names", () => {
     expect(listRecordingEpisodes).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     expect(await applyPendingNames("", fetcher)).toMatchObject({ applied: 1, pending: 0 });
-    expect(nameRecordingEpisode).toHaveBeenCalledWith("", fetcher, "old", 0, "My name");
+    expect(nameRecordingEpisode).toHaveBeenCalledWith("", expect.any(Function), "old", 0, "My name");
   });
 
   it("prioritizes exact metadata identity and refreshes the index before a retried write", async () => {
@@ -159,7 +159,7 @@ describe("pending per-take names", () => {
     expect(listRecordingEpisodes).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(await applyPendingNames("", fetcher)).toMatchObject({ applied: 1, pending: 0 });
-    expect(nameRecordingEpisode).toHaveBeenLastCalledWith("", fetcher, "right", 1, "My name");
+    expect(nameRecordingEpisode).toHaveBeenLastCalledWith("", expect.any(Function), "right", 1, "My name");
   });
   it("still applies names stored by the older session-based UI", async () => {
     const at = new Date().toISOString();
@@ -167,6 +167,88 @@ describe("pending per-take names", () => {
     vi.mocked(getRobotRecordings).mockResolvedValue({ bundles: [{ session_id: "old", status: "PROMOTED", episode_count: 1, created_at: at }] } as never);
     vi.mocked(listRecordingEpisodes).mockResolvedValue({ episodes: [{ index: 0, task: "Old prompt", name: "" }] } as never);
     expect(await applyPendingNames("", fetcher)).toEqual({ applied: 1, pending: 0 });
-    expect(nameRecordingEpisode).toHaveBeenCalledWith("", fetcher, "old", 0, "old custom name");
+    expect(nameRecordingEpisode).toHaveBeenCalledWith("", expect.any(Function), "old", 0, "old custom name");
+  });
+
+  it("aborts a stalled recordings request, releases the lock and retries queued names", async () => {
+    queued("wanted", "My name");
+    let signal!: AbortSignal;
+    fetcher.mockImplementation((_url: string, options: RequestInit) => {
+      signal = options.signal!;
+      return new Promise(() => {});
+    });
+    vi.mocked(getRobotRecordings).mockImplementationOnce(async (_base, bounded) => {
+      await bounded("/fake-recordings");
+      return { bundles: [], on_robot_pending: 0 };
+    }).mockResolvedValue({ bundles: [bundle("upload")] } as never);
+    const pending = applyPendingNames("", fetcher);
+    const refused = expect(pending).rejects.toThrow(/timed out/);
+    await vi.advanceTimersByTimeAsync(19_000);
+    expect(applyPendingNames("", fetcher)).toBe(pending);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await refused;
+    expect(signal.aborted).toBe(true);
+    expect(pendingNameCount()).toBe(1);
+    vi.mocked(listRecordingEpisodes).mockResolvedValue({ episodes: [{ index: 0, episode_id: "wanted" }] } as never);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(await applyPendingNames("", fetcher)).toMatchObject({ applied: 1, pending: 0 });
+  });
+
+  it("stops a pass after one timed-out episode listing and preserves every queued name", async () => {
+    for (let i = 0; i < 3; i++) queued(`wanted-${i}`, `Name ${i}`);
+    vi.mocked(getRobotRecordings).mockResolvedValue({ bundles: [bundle("upload")] } as never);
+    vi.mocked(listRecordingEpisodes).mockImplementation(() => new Promise(() => {}));
+    const pending = applyPendingNames("", fetcher);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(await pending).toMatchObject({ applied: 0, pending: 3 });
+    expect(listRecordingEpisodes).toHaveBeenCalledTimes(1);
+    expect(nameRecordingEpisode).not.toHaveBeenCalled();
+  });
+
+  it.each(["modern", "legacy queue"])("verifies an uncertain %s rename saved by the server before retrying the write", async (kind) => {
+    if (kind === "modern") queued("wanted", "My name");
+    else addPendingNames({ startedAt: new Date().toISOString(), task: "Same prompt", names: ["My name"] });
+    let savedName = "";
+    let signal!: AbortSignal;
+    vi.mocked(getRobotRecordings).mockResolvedValue({ bundles: [bundle("upload")] } as never);
+    vi.mocked(listRecordingEpisodes).mockImplementation(async () => ({
+      episodes: [{ index: savedName ? 1 : 2, episode_id: "wanted", name: savedName, task: "Same prompt" }],
+    }) as never);
+    fetcher.mockImplementation((_url: string, options: RequestInit) => {
+      savedName = "My name"; // server commits, response never arrives
+      signal = options.signal!;
+      return new Promise(() => {});
+    });
+    vi.mocked(nameRecordingEpisode).mockImplementationOnce(async (_base, bounded) => {
+      await bounded("/fake-name", { method: "PATCH" });
+      return { index: 2, name: "My name" };
+    });
+    const pending = applyPendingNames("", fetcher);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(await pending).toMatchObject({ applied: 0, pending: 1 });
+    expect(signal.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(await applyPendingNames("", fetcher)).toMatchObject({ applied: 1, pending: 0 });
+    expect(listRecordingEpisodes).toHaveBeenCalledTimes(2);
+    expect(nameRecordingEpisode).toHaveBeenCalledTimes(1);
+  });
+
+  it("prevents a rename delayed in auth from sending after its deadline", async () => {
+    queued("wanted", "My name");
+    let releaseAuth!: () => void;
+    vi.mocked(getRobotRecordings).mockResolvedValue({ bundles: [bundle("upload")] } as never);
+    vi.mocked(listRecordingEpisodes).mockResolvedValue({ episodes: [{ index: 0, episode_id: "wanted" }] } as never);
+    vi.mocked(nameRecordingEpisode).mockImplementationOnce(async (_base, bounded) => {
+      await new Promise<void>((resolve) => { releaseAuth = resolve; });
+      await bounded("/fake-name", { method: "PATCH" });
+      return { index: 0, name: "My name" };
+    });
+    const pending = applyPendingNames("", fetcher);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(await pending).toMatchObject({ applied: 0, pending: 1 });
+    releaseAuth();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(pendingNameCount()).toBe(1);
   });
 });

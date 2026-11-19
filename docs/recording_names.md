@@ -48,11 +48,19 @@ makes at most eight episode-listing requests, shares lookups between pending
 names, and never overlaps another pass for the same API/fetcher. Unsuccessful
 passes back off from 30 seconds to five minutes. Cached identity discovery
 expires after five minutes, and each write uses a fresh listing's episode index.
+Each API operation has a 20-second deadline, including authentication and response
+parsing. A timeout aborts transport and releases the retry lock. Uncertain rename
+writes remain queued; the next pass re-lists the episode and skips a write that
+the server already saved. Requests delayed in authentication cannot send after
+their deadline.
 
 The active collection is cached with the teleop client across card navigation,
-and in tab-local sessionStorage by backend/robot across reload/reconnect. Finish
-session clears it. Recovery without a saved collection omits the collection tag
-so the live gateway retains its group. UUID generation supports older browsers
+and in tab-local sessionStorage by backend/robot across reload/reconnect. The v2
+journal tracks acknowledged episode IDs; recovery reuses its group only when the
+recovered episode belongs to it. A live client can also resume between episodes.
+Unverifiable v1 journals are discarded, and Finish session clears the journal.
+Recovery without a verified collection omits the collection tag so the live
+gateway retains its group. UUID generation supports older browsers
 without `crypto.randomUUID`; these IDs are not authentication credentials.
 
 Unit coverage:
