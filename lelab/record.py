@@ -23,6 +23,7 @@ from typing import Any
 from pydantic import BaseModel, field_validator
 
 from lerobot.configs.dataset import DatasetRecordConfig
+from lerobot.configs.video import RGBEncoderConfig
 from lerobot.datasets import LeRobotDataset
 from lerobot.robots.so_follower import SO101FollowerConfig
 
@@ -57,6 +58,55 @@ phase_start_time = None  # Track when current phase started
 last_recording_info: dict[str, Any] | None = (
     None  # Snapshot of the most recently completed dataset (for /dataset-info)
 )
+# Frames LeRobot's streaming encoder dropped in the active session, per video key.
+_drop_counter: "EncoderDropCounter | None" = None
+
+# LeRobot's VideoEncodingManager drops a frame when a camera's encoder queue is
+# full (the encoder is slower than the camera) and says so only in its log, once
+# for the first frame and then every tenth. The dataset keeps every parquet row,
+# so the video ends up shorter than the episode and nothing in the UI shows it.
+_QUEUE_FULL = re.compile(r"Encoder queue full for (\S+), dropped (\d+) frame")
+_EPISODE_DONE = re.compile(r"Episode finished with (\d+) dropped frame\(s\) for (\S+?)\.?$")
+
+
+class EncoderDropCounter(logging.Handler):
+    """Counts dropped frames from the streaming encoder's own warnings.
+
+    Reads the two messages ``lerobot.datasets.video_utils`` logs (the running count
+    within an episode, and the per-episode total when it finishes), so it needs no
+    access to the encoder internals. ``totals()`` is the session's count per camera.
+    """
+
+    LOGGER_NAME = "lerobot.datasets.video_utils"
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self._lock = threading.Lock()
+        self._finished: dict[str, int] = {}
+        self._episode: dict[str, int] = {}
+
+    def emit(self, record: logging.LogRecord) -> None:
+        message = record.getMessage()
+        if match := _QUEUE_FULL.search(message):
+            with self._lock:
+                self._episode[match.group(1)] = int(match.group(2))
+        elif match := _EPISODE_DONE.search(message):
+            count, key = int(match.group(1)), match.group(2)
+            with self._lock:
+                self._finished[key] = self._finished.get(key, 0) + count
+                self._episode.pop(key, None)
+
+    def totals(self) -> dict[str, int]:
+        with self._lock:
+            keys = set(self._finished) | set(self._episode)
+            return {key: self._finished.get(key, 0) + self._episode.get(key, 0) for key in sorted(keys)}
+
+    def __enter__(self) -> "EncoderDropCounter":
+        logging.getLogger(self.LOGGER_NAME).addHandler(self)
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        logging.getLogger(self.LOGGER_NAME).removeHandler(self)
 
 
 class RecordingRequest(BaseModel):
@@ -76,6 +126,10 @@ class RecordingRequest(BaseModel):
     private: bool = False
     resume: bool = False
     streaming_encoding: bool = True
+    # LeRobot video codec for the camera streams: None keeps LeRobot's default
+    # (libsvtav1). "h264" is the choice for a CPU that cannot encode AV1 at the
+    # camera rate, which the encoder reports as dropped frames.
+    video_codec: str | None = None
     cameras: dict[str, dict[str, Any]] = {}
     test_mode: bool = False  # Skip robot connection for testing
 
@@ -200,6 +254,11 @@ def create_record_config(request: RecordingRequest) -> RecordConfig:
     )
 
     # Create dataset config
+    encoder_kwargs = {}
+    if request.video_codec:
+        # RGBEncoderConfig rejects a codec LeRobot does not know, which
+        # handle_start_recording reports to the caller.
+        encoder_kwargs["rgb_encoder"] = RGBEncoderConfig(vcodec=request.video_codec)
     dataset_config = DatasetRecordConfig(
         repo_id=request.dataset_repo_id,
         # LeRobot's create() defaults to this directory, but resume() refuses
@@ -217,6 +276,7 @@ def create_record_config(request: RecordingRequest) -> RecordConfig:
         tags=with_lelab_tag(request.tags) if request.push_to_hub else None,
         private=request.private,
         streaming_encoding=request.streaming_encoding,
+        **encoder_kwargs,
     )
 
     # Create the main record config
@@ -307,7 +367,8 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
                 phase_start_time, \
                 current_episode, \
                 saved_episodes, \
-                last_recording_info
+                last_recording_info, \
+                _drop_counter
             recording_start_time = time.time()
             current_episode = 1
             saved_episodes = 0
@@ -333,8 +394,16 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
                     )
                     time.sleep(2.0)
 
-                dataset = record_with_web_events(record_config, recording_events)
+                with EncoderDropCounter() as drops:
+                    _drop_counter = drops
+                    dataset = record_with_web_events(record_config, recording_events)
                 logger.info(f"Recording completed successfully. Dataset has {dataset.num_episodes} episodes")
+                if dropped := drops.totals():
+                    logger.warning(
+                        "The video encoder dropped frames (%s): the videos are shorter than the episodes. "
+                        "Record with video_codec='h264' or lower the camera resolution or fps.",
+                        dropped,
+                    )
                 last_recording_info = {
                     "success": True,
                     "dataset_repo_id": request.dataset_repo_id,
@@ -344,6 +413,7 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
                     "features": list(dataset.features.keys()),
                     "total_frames": dataset.num_frames,
                     "robot_type": getattr(dataset.meta, "robot_type", "Unknown robot"),
+                    "dropped_frames": dropped,
                 }
             except Exception as e:
                 logger.exception("Recording session failed: %s", e)
@@ -358,6 +428,7 @@ def handle_start_recording(request: RecordingRequest) -> dict[str, Any]:
                     "error": str(e) or repr(e),
                     "dataset_repo_id": request.dataset_repo_id,
                     "saved_episodes": saved_episodes,
+                    "dropped_frames": _drop_counter.totals() if _drop_counter else {},
                 }
                 _cleanup_failed_recording(
                     request.dataset_repo_id, request.resume, saved_episodes, dir_preexisted
@@ -514,6 +585,9 @@ def handle_recording_status() -> dict[str, Any]:
         status["current_episode"] = current_episode
         status["total_episodes"] = recording_config.num_episodes
         status["saved_episodes"] = saved_episodes  # Track completed episodes
+        # Frames the streaming encoder has dropped so far, per camera stream, so
+        # a CPU that cannot keep up shows during the session and not in the videos.
+        status["dropped_frames"] = _drop_counter.totals() if _drop_counter else {}
         # Names of the cameras the user configured for this session. The frontend
         # renders a live /camera-feed/{name} preview for exactly these — nothing
         # else — so only configured cameras are ever shown.
