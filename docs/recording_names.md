@@ -35,9 +35,29 @@ Older backends retain capture, grouping and manual naming. Updated Lab renders
 upload-ID suffixes when metadata is absent and shows a manual-naming notice when
 the backend cannot supply the episode IDs needed for safe automatic naming.
 
+Modern custom names use the separate `nori.pendingEpisodeNames.v2` storage key,
+so rolling back to an older Lab build cannot reinterpret them using task/time
+matching. Existing legacy v1 queues still work. Identity-based entries from the
+initial issue-51 build are moved from v1 to v2 when the updated queue is read.
+Names retain the existing 48-hour expiry.
+
+Automatic naming prioritizes exact metadata IDs. For older backends, discovery
+is limited to plausible recent single-take uploads with the same task label;
+the actual episode ID must still match before a name is written. Each pass
+makes at most eight episode-listing requests, shares lookups between pending
+names, and never overlaps another pass for the same API/fetcher. Unsuccessful
+passes back off from 30 seconds to five minutes. Cached identity discovery
+expires after five minutes, and each write uses a fresh listing's episode index.
+
+The active collection is cached with the teleop client across card navigation,
+and in tab-local sessionStorage by backend/robot across reload/reconnect. Finish
+session clears it. Recovery without a saved collection omits the collection tag
+so the live gateway retains its group. UUID generation supports older browsers
+without `crypto.randomUUID`; these IDs are not authentication credentials.
+
 Unit coverage:
 
 ```bash
 cd frontend
-npm test -- src/nori/remote/recordingPresentation.test.ts src/nori/remote/pendingEpisodeNames.test.ts src/nori/remote/recordReview.test.ts src/nori/remote/mockRobot.test.ts
+npm test -- src/nori/remote/recordingPresentation.test.ts src/nori/remote/pendingEpisodeNames.test.ts src/nori/remote/recordingSession.test.ts src/nori/remote/legacyCompatibility.test.ts src/nori/remote/recordReview.test.ts src/nori/remote/mockRobot.test.ts
 ```

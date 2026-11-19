@@ -3,7 +3,7 @@ import Reconciler from "react-reconciler";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RemoteTeleop, type RecordState } from "@nori/sdk";
 
-type SessionStub = { teleop: RemoteTeleop; running: boolean; connState: string; controlActive: boolean; recordState: RecordState | null };
+type SessionStub = { teleop: RemoteTeleop; running: boolean; connState: string; controlActive: boolean; recordState: RecordState | null; settings: { room: string } };
 type RequestFrame = { type: string; action: string; request_id?: string; episode_id?: string; review_required?: boolean; [key: string]: unknown };
 
 const store = vi.hoisted(() => ({ value: null as SessionStub | null, listeners: new Set<() => void>() }));
@@ -86,6 +86,7 @@ class Robot {
   kept = 0;
   seq = 0;
   reviewRequired = false;
+  collection = "";
   silent = false;
   constructor(public kind: Kind) {}
   response(frame: RequestFrame) {
@@ -96,9 +97,17 @@ class Robot {
       case "review_status":
         if (!supported) { ok = false; error = "unknown action review_status"; }
         break;
-      case "session_start": this.session = true; this.kept = 0; break;
-      case "session_end": this.session = false; break;
+      case "session_start": this.session = true; this.kept = 0; this.collection = ""; break;
+      case "session_end": this.session = false; this.collection = ""; break;
       case "episode_start":
+        {
+          const tag = (frame.tags as string[] | undefined)?.find((t) => t.startsWith("nori:collection:"));
+          const collection = tag?.slice("nori:collection:".length);
+          if (collection && this.collection && collection !== this.collection) {
+            ok = false; error = "episode collection does not match the open session"; break;
+          }
+          if (collection) this.collection = collection;
+        }
         if (this.recording) { ok = false; error = "already recording an episode"; break; }
         this.session = this.recording = true;
         this.reviewRequired = supported && frame.review_required === true;
@@ -153,7 +162,7 @@ async function mount(robot: Robot) {
   };
   client.videoStream = () => ({}) as MediaStream;
   store.value = { teleop: client, running: true, connState: "connected", controlActive: true,
-    recordState: null };
+    recordState: null, settings: { room: "NORI-A3-0000" } };
   // The Remote page already seeds the legacy read-only status on connect.
   client.record("status");
   await Promise.resolve();
@@ -178,7 +187,16 @@ async function mount(robot: Robot) {
     const node = nodes(container).find((n) => n.type === "input" && String(n.props.placeholder).startsWith("task for"))!;
     await act(async () => node.props.onChange!({ target: { value: "compatibility" } }));
   };
-  return { client, raw, container, button, click, task, ui: () => text(container) };
+  const unmount = async () => {
+    await act(async () => renderer.updateContainer(null, root, null));
+    await flush();
+  };
+  const remount = async () => {
+    await unmount();
+    await act(async () => renderer.updateContainer(React.createElement<{ defaultOpen?: boolean }>(DatasetCaptureCard, { defaultOpen: true }), root, null));
+    await flush();
+  };
+  return { client, raw, container, button, click, task, unmount, remount, ui: () => text(container) };
 }
 
 beforeEach(() => {
@@ -186,6 +204,9 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("window", globalThis);
   vi.stubGlobal("localStorage", { getItem: () => null, setItem() {}, removeItem() {} });
+  const sessionValues = new Map<string, string>();
+  vi.stubGlobal("sessionStorage", { getItem: (key: string) => sessionValues.get(key) ?? null,
+    setItem: (key: string, value: string) => sessionValues.set(key, value), removeItem: (key: string) => sessionValues.delete(key) });
 });
 afterEach(async () => {
   for (const { root, client } of mounts.splice(0)) {
@@ -201,6 +222,60 @@ afterEach(async () => {
 });
 
 describe("compatibility acceptance criteria", () => {
+  it.each(["navigation", "new client"])("keeps the same group after review recovery through %s", async (recovery) => {
+    const robot = new Robot("modern");
+    let ui = await mount(robot);
+    await ui.task();
+    await ui.click("Start session");
+    await ui.click("Start episode");
+    const original = robot.collection;
+    await ui.click("Stop episode");
+    if (recovery === "navigation") await ui.remount();
+    else { await ui.unmount(); ui = await mount(robot); }
+    expect(ui.ui()).toContain("Keep this episode?");
+    await ui.click("Keep");
+    await ui.click("Start episode");
+    expect(robot.recording, ui.ui()).toBe(true);
+    expect(robot.collection).toBe(original);
+    expect(robot.sent.filter((f) => f.action === "episode_start").map((f) => f.tags)).toEqual([
+      [`nori:collection:${original}`], [`nori:collection:${original}`],
+    ]);
+    await ui.click("Stop episode");
+    await ui.click("Keep");
+    await ui.click("Finish session");
+    await ui.remount();
+    await ui.task();
+    await ui.click("Start session");
+    await ui.click("Start episode");
+    expect(robot.collection).not.toBe(original);
+  });
+
+  it("does not invent a conflicting group for a recovered take without a local journal", async () => {
+    const robot = new Robot("modern");
+    robot.collection = "11111111-1111-4111-8111-111111111111";
+    robot.session = true;
+    robot.pending = [{ episode_id: "held-before-this-browser", task: "compatibility" }];
+    const ui = await mount(robot);
+    await ui.click("Keep");
+    await ui.click("Start episode");
+    expect(robot.recording, ui.ui()).toBe(true);
+    expect(robot.sent.find((f) => f.action === "episode_start")?.tags).toBeUndefined();
+    expect(robot.collection).toBe("11111111-1111-4111-8111-111111111111");
+  });
+
+  it("starts and keeps recordings when the browser has no crypto.randomUUID", async () => {
+    vi.stubGlobal("crypto", undefined);
+    const robot = new Robot("modern");
+    const ui = await mount(robot);
+    await ui.task();
+    await ui.click("Start session");
+    await ui.click("Start episode");
+    expect(robot.collection).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    await ui.click("Stop episode");
+    await ui.click("Keep");
+    expect(robot.kept).toBe(1);
+  });
+
   it.each(["old-l3", "l2"] as Kind[])("%s retains the complete legacy recording flow", async (kind) => {
     const robot = new Robot(kind);
     const ui = await mount(robot);

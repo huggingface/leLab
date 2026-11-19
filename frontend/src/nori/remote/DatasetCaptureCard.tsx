@@ -11,6 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { useApi } from "@/contexts/ApiContext";
 import { useTeleopSession } from "@/nori/TeleopSessionContext";
 import { EphemeralEpisodeRecorder } from "@/nori/remote/episodePreview";
+import { forgetRecordingSession, newRecordingCollectionId, rememberRecordingSession, restoreRecordingSession } from "./recordingSession";
 import {
   addPendingNames,
   applyPendingNames,
@@ -30,8 +31,9 @@ type Phase =
 // defaultOpen: start expanded — for layouts that already put the card behind
 // their own drawer/tab, where a second collapsed header inside reads as broken.
 export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: boolean } = {}) {
-  const { teleop, running, connState, controlActive, recordState } = useTeleopSession();
+  const { teleop, running, connState, controlActive, recordState, settings } = useTeleopSession();
   const { baseUrl, fetchWithHeaders } = useApi();
+  const sessionScope = settings?.room ? JSON.stringify([baseUrl, settings.room]) : "";
   const connected = running && connState === "connected" && controlActive;
 
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
@@ -65,7 +67,7 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(defaultOpen);
   // Record-time episode names. The recorder wire has no name field, so names
-  // are held per kept episode and queued at Finish session; a background loop
+  // are queued after each acknowledged Keep (at Finish session on legacy robots); a background loop
   // applies them to the uploaded recording (pendingEpisodeNames.ts).
   const [nameDraft, setNameDraft] = useState("");
   const namesRef = useRef<string[]>([]);          // per kept episode, this session
@@ -111,6 +113,20 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
     // Never reinterpret an existing take on reconnect. A held modern take must
     // wait for review support; a legacy take cannot gain a review hold later.
     if (!status.reviewSupported) return;
+    const hasTake = Boolean(status.activeReviewEpisodeId || status.pendingReviews?.length);
+    if (teleop && (status.sessionOpen || hasTake)) {
+      const saved = restoreRecordingSession(teleop, sessionScope);
+      collectionRef.current = saved?.collectionId ?? "";
+      if (saved) {
+        sessionStartRef.current = saved.startedAt;
+        setTask(saved.task);
+      }
+      setEpisodeCount(status.episodesKept ?? 0);
+      if (!hasTake && phaseRef.current.kind === "idle" && saved) setPhase({ kind: "session" });
+    } else if (teleop && phaseRef.current.kind === "idle") {
+      collectionRef.current = "";
+      forgetRecordingSession(teleop, sessionScope);
+    }
     setPendingReviews(status.pendingReviews ?? []);
     const previous = phaseRef.current;
     if ((previous.kind === "recording" || previous.kind === "review") && previous.mode === "legacy") return;
@@ -123,7 +139,7 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
       setPhase((previous) => previous.kind === "review" && previous.episodeId === pending.episodeId
         ? { ...previous, decision: pending.decision } : { kind: "review", mode: "review", episodeId: pending.episodeId, url: null, decision: pending.decision });
     }
-  }, []);
+  }, [teleop, sessionScope]);
 
   const discoverRecording = useCallback(async () => {
     if (!teleop) throw new Error("Recording connection unavailable");
@@ -166,7 +182,7 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
     setBusy(true);
     setError(null);
     try {
-      const collectionId = crypto.randomUUID();
+      const collectionId = newRecordingCollectionId();
       if (recordingMode === "legacy") teleop.record("session_start", task.trim() || "teleop session", { stereo, collectionId });
       else await teleop.recordConfirmed("session_start", { task: task.trim() || "teleop session", stereo, collectionId });
       collectionRef.current = collectionId;
@@ -175,13 +191,16 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
       setNameDraft("");
       setNamesApplied(false);
       sessionStartRef.current = new Date().toISOString();
+      rememberRecordingSession(teleop, sessionScope, {
+        collectionId, task: task.trim() || "teleop session", startedAt: sessionStartRef.current,
+      });
       setPhase({ kind: "session" });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
-  }, [teleop, busy, recordingMode, task, stereo]);
+  }, [teleop, busy, recordingMode, task, stereo, sessionScope]);
 
   const finishSession = useCallback(async () => {
     if (!teleop || busy || !recordingMode) return;
@@ -192,13 +211,15 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
       if (recordingMode === "legacy") addPendingNames({ startedAt: sessionStartRef.current,
         task: task.trim() || "teleop session", names: namesRef.current });
       setPendingSessions(pendingNameCount());
+      forgetRecordingSession(teleop, sessionScope);
+      collectionRef.current = "";
       setPhase({ kind: "idle" });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
-  }, [teleop, busy, recordingMode, task]);
+  }, [teleop, busy, recordingMode, task, sessionScope]);
 
   // Apply pending record-time names whenever some exist: once now, then every
   // 30 s while this page is open (the bundle uploads only after the robot goes
@@ -233,7 +254,10 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
       const stream = teleop.videoStream();
       if (!stream) throw new Error("no video stream — is video enabled?");
       previewRef.current.start(stream);
-      const collectionId = collectionRef.current || (collectionRef.current = crypto.randomUUID());
+      // A recovered take may predate this browser's journal. Omit the tag in
+      // that case: the live gateway retains its group. Never invent a new
+      // group in the middle of a recovered session.
+      const collectionId = collectionRef.current || undefined;
       if (recordingMode === "legacy") {
         teleop.record("episode_start", task.trim() || "teleop session", { stereo, collectionId });
         setPhase({ kind: "recording", mode: "legacy" });
