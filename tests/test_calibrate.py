@@ -352,3 +352,88 @@ def test_cleanup_device_force_releases_and_clears_when_disconnect_fails() -> Non
 
     assert device.bus.released is True  # force-released despite failure
     assert mgr.device is None  # handle cleared so a new calibration can start
+
+
+def _manager_sweeping(sweeps: list[dict[str, int]]):
+    """A CalibrationManager on a fake SO-101 bus (wrist_flex, wrist_roll) whose
+    Present_Position reads replay `sweeps`; the step completes after the last one."""
+    from unittest.mock import create_autospec
+
+    from lelab.calibrate import CalibrationManager
+    from lerobot.motors import Motor, MotorNormMode, SerialMotorsBus
+
+    bus = create_autospec(SerialMotorsBus, instance=True)
+    bus.motors = {
+        "wrist_flex": Motor(4, "sts3215", MotorNormMode.DEGREES),
+        "wrist_roll": Motor(5, "sts3215", MotorNormMode.DEGREES),
+    }
+    bus.resolution.return_value = 4096
+    mgr = CalibrationManager()
+    mgr.device = type("Device", (), {"bus": bus})()
+    reads = 0
+
+    def read(*args, **kwargs):
+        nonlocal reads
+        reads += 1
+        if reads >= len(sweeps):
+            mgr._step_complete.set()
+        return sweeps[min(reads - 1, len(sweeps) - 1)]
+
+    bus.sync_read.side_effect = read
+    return mgr, bus
+
+
+def test_wrist_roll_gets_the_whole_encoder_like_lerobot_calibrate() -> None:
+    """lerobot-calibrate records every SO-101 joint but the wrist roll, a full-turn
+    motor given 0..resolution-1. The recorded range is written to the motors'
+    position limits and, in degrees mode, sets the zero of the angle, so the web
+    calibration must not save the sweep for it."""
+    mgr, bus = _manager_sweeping(
+        [
+            {"wrist_flex": 2000, "wrist_roll": 2000},
+            {"wrist_flex": 900, "wrist_roll": 400},
+            {"wrist_flex": 2000, "wrist_roll": 2000},
+            {"wrist_flex": 3100, "wrist_roll": 3800},
+        ]
+    )
+
+    mgr._step_range_recording()
+
+    bus.resolution.assert_called_with("sts3215")
+    assert (mgr._mins["wrist_flex"], mgr._maxes["wrist_flex"]) == (900, 3100)
+    assert (mgr._mins["wrist_roll"], mgr._maxes["wrist_roll"]) == (0, 4095)
+    status = mgr.get_status()
+    assert status.recorded_ranges["wrist_roll"] == {"min": 0, "max": 4095, "current": 3800}
+    assert "wrist_roll" in status.message and "no sweep" in status.message
+
+
+def test_wrist_roll_wrap_around_is_not_a_discontinuity() -> None:
+    """Turning the roll past 0/4095 is a ~4096-step jump between two reads; for a
+    full-turn motor that is a normal move, not a calibration started off-centre."""
+    mgr, _bus = _manager_sweeping(
+        [
+            {"wrist_flex": 2000, "wrist_roll": 4090},
+            {"wrist_flex": 900, "wrist_roll": 5},
+            {"wrist_flex": 2000, "wrist_roll": 10},
+            {"wrist_flex": 3100, "wrist_roll": 20},
+        ]
+    )
+
+    mgr._step_range_recording()  # raised CalibrationDiscontinuityError before the fix
+
+    assert (mgr._mins["wrist_roll"], mgr._maxes["wrist_roll"]) == (0, 4095)
+    assert (mgr._mins["wrist_flex"], mgr._maxes["wrist_flex"]) == (900, 3100)
+
+
+def test_other_joints_still_trip_the_discontinuity_check() -> None:
+    from lelab.calibrate import CalibrationDiscontinuityError
+
+    mgr, _bus = _manager_sweeping(
+        [
+            {"wrist_flex": 4090, "wrist_roll": 2000},
+            {"wrist_flex": 5, "wrist_roll": 2000},
+        ]
+    )
+
+    with pytest.raises(CalibrationDiscontinuityError):
+        mgr._step_range_recording()
