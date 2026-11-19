@@ -286,6 +286,101 @@ def test_create_record_config_pins_dshow_on_windows(monkeypatch: pytest.MonkeyPa
     assert config.robot.cameras["wrist"].backend == Cv2Backends.DSHOW
 
 
+def _request(**overrides):
+    import lelab.record as record
+
+    fields = {
+        "leader_port": "/dev/leader",
+        "follower_port": "/dev/follower",
+        "leader_config": "leader",
+        "follower_config": "follower",
+        "dataset_repo_id": "user/dataset",
+        "single_task": "pick up the cube",
+    }
+    return record.RecordingRequest(**{**fields, **overrides})
+
+
+def test_create_record_config_keeps_lerobot_default_codec(monkeypatch: pytest.MonkeyPatch) -> None:
+    import lelab.record as record
+    from lerobot.configs.video import rgb_encoder_defaults
+
+    monkeypatch.setattr(record, "setup_calibration_files", lambda leader, follower: ("leader", "follower"))
+
+    config = record.create_record_config(_request())
+
+    assert config.dataset.rgb_encoder.vcodec == rgb_encoder_defaults().vcodec
+
+
+def test_create_record_config_sets_the_video_codec(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A CPU that cannot encode AV1 at the camera rate records h264 instead."""
+    import lelab.record as record
+
+    monkeypatch.setattr(record, "setup_calibration_files", lambda leader, follower: ("leader", "follower"))
+
+    config = record.create_record_config(_request(video_codec="h264"))
+
+    assert config.dataset.rgb_encoder.vcodec == "h264"
+    assert config.dataset.streaming_encoding is True
+
+
+def test_start_recording_reports_an_unknown_codec(monkeypatch: pytest.MonkeyPatch, tmp_lerobot_home) -> None:
+    import lelab.record as record
+
+    monkeypatch.setattr(record, "setup_calibration_files", lambda leader, follower: ("leader", "follower"))
+
+    result = record.handle_start_recording(_request(video_codec="mpeg1video"))
+
+    assert result["success"] is False
+    assert "mpeg1video" in result["message"]
+    assert record.recording_active is False
+
+
+def test_encoder_drop_counter_reads_lerobot_warnings() -> None:
+    """The counts come from the two messages LeRobot's VideoEncodingManager logs."""
+    import logging
+
+    from lelab.record import EncoderDropCounter
+
+    lerobot_log = logging.getLogger(EncoderDropCounter.LOGGER_NAME)
+    with EncoderDropCounter() as drops:
+        assert drops.totals() == {}
+        lerobot_log.warning(
+            "Encoder queue full for observation.images.wrist, dropped 1 frame(s). "
+            "Consider using vcodec='auto' for hardware encoding or increasing encoder_queue_maxsize."
+        )
+        lerobot_log.warning(
+            "Encoder queue full for observation.images.wrist, dropped 10 frame(s). Consider ..."
+        )
+        assert drops.totals() == {"observation.images.wrist": 10}
+        lerobot_log.warning("Episode finished with 12 dropped frame(s) for observation.images.wrist.")
+        lerobot_log.warning("Episode finished with 3 dropped frame(s) for observation.images.top.")
+        assert drops.totals() == {"observation.images.top": 3, "observation.images.wrist": 12}
+        lerobot_log.warning(
+            "Encoder queue full for observation.images.wrist, dropped 1 frame(s). Consider ..."
+        )
+        assert drops.totals() == {"observation.images.top": 3, "observation.images.wrist": 13}
+        lerobot_log.warning("Video file already exists: x.mp4. Skipping encoding.")
+        assert drops.totals() == {"observation.images.top": 3, "observation.images.wrist": 13}
+    assert drops not in lerobot_log.handlers
+
+
+def test_recording_status_carries_the_dropped_frames(monkeypatch: pytest.MonkeyPatch) -> None:
+    import logging
+
+    import lelab.record as record
+
+    drops = record.EncoderDropCounter()
+    with drops:
+        logging.getLogger(drops.LOGGER_NAME).warning(
+            "Encoder queue full for observation.images.wrist, dropped 4 frame(s). Consider ..."
+        )
+    monkeypatch.setattr(record, "_drop_counter", drops)
+    monkeypatch.setattr(record, "recording_active", True)
+    monkeypatch.setattr(record, "recording_config", _request())
+
+    assert record.handle_recording_status()["dropped_frames"] == {"observation.images.wrist": 4}
+
+
 def test_build_camera_configs_uses_default_backend_when_unset() -> None:
     from lelab.record import _build_camera_configs
     from lerobot.cameras.configs import Cv2Backends
