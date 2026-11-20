@@ -27,9 +27,26 @@ import {
 
 export type { CodegenRequest };
 
-// Mirrors lelab/server.py: model = NORI_LLM_MODEL default, 1500-token completions.
+// Mirrors lelab/server.py: model = NORI_LLM_MODEL default, 1500-token completions (the agent loop).
 const MODEL = (import.meta.env.VITE_NORI_LLM_MODEL as string | undefined) || "claude-sonnet-5";
 const MAX_TOKENS = 1500;
+// Codegen gets the backend's ceiling (routes/agent.py _LLM_MAX_TOKENS_CEILING). claude-sonnet-5 thinks
+// by default and thinking counts against max_tokens: with the robot's learned advice injected (P2,
+// ~46k chars on 0003 by 2026-11-20) every 1500-token generation on 0003 spent the whole budget thinking
+// and returned no text, which the page reported as "generated 1 lines".
+const CODEGEN_MAX_TOKENS = 8192;
+// Lower effort = less thinking before the code (the agent loop runs at medium for the same reason).
+const CODEGEN_OUTPUT_CONFIG = { effort: "medium" };
+
+/** A codegen turn that produced no usable text: say why instead of returning "" (which the page
+ *  would show as a one-line program). */
+function codegenStopError(stopReason: string | undefined): Error | null {
+  if (stopReason === "max_tokens") {
+    return new Error(`the model ran out of its ${CODEGEN_MAX_TOKENS}-token budget before writing the code (long robot advice/context?) — try again or shorten the request`);
+  }
+  if (stopReason === "refusal") return new Error("the model declined this request");
+  return null;
+}
 const LLM_BASE = "/api/v1/agent/llm"; // backend proxy prefix (routes/agent.py)
 
 async function authHeaders(): Promise<Record<string, string>> {
@@ -60,7 +77,8 @@ export async function hostedGenerateStream(body: CodegenRequest): Promise<Respon
     headers: await authHeaders(),
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: MAX_TOKENS,
+      max_tokens: CODEGEN_MAX_TOKENS,
+      output_config: CODEGEN_OUTPUT_CONFIG,
       system: systemFor(body) + (body.advice ? `\n\n${body.advice}` : ""),
       messages: [{ role: "user", content: buildCodegenContent(body) }],
       new_run: true, // each generation is its own run (matches LeLab)
@@ -104,7 +122,10 @@ export async function hostedGenerateWithSkills(
     const res = await fetch(`${backendBase()}${LLM_BASE}/messages`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ model: MODEL, max_tokens: MAX_TOKENS, system, messages, tools: [READ_SKILL_TOOL], new_run: round === 0 }),
+      body: JSON.stringify({
+        model: MODEL, max_tokens: CODEGEN_MAX_TOKENS, output_config: CODEGEN_OUTPUT_CONFIG,
+        system, messages, tools: [READ_SKILL_TOOL], new_run: round === 0,
+      }),
     });
     if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { detail?: string })?.detail || res.statusText);
     const turn = (await res.json()) as { stop_reason?: string; content?: Array<Record<string, unknown>> };
@@ -127,6 +148,8 @@ export async function hostedGenerateWithSkills(
       messages.push({ role: "user", content: results });
       continue;
     }
+    const stopErr = codegenStopError(turn.stop_reason);
+    if (stopErr) throw stopErr;
     return content.filter((b) => b.type === "text").map((b) => String((b as { text?: string }).text ?? "")).join("");
   }
   throw new Error("codegen exceeded the read_skill round limit");

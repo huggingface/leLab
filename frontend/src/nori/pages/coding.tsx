@@ -306,6 +306,12 @@ const Coding = () => {
         generated = await runGeneration(robotState, imageB64,
           "Your previous output had a JavaScript syntax error (often uncommented prose). Output ONLY valid JS; put any explanation in // comments.");
       }
+      // An empty generation is not a one-line program: keep the editor as it was and say so
+      // ("".split("\n").length is 1, which used to read as "generated 1 lines").
+      if (!generated.trim()) {
+        append("⚠ generate returned no code — the editor is unchanged; try again");
+        return;
+      }
       setCode(generated);
       append(looksValid(generated)
         ? `✎ generated ${generated.split("\n").length} lines — review, then Run`
