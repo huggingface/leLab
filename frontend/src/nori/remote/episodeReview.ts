@@ -13,6 +13,9 @@ import { type Fetcher } from "@/lib/apiClient";
 import { lelabFetch } from "@/lib/localAuth";
 
 export interface DatasetEpisode {
+  episode_id?: string;
+  collection_id?: string;
+  outcome?: string;
   index: number;
   length: number;
   task: string;

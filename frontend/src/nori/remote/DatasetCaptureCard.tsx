@@ -11,6 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { useApi } from "@/contexts/ApiContext";
 import { useTeleopSession } from "@/nori/TeleopSessionContext";
 import { EphemeralEpisodeRecorder } from "@/nori/remote/episodePreview";
+import { forgetRecordingSession, newRecordingCollectionId, rememberRecordingEpisode, rememberRecordingSession, restoreRecordingSession } from "./recordingSession";
 import {
   addPendingNames,
   applyPendingNames,
@@ -25,17 +26,20 @@ type Phase =
   | { kind: "idle" }                              // no session
   | { kind: "session" }                           // session open, between episodes
   | ({ kind: "recording" } & Capture)
-  | ({ kind: "review"; url: string | null; decision?: "keep" | "reject" } & Capture);
+  | ({ kind: "review"; url: string | null; decision?: "keep" | "reject"; outcome?: "success" | "failure" } & Capture);
 
 // defaultOpen: start expanded — for layouts that already put the card behind
 // their own drawer/tab, where a second collapsed header inside reads as broken.
 export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: boolean } = {}) {
-  const { teleop, running, connState, controlActive, recordState } = useTeleopSession();
+  const { teleop, running, connState, controlActive, recordState, settings } = useTeleopSession();
   const { baseUrl, fetchWithHeaders } = useApi();
+  const sessionScope = settings?.room ? JSON.stringify([baseUrl, settings.room]) : "";
   const connected = running && connState === "connected" && controlActive;
 
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [task, setTask] = useState("");
+  const [outcome, setOutcome] = useState<"success" | "failure">("success");
+  const collectionRef = useRef("");
   // "Enforce stereo view": session-scoped robot-side setting — the robot
   // records the front + overhead cameras at one matched frame rate so their
   // frames pair into a stereo view. Chosen BEFORE a session starts (recording
@@ -63,13 +67,14 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(defaultOpen);
   // Record-time episode names. The recorder wire has no name field, so names
-  // are held per kept episode and queued at Finish session; a background loop
+  // are queued after each acknowledged Keep (at Finish session on legacy robots); a background loop
   // applies them to the uploaded recording (pendingEpisodeNames.ts).
   const [nameDraft, setNameDraft] = useState("");
   const namesRef = useRef<string[]>([]);          // per kept episode, this session
   const sessionStartRef = useRef<string>("");     // ISO, session_start time
   const [pendingSessions, setPendingSessions] = useState(() => pendingNameCount());
   const [namesApplied, setNamesApplied] = useState(false);
+  const [nameIdentityUnavailable, setNameIdentityUnavailable] = useState(false);
 
   const recoveryRequestRef = useRef<Promise<RecordState> | null>(null);
   const previewRef = useRef<EphemeralEpisodeRecorder>(new EphemeralEpisodeRecorder());
@@ -108,6 +113,22 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
     // Never reinterpret an existing take on reconnect. A held modern take must
     // wait for review support; a legacy take cannot gain a review hold later.
     if (!status.reviewSupported) return;
+    const hasTake = Boolean(status.activeReviewEpisodeId || status.pendingReviews?.length);
+    if (teleop && (status.sessionOpen || hasTake)) {
+      const recoveredId = status.activeReviewEpisodeId || status.pendingReviews?.[0]?.episodeId;
+      const saved = restoreRecordingSession(teleop, sessionScope, recoveredId);
+      collectionRef.current = saved?.collectionId ?? "";
+      sessionStartRef.current = saved?.startedAt ?? "";
+      if (saved) {
+        sessionStartRef.current = saved.startedAt;
+        setTask(saved.task);
+      }
+      setEpisodeCount(status.episodesKept ?? 0);
+      if (!hasTake && phaseRef.current.kind === "idle" && saved) setPhase({ kind: "session" });
+    } else if (teleop && phaseRef.current.kind === "idle") {
+      collectionRef.current = "";
+      forgetRecordingSession(teleop, sessionScope);
+    }
     setPendingReviews(status.pendingReviews ?? []);
     const previous = phaseRef.current;
     if ((previous.kind === "recording" || previous.kind === "review") && previous.mode === "legacy") return;
@@ -120,7 +141,7 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
       setPhase((previous) => previous.kind === "review" && previous.episodeId === pending.episodeId
         ? { ...previous, decision: pending.decision } : { kind: "review", mode: "review", episodeId: pending.episodeId, url: null, decision: pending.decision });
     }
-  }, []);
+  }, [teleop, sessionScope]);
 
   const discoverRecording = useCallback(async () => {
     if (!teleop) throw new Error("Recording connection unavailable");
@@ -163,20 +184,25 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
     setBusy(true);
     setError(null);
     try {
-      if (recordingMode === "legacy") teleop.record("session_start", task.trim() || "teleop session", { stereo });
-      else await teleop.recordConfirmed("session_start", { task: task.trim() || "teleop session", stereo });
+      const collectionId = newRecordingCollectionId();
+      if (recordingMode === "legacy") teleop.record("session_start", task.trim() || "teleop session", { stereo, collectionId });
+      else await teleop.recordConfirmed("session_start", { task: task.trim() || "teleop session", stereo, collectionId });
+      collectionRef.current = collectionId;
       setEpisodeCount(0);
       namesRef.current = [];
       setNameDraft("");
       setNamesApplied(false);
       sessionStartRef.current = new Date().toISOString();
+      rememberRecordingSession(teleop, sessionScope, {
+        collectionId, task: task.trim() || "teleop session", startedAt: sessionStartRef.current, episodeIds: [],
+      });
       setPhase({ kind: "session" });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
-  }, [teleop, busy, recordingMode, task, stereo]);
+  }, [teleop, busy, recordingMode, task, stereo, sessionScope]);
 
   const finishSession = useCallback(async () => {
     if (!teleop || busy || !recordingMode) return;
@@ -184,16 +210,18 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
     try {
       if (recordingMode === "legacy") teleop.record("session_end");
       else await teleop.recordConfirmed("session_end");
-      addPendingNames({ startedAt: sessionStartRef.current,
+      if (recordingMode === "legacy") addPendingNames({ startedAt: sessionStartRef.current,
         task: task.trim() || "teleop session", names: namesRef.current });
       setPendingSessions(pendingNameCount());
+      forgetRecordingSession(teleop, sessionScope);
+      collectionRef.current = "";
       setPhase({ kind: "idle" });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
-  }, [teleop, busy, recordingMode, task]);
+  }, [teleop, busy, recordingMode, task, sessionScope]);
 
   // Apply pending record-time names whenever some exist: once now, then every
   // 30 s while this page is open (the bundle uploads only after the robot goes
@@ -206,6 +234,7 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
         const res = await applyPendingNames(baseUrl, fetchWithHeaders);
         if (stop) return;
         setPendingSessions(res.pending);
+        setNameIdentityUnavailable(res.identityUnavailable === true);
         if (res.applied > 0) setNamesApplied(true);
       } catch {
         // Backend unreachable — leave pending; next tick retries.
@@ -227,31 +256,37 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
       const stream = teleop.videoStream();
       if (!stream) throw new Error("no video stream — is video enabled?");
       previewRef.current.start(stream);
+      // A recovered take may predate this browser's journal. Omit the tag in
+      // that case: the live gateway retains its group. Never invent a new
+      // group in the middle of a recovered session.
+      const collectionId = collectionRef.current || undefined;
       if (recordingMode === "legacy") {
-        teleop.record("episode_start", task.trim() || "teleop session", { stereo });
+        teleop.record("episode_start", task.trim() || "teleop session", { stereo, collectionId });
         setPhase({ kind: "recording", mode: "legacy" });
       } else {
         const status = await teleop.recordConfirmed("episode_start", {
-          task: task.trim() || "teleop session", stereo, reviewRequired: true,
+          task: task.trim() || "teleop session", stereo, reviewRequired: true, collectionId,
         });
         if (!status.episodeId) throw new Error("Robot did not return an episode ID; refresh recording state");
+        rememberRecordingEpisode(teleop, sessionScope, status.episodeId);
         setPhase({ kind: "recording", mode: "review", episodeId: status.episodeId });
       }
+      setOutcome("success");
     } catch (e) {
       previewRef.current.cancel();
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
-  }, [teleop, busy, recordingMode, task, stereo]);
+  }, [teleop, busy, recordingMode, task, stereo, sessionScope]);
 
   const stopEpisode = useCallback(async () => {
     if (!teleop || busy || phase.kind !== "recording") return;
     setBusy(true);
     setError(null);
     try {
-      const status = phase.mode === "legacy" ? (teleop.record("episode_stop"), null)
-        : await teleop.recordConfirmed("episode_stop", { episodeId: phase.episodeId });
+      const status = phase.mode === "legacy" ? (teleop.record("episode_stop", undefined, { outcome }), null)
+        : await teleop.recordConfirmed("episode_stop", { episodeId: phase.episodeId, outcome });
       if (status?.episodeRemoved) {
         previewRef.current.cancel();
         setPhase({ kind: "session" });
@@ -265,13 +300,13 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
       catch { previewRef.current.cancel(); }
       setPreviewNote(blob ? "" : previewRef.current.diagnostic);
       setPhase({ ...phase, kind: "review",
-        url: blob ? URL.createObjectURL(blob) : null });
+        url: blob ? URL.createObjectURL(blob) : null, outcome });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
-  }, [teleop, busy, phase]);
+  }, [teleop, busy, phase, outcome]);
 
   const resolveReview = useCallback(async (decision: "keep" | "reject") => {
     if (!teleop || phase.kind !== "review" || reviewBusy || !recordingMode) return;
@@ -283,7 +318,11 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
         decision === "keep" ? "episode_keep" : "episode_reject", { episodeId: phase.episodeId });
       if (phase.mode === "legacy" && decision === "reject") teleop.record("episode_discard");
       if (decision === "keep") {
-        namesRef.current.push(nameDraft.trim());
+        if (phase.mode === "review") {
+          addPendingNames({ startedAt: sessionStartRef.current || new Date().toISOString(),
+            task: task.trim() || "teleop session", names: [nameDraft.trim()], episodeIds: [phase.episodeId] });
+          setPendingSessions(pendingNameCount());
+        } else namesRef.current.push(nameDraft.trim());
         setEpisodeCount((n) => n + 1);
       }
       setNameDraft("");
@@ -292,6 +331,9 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
       setPendingReviews(remaining);
       if (remaining.length) {
         const next = remaining[0];
+        const saved = restoreRecordingSession(teleop, sessionScope, next.episodeId);
+        collectionRef.current = saved?.collectionId ?? "";
+        sessionStartRef.current = saved?.startedAt ?? "";
         setTask(next.task);
         setPhase({ kind: "review", mode: "review", episodeId: next.episodeId, url: null, decision: next.decision });
       } else {
@@ -307,7 +349,7 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
     } finally {
       setReviewBusy(false);
     }
-  }, [teleop, phase, reviewBusy, recordingMode, nameDraft, pendingReviews]);
+  }, [teleop, phase, reviewBusy, recordingMode, nameDraft, pendingReviews, task, sessionScope]);
 
   const keepEpisode = useCallback(() => resolveReview("keep"), [resolveReview]);
   const rejectEpisode = useCallback(() => resolveReview("reject"), [resolveReview]);
@@ -470,6 +512,15 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
           {/* ---- an episode is recording ---- */}
           {phase.kind === "recording" && (
             <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm">
+                Task outcome
+                <select aria-label="Task outcome" value={outcome} disabled={busy}
+                  onChange={(event) => setOutcome(event.target.value as "success" | "failure")}
+                  className="rounded-md border border-border bg-background px-2 py-1">
+                  <option value="success">Success</option>
+                  <option value="failure">Failure</option>
+                </select>
+              </label>
               <div className="flex flex-wrap items-center gap-2">
                 <Button onClick={() => void stopEpisode()} variant="destructive" disabled={busy || !connected}>
                   {busy ? "Stopping…" : "Stop episode"}
@@ -498,6 +549,7 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
           {phase.kind === "review" && (
             <div className="space-y-3">
               <p className="text-sm font-medium text-nori-h14131a">Keep this episode?</p>
+              {phase.outcome && <p className="text-sm">Task outcome: {phase.outcome === "success" ? "Success" : "Failure"}</p>}
               {phase.url ? (
                 <video
                   key={phase.url}
@@ -560,9 +612,9 @@ export function DatasetCaptureCard({ defaultOpen = false }: { defaultOpen?: bool
           {error && <p className="text-sm text-red-700">{error}</p>}
           {pendingSessions > 0 && (
             <p className="text-xs text-nori-h6f6858">
-              episode names from {pendingSessions} session{pendingSessions === 1 ? "" : "s"} will be
-              applied automatically when the recording uploads to My Stuff (keep this page open, or
-              name them later in Review episodes).
+              {nameIdentityUnavailable
+                ? "This backend does not expose episode IDs for these recordings. Name these takes manually in Review episodes. Your saved names will retry when IDs become available."
+                : "Your episode names will be applied automatically when recordings upload to My Stuff (keep this page open, or name them later in Review episodes)."}
             </p>
           )}
           {pendingSessions === 0 && namesApplied && (

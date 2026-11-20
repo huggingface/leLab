@@ -14,7 +14,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "smoke:mock": "node scripts/mock-smoke.mjs"
+    "smoke:mock": "node scripts/mock-smoke.mjs",
+    "check:recording": "vite --config vite.recording-check.config.ts --open /recording-check.html"
   },
   "dependencies": {
     "@codemirror/lang-javascript": "^6.2.5",

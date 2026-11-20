@@ -1,3 +1,4 @@
+import { groupRecordings, recordingOutcome, recordingName, type RecordingGroup } from "@/nori/remote/recordingPresentation";
 // NORI: My Stuff — the customer's library. Everything captured, uploaded, and
 // trained, with the dataset→policy lineage the backend joins in GET /library.
 // One wide column with a Recordings / Datasets / Policies view switch (no
@@ -210,15 +211,6 @@ const EditableName = ({
   );
 };
 
-// ---- recording grouping ----------------------------------------------------
-// The robot ships one raw bundle per EPISODE (episode-as-unit), so a recording
-// session of N episodes arrives as N separate bundles. We regroup them for
-// display ONLY — no id is minted on the robot or backend. Cluster key: shared
-// label (the robot sets label = task) AND time-contiguity — episodes recorded
-// back-to-back are one session; a gap longer than SESSION_GAP_MS starts a new
-// one, so two sessions that reuse a task name on different days never merge.
-const SESSION_GAP_MS = 20 * 60_000; // >20 min between episodes => a new session
-
 type RecordingFlags = {
   assembling: boolean;
   promoted: boolean;
@@ -265,12 +257,6 @@ function recordingFlags(b: RawBundleEntry): RecordingFlags {
   };
 }
 
-type RecordingGroup = {
-  key: string;
-  label: string;
-  newestMs: number;
-  bundles: RawBundleEntry[];
-};
 // Is the cloud copy the LAST one? `local_deleted_at` is the robot's own
 // confirmation that it has dropped its copy, so this is exact rather than a
 // guess.
@@ -285,40 +271,6 @@ type RecordingGroup = {
 // changing a word.
 function isLastCopy(b: RawBundleEntry): boolean {
   return b.local_deleted_at != null;
-}
-
-function groupRecordings(bundles: RawBundleEntry[]): RecordingGroup[] {
-  const ms = (b: RawBundleEntry) => {
-    const t = Date.parse(b.created_at);
-    return Number.isNaN(t) ? 0 : t;
-  };
-  const byLabel = new Map<string, RawBundleEntry[]>();
-  for (const b of bundles) {
-    const arr = byLabel.get(b.label) ?? [];
-    arr.push(b);
-    byLabel.set(b.label, arr);
-  }
-  const groups: RecordingGroup[] = [];
-  for (const [label, arr] of byLabel) {
-    const sorted = [...arr].sort((a, b) => ms(a) - ms(b)); // episode order
-    let cluster: RawBundleEntry[] = [];
-    const flush = () => {
-      if (!cluster.length) return;
-      groups.push({
-        key: `${label}::${ms(cluster[0])}`,
-        label,
-        newestMs: ms(cluster[cluster.length - 1]),
-        bundles: cluster,
-      });
-      cluster = [];
-    };
-    for (const b of sorted) {
-      if (cluster.length && ms(b) - ms(cluster[cluster.length - 1]) > SESSION_GAP_MS) flush();
-      cluster.push(b);
-    }
-    flush();
-  }
-  return groups.sort((a, b) => b.newestMs - a.newestMs); // newest session first
 }
 
 type GroupSummary = { tone: Tone; pill: string; detail: string };
@@ -1154,7 +1106,7 @@ const MyStuff = () => {
           checked={isPicked}
           onChange={() => togglePick(b.session_id)}
           className="h-4 w-4 accent-nori-h14131a"
-          aria-label={`Select ${b.label}`}
+          aria-label={`Select ${recordingName(b)}`}
         />
       </label>
     );
@@ -1251,7 +1203,8 @@ const MyStuff = () => {
             <span className="absolute right-2 top-2">{statusPill}</span>
           </div>
           <div className="space-y-1.5 p-3">
-            <EditableName value={b.label} onRename={(next) => onRenameUpload(b.session_id, next)} />
+            <EditableName value={recordingName(b)} onRename={(next) => onRenameUpload(b.session_id, next)} />
+            {recordingOutcome(b) && <span className="inline-block rounded-full border border-border px-2 py-0.5 text-xs">{recordingOutcome(b)}</span>}
             {meta}
             {capturePills}
             {actions && <div className="flex justify-end">{actions}</div>}
@@ -1285,7 +1238,8 @@ const MyStuff = () => {
         <div className="flex min-w-0 flex-1 flex-col gap-2 p-4">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <EditableName value={b.label} onRename={(next) => onRenameUpload(b.session_id, next)} />
+              <EditableName value={recordingName(b)} onRename={(next) => onRenameUpload(b.session_id, next)} />
+            {recordingOutcome(b) && <span className="inline-block rounded-full border border-border px-2 py-0.5 text-xs">{recordingOutcome(b)}</span>}
               <p className="text-xs text-muted-foreground [font-variant-numeric:tabular-nums]">
                 {b.episode_count != null && b.episode_count !== 1 ? `${fmt(b.episode_count)} episodes · ` : "Episode · "}
                 {b.status === "PROMOTED" && b.finalized_at

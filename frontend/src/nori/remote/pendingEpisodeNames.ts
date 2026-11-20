@@ -1,134 +1,274 @@
-// NORI: record-time episode names, applied once the recording reaches the cloud.
-//
-// The robot's recorder (rpi5/media/recorder.py) owns the bundle's per-episode
-// metadata and has no name field on the wire today, so names typed during a
-// recording session can't ship inside the bundle. Instead the capture card
-// stores them here (localStorage — they survive reloads) and this module
-// applies them AFTER the bundle uploads + promotes, via the raw-recording
-// naming route (PATCH …/episode/{idx}/name). From there the normal annotation
-// flow takes over (the name travels into any dataset assembled from the take).
-//
-// Matching a pending set to its uploaded bundle is deliberately conservative —
-// ALL of these must hold before any name is written:
-//   * the bundle PROMOTED after the session started (upload begins at idle,
-//     always after session_start; 5 min of clock skew tolerated),
-//   * its episode count equals the session's kept-episode count,
-//   * its episodes carry the session's exact task string (the card sends the
-//     task on every episode_start, and the robot stamps it into meta.json).
-// No match → the set stays pending (retried while the Remote page is open,
-// expired after 48 h); the fallback is always manual naming in Review episodes.
-
+// Modern names use a separate queue: older Lab versions must never interpret
+// an identity-based name as a legacy task/time match after a rollback.
 import { type Fetcher } from "@/lib/apiClient";
 import { getRobotRecordings } from "@/nori/api/client";
 import { listRecordingEpisodes, nameRecordingEpisode } from "@/nori/remote/episodeReview";
 
 export interface PendingNameSet {
-  /** Laptop-clock ISO time of session_start. */
   startedAt: string;
-  /** The session task — every episode's meta.json task, used to verify a match. */
   task: string;
-  /** Per KEPT episode, in recording order ("" = left unnamed). */
   names: string[];
+  episodeIds?: string[];
 }
 
-const KEY = "nori.pendingEpisodeNames.v1";
+const LEGACY_KEY = "nori.pendingEpisodeNames.v1";
+const KEY = "nori.pendingEpisodeNames.v2";
+const RESERVATIONS_KEY = "nori.episodeNameReservations.v1";
 const EXPIRE_MS = 48 * 3600 * 1000;
 const CLOCK_SKEW_MS = 5 * 60 * 1000;
+const RETRY_MS = 30_000;
+const MAX_RETRY_MS = 5 * 60_000;
+const MAX_LISTINGS = 8;
+const REQUEST_TIMEOUT_MS = 20_000;
+type Result = { applied: number; pending: number; identityUnavailable?: boolean };
+type Listing = Awaited<ReturnType<typeof listRecordingEpisodes>>;
+type RetryState = {
+  inFlight?: Promise<Result>;
+  nextAt: number;
+  delay: number;
+  signature: string;
+  identityUnavailable: boolean;
+  // Discovery only. Always obtain a fresh listing before writing by index.
+  identities: Map<string, { ids: string[]; until: number }>;
+};
+const retries = new WeakMap<Fetcher, Map<string, RetryState>>();
+const identityBased = (set: PendingNameSet) => Boolean(set.episodeIds?.length);
+const signature = (set: PendingNameSet) => JSON.stringify(set);
+type Reservation = { episodeId: string; task: string; startedAt: string; expiresAt: number };
+// Keep protection after a modern name is applied, including across reloads.
+// The memory copy also covers storage quota failures during this visit.
+const reservationCache = new WeakMap<Storage, Map<string, Reservation>>();
+
+function protectModernEpisodes(sets: PendingNameSet[]): Reservation[] {
+  let storage: Storage | undefined;
+  let protectedEpisodes = new Map<string, Reservation>();
+  let raw: string | null = null;
+  try {
+    storage = localStorage;
+    const cached = reservationCache.get(storage);
+    if (cached) protectedEpisodes = cached;
+    else reservationCache.set(storage, protectedEpisodes);
+    raw = storage.getItem(RESERVATIONS_KEY);
+    const stored = JSON.parse(raw || "[]");
+    if (Array.isArray(stored)) for (const r of stored) {
+      if (r && typeof r.episodeId === "string" && r.episodeId && typeof r.task === "string"
+        && typeof r.startedAt === "string" && Number.isFinite(Date.parse(r.startedAt))
+        && Number.isFinite(r.expiresAt) && r.expiresAt > Date.now()) protectedEpisodes.set(r.episodeId, r);
+    }
+  } catch { /* Use the in-memory protection when storage cannot be read. */ }
+  for (const [id, r] of protectedEpisodes) if (r.expiresAt <= Date.now()) protectedEpisodes.delete(id);
+  for (const set of sets) for (const id of set.episodeIds ?? []) {
+    if (id && !protectedEpisodes.has(id)) protectedEpisodes.set(id, {
+      episodeId: id, task: set.task, startedAt: set.startedAt, expiresAt: Date.now() + EXPIRE_MS,
+    });
+  }
+  const reservations = [...protectedEpisodes.values()];
+  if (storage) try {
+    if (!reservations.length) { if (raw !== null) storage.removeItem(RESERVATIONS_KEY); }
+    else {
+      const next = JSON.stringify(reservations);
+      if (next !== raw) storage.setItem(RESERVATIONS_KEY, next);
+    }
+  } catch { /* The client cache still protects this visit. */ }
+  return reservations;
+}
+
+class NamingRequestTimeout extends Error {
+  constructor() { super("Recording naming request timed out; the name remains queued for verification"); }
+}
+
+/** Bound each complete API operation (including auth and JSON parsing), not
+ * just fetch headers. Abort transport and ignore late results. In particular,
+ * an uncertain PATCH stays queued until a fresh listing verifies its result. */
+async function namingRequest<T>(fetcher: Fetcher, operation: (bounded: Fetcher) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const detach: (() => void)[] = [];
+  let timer: ReturnType<typeof setTimeout>;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new NamingRequestTimeout());
+    }, REQUEST_TIMEOUT_MS);
+  });
+  const bounded: Fetcher = (url, options) => {
+    // Auth may finish after the deadline. Never send that late request.
+    if (controller.signal.aborted) return Promise.reject(new NamingRequestTimeout());
+    if (options?.signal) {
+      const upstream = options.signal;
+      const abort = () => controller.abort();
+      if (upstream.aborted) abort();
+      else { upstream.addEventListener("abort", abort, { once: true }); detach.push(() => upstream.removeEventListener("abort", abort)); }
+    }
+    return fetcher(url, { ...options, signal: controller.signal });
+  };
+  try { return await Promise.race([operation(bounded), deadline]); }
+  finally { clearTimeout(timer!); detach.forEach((remove) => remove()); }
+}
+
+function read(key: string): PendingNameSet[] {
+  try {
+    const arr = JSON.parse(localStorage.getItem(key) || "[]");
+    return Array.isArray(arr) ? arr.filter((s) => s && typeof s.startedAt === "string"
+      && typeof s.task === "string" && Array.isArray(s.names)
+      && s.names.every((n: unknown) => typeof n === "string") && s.names.some((n: string) => n.trim())
+      && (!s.episodeIds || (Array.isArray(s.episodeIds) && s.episodeIds.every((id: unknown) => typeof id === "string")))
+      && Date.now() - Date.parse(s.startedAt) < EXPIRE_MS) : [];
+  } catch { return []; }
+}
+
+function write(key: string, sets: PendingNameSet[]): boolean {
+  try {
+    if (sets.length) localStorage.setItem(key, JSON.stringify(sets));
+    else localStorage.removeItem(key);
+    return true;
+  } catch { return false; }
+}
 
 function load(): PendingNameSet[] {
-  try {
-    const raw = localStorage.getItem(KEY);
-    const arr = raw ? (JSON.parse(raw) as PendingNameSet[]) : [];
-    if (!Array.isArray(arr)) return [];
-    // Expire stale sets and drop degenerate ones (nothing to apply).
-    return arr.filter(
-      (s) =>
-        s &&
-        Array.isArray(s.names) &&
-        s.names.some((n) => n) &&
-        Date.now() - Date.parse(s.startedAt) < EXPIRE_MS,
-    );
-  } catch {
-    return [];
-  }
+  const old = read(LEGACY_KEY);
+  const modern = read(KEY);
+  // Rescue entries written by the initial issue-51 implementation. Remove
+  // them from v1 only after successfully persisting the v2 copy.
+  const misplaced = old.filter(identityBased);
+  const combined = [...misplaced.filter((s) => !modern.some((m) => m.episodeIds?.[0] === s.episodeIds?.[0])), ...modern];
+  if (misplaced.length && write(KEY, combined)) write(LEGACY_KEY, old.filter((s) => !identityBased(s)));
+  return [...old.filter((s) => !identityBased(s)), ...combined];
 }
 
 function save(sets: PendingNameSet[]) {
-  try {
-    if (sets.length === 0) localStorage.removeItem(KEY);
-    else localStorage.setItem(KEY, JSON.stringify(sets));
-  } catch {
-    // localStorage unavailable (private mode) — names just won't survive reload.
-  }
+  // Write modern names first so a failed storage write never moves them into v1.
+  if (write(KEY, sets.filter(identityBased))) write(LEGACY_KEY, sets.filter((s) => !identityBased(s)));
 }
 
-/** Queue a session's names for application. No-op if none are non-empty. */
 export function addPendingNames(set: PendingNameSet): void {
-  if (!set.names.some((n) => n)) return;
-  save([...load(), set]);
+  // A kept modern take is not a legacy session's take, even when unnamed.
+  protectModernEpisodes([set]);
+  if (!set.names.some((n) => n.trim())) return;
+  const prior = load().filter((s) => !set.episodeIds?.[0] || s.episodeIds?.[0] !== set.episodeIds[0]);
+  save([...prior, set]);
 }
 
-/** How many sessions still have names waiting to be applied. */
-export function pendingNameCount(): number {
-  return load().length;
+export function pendingNameCount(): number { return load().length; }
+
+/** Share overlapping retries, cap discovery requests, and back off while
+ * waiting for uploads/older backends. State is scoped to the API/fetcher. */
+export function applyPendingNames(baseUrl: string, fetcher: Fetcher): Promise<Result> {
+  let scopes = retries.get(fetcher);
+  if (!scopes) { scopes = new Map(); retries.set(fetcher, scopes); }
+  let state = scopes.get(baseUrl);
+  if (!state) {
+    state = { nextAt: 0, delay: RETRY_MS, signature: "", identityUnavailable: false, identities: new Map() };
+    scopes.set(baseUrl, state);
+  }
+  if (state.inFlight) return state.inFlight;
+  const sets = load();
+  if (!sets.length) return Promise.resolve({ applied: 0, pending: 0 });
+  const queueSignature = JSON.stringify(sets);
+  if (state.signature !== queueSignature) { state.nextAt = 0; state.delay = RETRY_MS; }
+  if (Date.now() < state.nextAt) return Promise.resolve({ applied: 0, pending: sets.length,
+    ...(state.identityUnavailable ? { identityUnavailable: true } : {}) });
+  state.signature = queueSignature;
+  const current = state;
+  current.inFlight = run(baseUrl, fetcher, sets, current).then((result) => {
+    current.identityUnavailable = result.identityUnavailable === true;
+    return result;
+  }).finally(() => {
+    current.nextAt = Date.now() + current.delay;
+    current.delay = Math.min(MAX_RETRY_MS, current.delay * 2);
+    current.inFlight = undefined;
+  });
+  return current.inFlight;
 }
 
-/** Try to apply every pending set. Returns how many sessions were applied and
- * how many remain (their bundles haven't uploaded/promoted yet, or no bundle
- * matched safely). Safe to call repeatedly — a set is removed only after every
- * one of its non-empty names is written. */
-export async function applyPendingNames(
-  baseUrl: string,
-  fetcher: Fetcher,
-): Promise<{ applied: number; pending: number }> {
-  let sets = load();
-  if (sets.length === 0) return { applied: 0, pending: 0 };
-
-  const { bundles } = await getRobotRecordings(baseUrl, fetcher);
+async function run(baseUrl: string, fetcher: Fetcher, sets: PendingNameSet[], state: RetryState): Promise<Result> {
+  const protectedIds = new Set(protectModernEpisodes(sets).map((r) => r.episodeId));
+  const { bundles } = await namingRequest(fetcher, (bounded) => getRobotRecordings(baseUrl, bounded));
+  const present = new Set(bundles.map((b) => b.session_id));
+  for (const [id, entry] of state.identities) {
+    if (!present.has(id) || entry.until <= Date.now()) state.identities.delete(id);
+  }
   const used = new Set<string>();
-  const remaining: PendingNameSet[] = [];
+  const completed = new Set<string>();
+  const listings = new Map<string, Promise<Listing>>();
+  let requests = 0;
   let applied = 0;
-
-  // Oldest session first, matched to its oldest eligible bundle, so two
-  // same-task same-count sessions pair up chronologically instead of both
-  // grabbing the newest upload.
-  sets = [...sets].sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
-  for (const set of sets) {
-    const t0 = Date.parse(set.startedAt) - CLOCK_SKEW_MS;
-    const candidates = bundles
-      .filter(
-        (b) =>
-          b.status === "PROMOTED" &&
-          !used.has(b.session_id) &&
-          b.episode_count === set.names.length &&
-          Date.parse(b.created_at) >= t0,
-      )
-      .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
-
-    let done = false;
+  let identityUnavailable = false;
+  retrySets: for (const set of [...sets].sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt))) {
+    const modern = identityBased(set);
+    const targetId = set.episodeIds?.[0];
+    const candidates = bundles.filter((b) => {
+      if (b.status !== "PROMOTED" || used.has(b.session_id)) return false;
+      if (!modern) return !protectedIds.has(b.recording_metadata?.episode_id ?? "")
+        && b.episode_count === set.names.length && Date.parse(b.created_at) >= Date.parse(set.startedAt) - CLOCK_SKEW_MS;
+      if (b.recording_metadata?.episode_id) return b.recording_metadata.episode_id === targetId;
+      // Older backends lack structured identity. Limit discovery to plausible
+      // single-take uploads; matching still requires the actual episode UUID.
+      return (b.episode_count == null || b.episode_count === 1)
+        && Date.parse(b.created_at) >= Date.parse(set.startedAt) - CLOCK_SKEW_MS
+        && b.label.trim() === set.task.trim().slice(0, 120).trim();
+    }).sort((a, b) => Number(Boolean(b.recording_metadata?.episode_id)) - Number(Boolean(a.recording_metadata?.episode_id))
+      || Date.parse(a.created_at) - Date.parse(b.created_at));
     for (const cand of candidates) {
+      const cached = state.identities.get(cand.session_id);
+      if (modern && !cand.recording_metadata?.episode_id && cached && !cached.ids.includes(targetId!)) {
+        if (!cached.ids.length) identityUnavailable = true;
+        continue;
+      }
       try {
-        const listing = await listRecordingEpisodes(baseUrl, fetcher, cand.session_id);
-        const eps = listing.episodes;
-        if (eps.length !== set.names.length) continue;
-        if (!eps.every((e) => e.task === set.task)) continue;
-        for (let i = 0; i < set.names.length; i++) {
-          const name = set.names[i].trim();
-          if (!name || eps[i].name === name) continue;
-          await nameRecordingEpisode(baseUrl, fetcher, cand.session_id, eps[i].index, name);
+        let listing = listings.get(cand.session_id);
+        if (!listing) {
+          if (requests >= MAX_LISTINGS) break;
+          requests++;
+          listing = namingRequest(fetcher, (bounded) => listRecordingEpisodes(baseUrl, bounded, cand.session_id));
+          listings.set(cand.session_id, listing);
+        }
+        const { episodes } = await listing;
+        state.identities.set(cand.session_id, { ids: episodes.flatMap((e) => e.episode_id ? [e.episode_id] : []), until: Date.now() + MAX_RETRY_MS });
+        if (modern) {
+          if (episodes.length && episodes.every((e) => !e.episode_id)) { identityUnavailable = true; continue; }
+          const target = episodes.find((e) => e.episode_id === targetId);
+          if (!target) continue;
+          const name = set.names[0].trim();
+          if (name && target.name !== name) await namingRequest(fetcher, (bounded) => nameRecordingEpisode(baseUrl, bounded, cand.session_id, target.index, name));
+        } else {
+          if (episodes.length !== set.names.length || !episodes.every((e) => e.task === set.task)) continue;
+          // Re-read after the network wait: a Keep may have queued a modern
+          // name while this legacy lookup was in flight. Never let heuristics
+          // consume a take reserved by identity, even after its name is saved.
+          const reservations = protectModernEpisodes(load());
+          const reserved = new Set(reservations.map((r) => r.episodeId));
+          if (reserved.has(cand.recording_metadata?.episode_id ?? "")
+            || episodes.some((e) => reserved.has(e.episode_id ?? ""))) continue;
+          const identityKnown = episodes.every((e) => e.episode_id)
+            || (episodes.length === 1 && cand.recording_metadata?.episode_id);
+          if (!identityKnown && reservations.some((r) => r.task === set.task
+            && Date.parse(cand.created_at) >= Date.parse(r.startedAt) - CLOCK_SKEW_MS)) {
+            // On an older API this may be a reserved modern take. Preserve the
+            // legacy name for manual naming / a future identity-aware retry.
+            identityUnavailable = true;
+            continue;
+          }
+          for (let i = 0; i < set.names.length; i++) {
+            const name = set.names[i].trim();
+            if (name && episodes[i].name !== name) await namingRequest(fetcher, (bounded) => nameRecordingEpisode(baseUrl, bounded, cand.session_id, episodes[i].index, name));
+          }
         }
         used.add(cand.session_id);
-        applied += 1;
-        done = true;
+        completed.add(signature(set));
+        applied++;
         break;
-      } catch {
-        // Listing/PATCH failed (still finalizing, transient network) — keep the
-        // set pending; already-written names re-verify as equal next round.
+      } catch (error) {
+        // A timeout ends this pass so an unavailable service cannot hold the
+        // retry lock for one deadline per queued name. Completed work is saved.
+        if (error instanceof NamingRequestTimeout) break retrySets;
         break;
       }
     }
-    if (!done) remaining.push(set);
   }
+  // Preserve names queued/edited while this pass was waiting on the network.
+  const remaining = load().filter((s) => !completed.has(signature(s)));
   save(remaining);
-  return { applied, pending: remaining.length };
+  state.signature = JSON.stringify(remaining);
+  if (applied) state.delay = RETRY_MS;
+  return { applied, pending: remaining.length, ...(identityUnavailable ? { identityUnavailable: true } : {}) };
 }

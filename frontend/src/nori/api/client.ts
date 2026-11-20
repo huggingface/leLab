@@ -740,6 +740,14 @@ export function getLibrary(baseUrl: string, fetcher: Fetcher): Promise<Library> 
  *  in flight; FAILED/PROMOTION_FAILED = needs attention. */
 export interface RawBundleEntry {
   session_id: string;
+  recording_metadata?: {
+    display_name?: string;
+    episode_id: string;
+    collection_id: string;
+    task: string;
+    outcome: "success" | "failure" | "aborted" | "discarded" | "unknown";
+    recorded_at: string;
+  } | null;
   label: string;
   status: string;
   hf_path_prefix: string | null;
