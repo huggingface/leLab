@@ -80,12 +80,9 @@ function configToRequest(c: TrainingConfig): TrainingRequest {
     save_freq: c.save_freq,
     save_checkpoint: c.save_checkpoint,
     resume: c.resume,
-    wandb_enable: c.wandb_enable,
-    wandb_project: c.wandb_project,
-    wandb_entity: c.wandb_entity,
-    wandb_notes: c.wandb_notes,
-    wandb_mode: c.wandb_mode,
-    wandb_disable_artifact: c.wandb_disable_artifact,
+    trackio_enable: c.trackio_enable,
+    trackio_project: c.trackio_project,
+    trackio_space_id: c.trackio_space_id,
     policy_device: c.policy_device,
     policy_use_amp: c.policy_use_amp,
     optimizer_type: c.optimizer_type,
@@ -131,9 +128,7 @@ const ConfigurationMode: React.FC = () => {
     save_freq: 1000,
     save_checkpoint: true,
     resume: false,
-    wandb_enable: false,
-    wandb_mode: "online",
-    wandb_disable_artifact: false,
+    trackio_enable: false,
     policy_use_amp: false,
     optimizer_type: "adam",
     use_policy_training_preset: true,
@@ -586,14 +581,14 @@ const MonitoringMode: React.FC<{ jobId: string }> = ({ jobId }) => {
                     View on Hub ↗
                   </a>
                 )}
-                {job.wandb_run_url && (
+                {job.tracking_url && (
                   <a
-                    href={job.wandb_run_url}
+                    href={job.tracking_url}
                     target="_blank"
                     rel="noreferrer"
                     className="text-xs text-yellow-300 hover:text-yellow-200 underline"
                   >
-                    View on W&B ↗
+                    View metrics ↗
                   </a>
                 )}
               </div>

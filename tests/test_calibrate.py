@@ -139,6 +139,25 @@ def test_get_status_returns_independent_recorded_ranges_snapshot() -> None:
     }
 
 
+def test_step_homing_uses_the_serial_bus_api() -> None:
+    """Autospec checks every bus call against LeRobot's SerialMotorsBus signatures."""
+    from unittest.mock import create_autospec
+
+    from lelab.calibrate import CalibrationManager
+    from lerobot.motors import SerialMotorsBus
+
+    bus = create_autospec(SerialMotorsBus, instance=True)
+    bus.set_half_turn_homings.return_value = {"shoulder_pan": -12}
+    mgr = CalibrationManager()
+    mgr.device = type("Device", (), {"bus": bus})()
+
+    mgr._step_homing()
+
+    bus.disable_torque.assert_called_once_with()
+    bus.set_operating_mode.assert_called_once_with("position")
+    assert mgr._homing_offsets == {"shoulder_pan": -12}
+
+
 def test_status_polling_does_not_wait_for_recording_bus_read() -> None:
     """A slow recording read does not block status polling."""
     from lelab.calibrate import CalibrationManager
@@ -311,16 +330,16 @@ def test_cleanup_device_force_releases_and_clears_when_disconnect_fails() -> Non
     device handle — otherwise the COM port stays busy and blocks the next run."""
     from lelab.calibrate import CalibrationManager
 
-    class PortHandler:
+    class Bus:
         def __init__(self) -> None:
-            self.closed = False
+            self.released = False
 
-        def closePort(self) -> None:  # noqa: N802 - mirrors LeRobot port handler API
-            self.closed = True
+        def disconnect(self) -> None:
+            self.released = True
 
     class Device:
         def __init__(self) -> None:
-            self.bus = type("Bus", (), {"port_handler": PortHandler()})()
+            self.bus = Bus()
 
         def disconnect(self) -> None:
             raise RuntimeError("Failed to write 'Torque_Enable' on id_=6")
@@ -331,5 +350,5 @@ def test_cleanup_device_force_releases_and_clears_when_disconnect_fails() -> Non
 
     mgr._cleanup_device()
 
-    assert device.bus.port_handler.closed is True  # force-released despite failure
+    assert device.bus.released is True  # force-released despite failure
     assert mgr.device is None  # handle cleared so a new calibration can start

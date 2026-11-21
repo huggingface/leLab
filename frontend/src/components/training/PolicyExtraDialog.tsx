@@ -18,7 +18,7 @@ interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   policyType: string;
-  packageName: string; // the probed module, e.g. "transformers"
+  packageName: string; // the requirements still unmet, e.g. "transformers<5.23.0,>=5.22.0"
   installTarget: string; // e.g. "lerobot[smolvla]"
   installHint: string; // e.g. "pip install 'lerobot[smolvla]'"
 }
@@ -63,11 +63,11 @@ const PolicyExtraDialog: React.FC<Props> = ({
             idleTitle={title}
             idleDescription={
               <>
-                Training a <span className="font-semibold">{policyType}</span> policy needs the{" "}
+                Training a <span className="font-semibold">{policyType}</span> policy needs{" "}
                 <code className="px-1 py-0.5 rounded bg-slate-900 text-sky-300">{packageName}</code>{" "}
-                package (installed via{" "}
+                (installed via{" "}
                 <code className="px-1 py-0.5 rounded bg-slate-900 text-sky-300">{installTarget}</code>),
-                which isn't in this environment yet. Install it to train this policy.
+                which this environment doesn't have yet. Install it to train this policy.
               </>
             }
             doneDescription={<RestartInstructions purpose={`${policyType} training`} />}

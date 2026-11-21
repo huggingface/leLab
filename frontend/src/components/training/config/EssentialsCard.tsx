@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { NumberInput } from '@/components/ui/number-input';
@@ -14,8 +14,6 @@ import {
 import { ConfigComponentProps } from '../types';
 import DatasetCombobox from '@/components/replay/DatasetCombobox';
 import { DatasetItem } from '@/lib/replayApi';
-import WandbInstallDialog from '../WandbInstallDialog';
-import { useApi } from '@/contexts/ApiContext';
 
 interface EssentialsCardProps extends ConfigComponentProps {
   datasets: DatasetItem[];
@@ -23,35 +21,6 @@ interface EssentialsCardProps extends ConfigComponentProps {
 }
 
 const EssentialsCard: React.FC<EssentialsCardProps> = ({ config, updateConfig, datasets, datasetsLoading }) => {
-  const { baseUrl, fetchWithHeaders } = useApi();
-  const [wandbDialogOpen, setWandbDialogOpen] = useState(false);
-  const [wandbInstallHint, setWandbInstallHint] = useState('pip install wandb');
-
-  const handleWandbToggle = async (checked: boolean) => {
-    if (!checked) {
-      updateConfig('wandb_enable', false);
-      return;
-    }
-    // Check availability before flipping the switch on. If wandb isn't
-    // importable in this lelab process, surface the same install flow used
-    // for the training extra (accelerate) instead of letting the user start
-    // a run that will fail.
-    try {
-      const r = await fetchWithHeaders(`${baseUrl}/system/wandb-extra`);
-      const data: { available: boolean; install_hint: string } = await r.json();
-      if (data.available) {
-        updateConfig('wandb_enable', true);
-      } else {
-        setWandbInstallHint(data.install_hint);
-        setWandbDialogOpen(true);
-      }
-    } catch {
-      // Backend unreachable — let the user proceed; training start will
-      // surface the real error if wandb is genuinely missing.
-      updateConfig('wandb_enable', true);
-    }
-  };
-
   return (
     <Card className="bg-slate-800/50 border-slate-700 rounded-xl">
       <CardHeader>
@@ -140,35 +109,29 @@ const EssentialsCard: React.FC<EssentialsCardProps> = ({ config, updateConfig, d
 
           <div className="flex items-center space-x-3 pt-6">
             <Switch
-              id="wandb_enable"
-              checked={config.wandb_enable}
-              onCheckedChange={handleWandbToggle}
+              id="trackio_enable"
+              checked={config.trackio_enable}
+              onCheckedChange={(checked) => updateConfig('trackio_enable', checked)}
               className="data-[state=checked]:bg-green-500"
             />
-            <Label htmlFor="wandb_enable" className="text-slate-300">
-              Enable Weights & Biases
+            <Label htmlFor="trackio_enable" className="text-slate-300">
+              Track with Trackio
             </Label>
           </div>
         </div>
 
-        <WandbInstallDialog
-          open={wandbDialogOpen}
-          onOpenChange={setWandbDialogOpen}
-          installHint={wandbInstallHint}
-        />
-
-        {config.wandb_enable && (
+        {config.trackio_enable && (
           <div>
-            <Label htmlFor="wandb_project" className="text-slate-300">
-              W&B Project Name
+            <Label htmlFor="trackio_project" className="text-slate-300">
+              Trackio Project Name
             </Label>
             <Input
-              id="wandb_project"
-              value={config.wandb_project || ''}
+              id="trackio_project"
+              value={config.trackio_project || ''}
               onChange={(e) =>
-                updateConfig('wandb_project', e.target.value || undefined)
+                updateConfig('trackio_project', e.target.value || undefined)
               }
-              placeholder="my-robotics-project"
+              placeholder="lerobot"
               className="bg-slate-900 border-slate-600 text-white rounded-lg"
             />
           </div>

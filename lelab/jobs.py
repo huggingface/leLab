@@ -36,7 +36,7 @@ from pathlib import Path
 from queue import Empty, Queue
 from typing import Literal, Protocol, runtime_checkable
 
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, Field
 
 from .train import TrainingRequest
 
@@ -88,8 +88,11 @@ class JobRecord(BaseModel):
     hf_flavor: str | None = None
     hf_repo_id: str | None = None
     hf_job_url: str | None = None
-    # Captured from training stdout the first time wandb prints the run URL.
-    wandb_run_url: str | None = None
+    # Captured from training stdout the first time Trackio prints the run's Space URL.
+    # Records persisted before the W&B to Trackio switch stored it as wandb_run_url.
+    tracking_url: str | None = Field(
+        default=None, validation_alias=AliasChoices("tracking_url", "wandb_run_url")
+    )
     # Number of checkpoints currently visible (local: filesystem; cloud:
     # Hub repo). Filled in by JobRegistry.list/get; persisted as zero.
     checkpoint_count: int = 0
@@ -141,20 +144,20 @@ class JobRunner(Protocol):
     def is_running(self) -> bool: ...
     def returncode(self) -> int | None: ...
     def stream_log_lines(self) -> list[LogLine]: ...
-    def wandb_run_url(self) -> str | None: ...
+    def tracking_url(self) -> str | None: ...
 
 
 # tqdm progress: "Training:   1%|▏         | 125/10000 [02:02<2:36:10,  1.05step/s]"
 _TQDM_RE = re.compile(r"Training:\s*\d+%[^|]*\|[^|]*\|\s*(\d+)/(\d+)\s*\[(?:[\d:]+)<([\d:]+)")
 
-# Wandb prints something like "wandb: 🚀 View run at https://wandb.ai/<entity>/<project>/runs/<id>"
-# when it boots. We capture the first URL of that shape we see.
-_WANDB_URL_RE = re.compile(r"https://wandb\.ai/[^\s/]+/[^\s/]+/runs/[A-Za-z0-9]+")
+# LeRobot logs "Track this run --> https://huggingface.co/spaces/<user>/<space>" when the run
+# syncs to a Space; a run kept in the local Trackio database prints a `trackio show` command.
+_TRACKING_URL_RE = re.compile(r"Track this run --> (https://\S+)")
 
 
-def extract_wandb_run_url(line: str) -> str | None:
-    match = _WANDB_URL_RE.search(line)
-    return match.group(0) if match else None
+def extract_tracking_url(line: str) -> str | None:
+    match = _TRACKING_URL_RE.search(line)
+    return match.group(1) if match else None
 
 
 def _parse_duration(s: str) -> float | None:
@@ -230,7 +233,7 @@ class SubprocessJobRunner:
         self._stop_event = threading.Event()
         self._log_file_path = log_file_path
         self._log_file = None  # type: ignore[assignment]
-        self._wandb_run_url: str | None = None
+        self._tracking_url: str | None = None
 
     def _open_log_file(self) -> None:
         """Open the persistent log sink (one JSON line per consumed line).
@@ -306,8 +309,8 @@ class SubprocessJobRunner:
             pass
         return out
 
-    def wandb_run_url(self) -> str | None:
-        return self._wandb_run_url
+    def tracking_url(self) -> str | None:
+        return self._tracking_url
 
     # -- internals --
 
@@ -328,10 +331,10 @@ class SubprocessJobRunner:
                 if not stripped:
                     continue
                 parse_metrics_into(stripped, self._metrics)
-                if self._wandb_run_url is None:
-                    url = extract_wandb_run_url(stripped)
+                if self._tracking_url is None:
+                    url = extract_tracking_url(stripped)
                     if url is not None:
-                        self._wandb_run_url = url
+                        self._tracking_url = url
                 self._on_line(stripped)
                 log_line = LogLine(timestamp=time.time(), message=stripped)
                 if self._log_file is not None:
@@ -402,7 +405,7 @@ class TailingJobRunner:
         # Replay everything that's already on disk so the parser catches up
         # on metrics, then tail from the current EOF.
         self._tail_offset = 0
-        self._wandb_run_url: str | None = None
+        self._tracking_url: str | None = None
 
     def start(self, job_id: str, config: TrainingRequest, output_dir: str) -> None:
         # Required by JobRunner Protocol but irrelevant here; the subprocess
@@ -446,8 +449,8 @@ class TailingJobRunner:
     def pid(self) -> int | None:
         return self._pid
 
-    def wandb_run_url(self) -> str | None:
-        return self._wandb_run_url
+    def tracking_url(self) -> str | None:
+        return self._tracking_url
 
     # -- internals --
 
@@ -476,10 +479,10 @@ class TailingJobRunner:
                         except Exception:
                             continue
                         parse_metrics_into(log_line.message, self._metrics)
-                        if self._wandb_run_url is None:
-                            url = extract_wandb_run_url(log_line.message)
+                        if self._tracking_url is None:
+                            url = extract_tracking_url(log_line.message)
                             if url is not None:
-                                self._wandb_run_url = url
+                                self._tracking_url = url
                         if self._log_queue.qsize() >= 1000:
                             with contextlib.suppress(Empty):
                                 self._log_queue.get_nowait()
@@ -631,6 +634,23 @@ def _generate_job_id(policy_type: str, dataset_repo_id: str) -> str:
     return f"{policy_type}_{dataset_slug}_{timestamp}"
 
 
+def _with_default_trackio_space(config: TrainingRequest) -> TrainingRequest:
+    """Sync a tracked run to the user's `lelab-trackio` Space when none is given.
+
+    A Space is what gives the run a dashboard link, and LeRobot requires one for
+    HF Jobs, whose local Trackio database vanishes with the pod. Signed out, the
+    run stays in this machine's Trackio database.
+    """
+    if not config.trackio_enable or config.trackio_space_id:
+        return config
+    from .utils.hf_auth import cached_whoami  # lazy: keeps unit-test imports cheap
+
+    info = cached_whoami()
+    if not info:
+        return config
+    return config.model_copy(update={"trackio_space_id": f"{info['name']}/lelab-trackio"})
+
+
 def _job_dir(output_root: Path, job_id: str) -> Path:
     return output_root / job_id
 
@@ -695,7 +715,7 @@ class JobRegistry:
         self._on_change: Callable[[], None] | None = None
 
         # Fired from the watchdog at ~1Hz with a compact snapshot of every
-        # running job (id, state, metrics, wandb url, checkpoint count) so
+        # running job (id, state, metrics, tracking url, checkpoint count) so
         # the dashboard keeps the progress bar live without refetching /jobs.
         self._on_progress: Callable[[builtins.list[dict]], None] | None = None
 
@@ -818,6 +838,7 @@ class JobRegistry:
         target = target or JobTarget()
         if target.runner == "hf_cloud" and not target.flavor:
             raise ValueError("flavor is required when runner is hf_cloud")
+        config = _with_default_trackio_space(config)
 
         with self._lock:
             # Local trainings are bounded by this machine's GPU/USB resources,
@@ -1213,12 +1234,12 @@ class JobRegistry:
             if runner is None or record is None:
                 continue
             if runner.is_running():
-                # Pull the wandb run URL once it appears in stdout.
-                if record.wandb_run_url is None:
-                    url = runner.wandb_run_url()
+                # Pull the Trackio Space URL once it appears in stdout.
+                if record.tracking_url is None:
+                    url = runner.tracking_url()
                     if url is not None:
                         with self._lock:
-                            record.wandb_run_url = url
+                            record.tracking_url = url
                         self._persist(record, force=True)
                 # Cloud jobs print their HF job id / page URL / model repo a few
                 # seconds after start; capture them onto the record once parsed.
@@ -1231,7 +1252,7 @@ class JobRegistry:
                         "id": record.id,
                         "state": record.state,
                         "metrics": record.metrics.model_dump(),
-                        "wandb_run_url": record.wandb_run_url,
+                        "tracking_url": record.tracking_url,
                         "checkpoint_count": self._count_checkpoints(record),
                     }
                 )
@@ -1244,8 +1265,8 @@ class JobRegistry:
                 self._sync_cloud_ids(record, runner)
             rc = runner.returncode()
             with self._lock:
-                if record.wandb_run_url is None:
-                    record.wandb_run_url = runner.wandb_run_url()
+                if record.tracking_url is None:
+                    record.tracking_url = runner.tracking_url()
                 record.state = "done" if rc == 0 else "failed"
                 record.ended_at = time.time()
                 record.exit_code = rc

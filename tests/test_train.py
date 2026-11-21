@@ -60,27 +60,27 @@ def test_optional_dataset_fields_only_present_when_set() -> None:
     assert cmd2[idx + 1 : idx + 4] == ["0", "1", "2"]
 
 
-def test_wandb_block_only_serialized_when_enabled() -> None:
+def test_trackio_block_only_serialized_when_enabled() -> None:
     from lelab.train import TrainingRequest, build_training_command
 
-    off = build_training_command(TrainingRequest(dataset_repo_id="x", wandb_enable=False), "/tmp/out")
-    assert _arg_value(off, "--wandb.enable") == "false"
-    assert "--wandb.project" not in off
+    off = build_training_command(TrainingRequest(dataset_repo_id="x"), "/tmp/out")
+    assert _arg_value(off, "--trackio.enable") == "false"
+    assert "--trackio.project" not in off
+    assert "--trackio.space_id" not in off
 
     on = build_training_command(
         TrainingRequest(
             dataset_repo_id="x",
-            wandb_enable=True,
-            wandb_project="proj",
-            wandb_entity="me",
-            wandb_run_id="abc",
+            trackio_enable=True,
+            trackio_project="proj",
+            trackio_space_id="me/lelab-trackio",
         ),
         "/tmp/out",
     )
-    assert _arg_value(on, "--wandb.enable") == "true"
-    assert _arg_value(on, "--wandb.project") == "proj"
-    assert _arg_value(on, "--wandb.entity") == "me"
-    assert _arg_value(on, "--wandb.run_id") == "abc"
+    assert _arg_value(on, "--trackio.enable") == "true"
+    assert _arg_value(on, "--trackio.project") == "proj"
+    assert _arg_value(on, "--trackio.space_id") == "me/lelab-trackio"
+    assert _arg_value(on, "--trackio.private") == "true"
 
 
 def test_push_to_hub_emits_repo_id_only_when_enabled() -> None:
@@ -196,6 +196,25 @@ def test_local_run_keeps_explicit_device() -> None:
 
     cmd = build_training_command(TrainingRequest(dataset_repo_id="x", policy_device="cpu"), "/tmp/out")
     assert _arg_value(cmd, "--policy.device") == "cpu"
+
+
+@pytest.mark.parametrize(
+    ("device", "runner", "expected"),
+    [("cuda", "local", "fp16"), ("cpu", "local", None), ("mps", "local", None), (None, "hf_cloud", "fp16")],
+)
+def test_amp_trains_in_fp16_on_gpus(device, runner, expected) -> None:
+    from lelab.jobs import JobTarget
+    from lelab.train import TrainingRequest, build_training_command
+
+    target = JobTarget(runner=runner, flavor="a10g-small") if runner == "hf_cloud" else None
+    req = TrainingRequest(dataset_repo_id="x", policy_device=device, policy_use_amp=True)
+    cmd = build_training_command(req, "/tmp/out", job_target=target)
+
+    assert _arg_value(cmd, "--policy.use_amp") == "true"
+    if expected is None:
+        assert "--accelerator.mixed_precision" not in cmd
+    else:
+        assert _arg_value(cmd, "--accelerator.mixed_precision") == expected
 
 
 def test_groot_policy_flags_are_emitted_only_for_groot() -> None:
