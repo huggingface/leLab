@@ -17,7 +17,7 @@ import { type ArmSide } from "@nori/sdk";
 import { useTeleopSession } from "@/nori/TeleopSessionContext";
 import { useConnectGate } from "@/nori/components/ConnectionPanel";
 import { ArmControlView } from "@/nori/remote/ArmControl";
-import { ActivationBanner, EstopBanner } from "@/nori/remote/TeleopStatus";
+import { ActivationBanner, AlertBanner, EstopBanner } from "@/nori/remote/TeleopStatus";
 import { armPadAxes, basePad, liftPad, splitArmAxes, type PadAxis } from "@/nori/remote/mobilePads";
 import { FORCE_CONSOLE_KEY } from "@/nori/remote/mobileRoute";
 
@@ -88,7 +88,7 @@ const AxisRow = ({ axis, disabled, onHold, onRelease }: {
 
 const Mobile = () => {
   const {
-    teleop, running, connecting, connState, tel, mode, daemonStatus, settings, setSetting,
+    teleop, running, connecting, connState, tel, mode, daemonStatus, alerts, settings, setSetting,
     connect, disconnect, toggleControlMode,
   } = useTeleopSession();
   const connectBlocked = useConnectGate();
@@ -204,6 +204,7 @@ const Mobile = () => {
           left the operator with a button that would not stick and no reason. Above
           the video for the same reason the E-STOP is. */}
       <EstopBanner status={running ? daemonStatus : null} />
+      {running && <AlertBanner alerts={alerts} />}
       {running && <ActivationBanner status={daemonStatus} />}
 
       <video

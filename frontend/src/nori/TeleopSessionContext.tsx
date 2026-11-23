@@ -18,8 +18,10 @@ import React, {
 import {
   RemoteTeleop,
   type ArmSide, type CallState, type ConnectStatus, type ControlMode, type DaemonStatus,
+  type RobotAlert,
   type RecordState, type TelemetryView,
 } from "@nori/sdk";
+import { EMPTY_ALERTS, applyAlert, type AlertMap } from "@/nori/remote/alertState";
 import { SupabaseSignaling } from "@nori/sdk/supabase";
 import { getSupabase } from "@/nori/auth/supabase";
 import { getAccessToken } from "@/nori/auth/session";
@@ -93,6 +95,10 @@ export interface TeleopSessionValue {
   // Distinguishes "robot online but daemon down/restarting/refusing" from a healthy session —
   // connState alone cannot (the media bridge stays connected while the daemon is dead).
   daemonStatus: DaemonStatus | null;
+  // Active robot operator alerts (`alert` frames, spec daemon/alert.json), keyed on code:
+  // a Servo halt (self-collision / joint bound / singularity), thermal band, jog limit.
+  // Per-session like daemonStatus. See remote/alertState.ts.
+  alerts: AlertMap;
   // On-robot episode recorder state (W2.11 record_status replies), null until the first
   // reply — recording-disabled robots answer {ok:false, error:"recorder unreachable"}.
   recordState: RecordState | null;
@@ -175,6 +181,7 @@ export const TeleopSessionProvider: React.FC<{ children: ReactNode }> = ({ child
   const [stale, setStale] = useState(false);
   const [call, setCall] = useState<CallState>(EMPTY_CALL);
   const [daemonStatus, setDaemonStatus] = useState<DaemonStatus | null>(null);
+  const [alerts, setAlerts] = useState<AlertMap>(EMPTY_ALERTS);
   const [recordState, setRecordState] = useState<RecordState | null>(null);
   const [connectStatus, setConnectStatus] = useState<ConnectStatus>({ phase: "idle" });
   const [logLines, setLogLines] = useState<string[]>([]);
@@ -295,6 +302,7 @@ export const TeleopSessionProvider: React.FC<{ children: ReactNode }> = ({ child
     setConnecting(true);
     setLogLines([]);
     setDaemonStatus(null);
+    setAlerts(EMPTY_ALERTS);
     setRecordState(null);
     setHeldNote(null);
     setConnectStatus({ phase: "joining" });
@@ -388,6 +396,10 @@ export const TeleopSessionProvider: React.FC<{ children: ReactNode }> = ({ child
       // Daemon health transitions (the SDK already appends them to the log; this drives the
       // banner/chip so "daemon down/restarting" never reads as random dead control).
       onDaemonStatus: setDaemonStatus,
+      // Robot operator alerts: Servo halts (self-collision / joint bound / singularity),
+      // thermal band, Cartesian jog limit. State keyed on code; rendered by AlertBanner.
+      // Never wired before 2026-11-23: a self-collision was a frozen arm with no reason.
+      onAlert: (a: RobotAlert) => setAlerts((prev) => applyAlert(prev, a)),
       // On-robot recorder replies (W2.11) — drives the CallBar record control.
       onRecord: setRecordState,
       // The connect-phase machine — drives the connection banner. Two failures mean the robot
@@ -448,6 +460,7 @@ export const TeleopSessionProvider: React.FC<{ children: ReactNode }> = ({ child
     setTel(EMPTY_TEL);
     setCall(EMPTY_CALL);
     setDaemonStatus(null);  // health is per-session; don't show a stale banner next connect
+    setAlerts(EMPTY_ALERTS);  // same: a halt belongs to the session that drove into it
     setRecordState(null);   // same: recorder state is a per-session probe
     setConnectStatus({ phase: "idle" });
   }, []);
@@ -523,7 +536,7 @@ export const TeleopSessionProvider: React.FC<{ children: ReactNode }> = ({ child
 
   const value = useMemo<TeleopSessionValue>(() => ({
     teleop, running, connecting, connState, tel, stale, controlActive, mode, call, daemonStatus,
-    recordState, connectStatus,
+    alerts, recordState, connectStatus,
     logLines, appendLog, settings, setSetting, connect, disconnect, toggleControlMode,
     setCurrentsListener, setTelemetryListener, setControlSentListener, scriptSource, setScriptSource,
     setSessionBusy, setYield, yieldedFor, heldNote, clearEstopLatch,
@@ -532,7 +545,7 @@ export const TeleopSessionProvider: React.FC<{ children: ReactNode }> = ({ child
     idleSecondsLeft: idle.secondsLeft,
   }), [
     teleop, running, connecting, connState, tel, stale, controlActive, mode, call, daemonStatus,
-    recordState, connectStatus,
+    alerts, recordState, connectStatus,
     logLines, appendLog, settings, setSetting, connect, disconnect, toggleControlMode,
     setCurrentsListener, setTelemetryListener, setControlSentListener, scriptSource, setScriptSource,
     setSessionBusy, setYield, yieldedFor, heldNote, clearEstopLatch,

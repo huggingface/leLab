@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { servoThermalThresholds, type ServoThermalThresholds } from "@/nori/robotModels";
 import { isPreparing, isStuck } from "@/nori/remote/armPhase";
 import { latchedDetail, useActivationLatch } from "@/nori/remote/activationLatch";
+import { activeAlerts, alertHeadline, type AlertMap } from "@/nori/remote/alertState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Pill } from "@/components/ui/pill";
@@ -201,6 +202,39 @@ export function EstopBanner({ status }: { status: DaemonStatus | null }) {
         {status.estop_detail ? ` (${status.estop_detail})` : ""}
       </p>
     </div>
+  );
+}
+
+// Robot operator alerts (`alert` frames): the conditions the robot itself names
+// that no other field carries. Today: a MoveIt Servo halt (`servo_halt`: the
+// arm froze because it would self-collide, hit a joint bound or a singularity;
+// the message says which arm and how to get out), the servo thermal band, and
+// a refused Cartesian jog. Rendered verbatim at the robot's severity, one card
+// per code, cleared by the robot. Before 2026-11-23 none of these reached the
+// screen: a self-collision on 0003 looked like a frozen arm with no reason.
+export function AlertBanner({ alerts }: { alerts: AlertMap }) {
+  const active = activeAlerts(alerts);
+  if (active.length === 0) return null;
+  return (
+    <>
+      {active.map((alert) => (
+        <div
+          key={alert.code}
+          className={cn(
+            "rounded-md border px-4 py-3",
+            alert.severity === "info"
+              ? "border-nori-h14131a/12 bg-nori-hf3f1e8 text-nori-h14131a"
+              : "border-nori-hd24a3d/35 bg-nori-hfde7e4 text-nori-ha3271c",
+          )}
+        >
+          <p className="font-mono text-[11px] uppercase tracking-[0.14em]">
+            {alertHeadline(alert)}
+          </p>
+          {/* Verbatim: the robot names the arm and the way out. */}
+          <p className="mt-1 text-sm">{alert.message}</p>
+        </div>
+      ))}
+    </>
   );
 }
 

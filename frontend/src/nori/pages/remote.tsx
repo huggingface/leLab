@@ -54,7 +54,7 @@ const Remote = () => {
   // it no longer owns the RemoteTeleop instance and must NOT stop it on unmount.
   const {
     teleop, running, connecting, connState, tel, stale, controlActive, mode, call, daemonStatus,
-    connectStatus, recordState,
+    alerts, connectStatus, recordState,
     logLines, appendLog, settings, setSetting: set, connect, disconnect: sessionDisconnect,
     toggleControlMode, setCurrentsListener, yieldedFor, heldNote,
   } = useTeleopSession();
@@ -483,7 +483,7 @@ const Remote = () => {
   // identity stable within a render pass.
   const ui: RemoteUi = useMemo(() => ({
     teleop, running, connecting, connected, connState, tel, stale, controlActive, mode, call,
-    daemonStatus, connectStatus, recordState, logLines, settings,
+    daemonStatus, alerts, connectStatus, recordState, logLines, settings,
     set: set as RemoteUi["set"],
     connect, requestDisconnect, connectBlocked, toggleControlMode, servoThermal, status,
     videoRef, selfViewRef, logRef, m6,
@@ -497,7 +497,7 @@ const Remote = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [
     teleop, running, connecting, connected, connState, tel, stale, controlActive, mode, call,
-    daemonStatus, connectStatus, recordState, logLines, settings, connectBlocked, servoThermal,
+    daemonStatus, alerts, connectStatus, recordState, logLines, settings, connectBlocked, servoThermal,
     status, m6, cameraTiles, selectedCamera, volume, clipName, controlMode, inVr, xrSupported,
     leaderActive, leaderCount, leaderSides, leaderEngaged, leaderWarnings, leaderCalibrating,
     showKeyboardCard, showLeaderCard, showVrCard, showLog,

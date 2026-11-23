@@ -22,9 +22,10 @@ import type { ServoThermalThresholds } from "@/nori/robotModels";
 import { VrHandoff } from "@/nori/components/VrHandoff";
 import {
   TelemetryPanel, GripForce, MotorFaultsBanner, ServoTemps, OvertempBanner, ControlLegend,
-  BaseCommandLegend, CallBar, ConnectionBanner, ControlOfflineBanner, ActivationBanner,
+  BaseCommandLegend, CallBar, ConnectionBanner, ControlOfflineBanner, ActivationBanner, AlertBanner,
   EstopBanner, RailHeight, RailHeightHelp, JointTelemetry,
 } from "@/nori/remote/TeleopStatus";
+import type { AlertMap } from "@/nori/remote/alertState";
 import { TelemetryFlowTracker, type TelemetryFlowSample } from "@/nori/remote/jointTelemetry";
 import { Robot3D, hasJointTelemetry } from "@/nori/remote/Robot3D";
 import RobotUrdfViewer from "@/nori/components/RobotUrdfViewer";
@@ -53,6 +54,7 @@ export type RemoteUi = {
   mode: ControlMode;
   call: CallState;
   daemonStatus: DaemonStatus | null;
+  alerts: AlertMap;
   connectStatus: ConnectStatus;
   recordState: RecordState | null;
   logLines: string[];
@@ -214,10 +216,13 @@ export const ArmControl = ({ compact = false }: { compact?: boolean }) => {
 
 // The status banners. Rendered by every layout, above the fold.
 export const Banners = () => {
-  const { connectStatus, running, daemonStatus, tel, servoThermal } = useRemoteUi();
+  const { connectStatus, running, daemonStatus, alerts, tel, servoThermal } = useRemoteUi();
   return (
     <>
       <EstopBanner status={daemonStatus} />
+      {/* Robot-named conditions (Servo halt, thermal, jog limit) right under the
+          E-stop: a frozen arm needs its reason before anything about the link. */}
+      {running && <AlertBanner alerts={alerts} />}
       <ConnectionBanner status={connectStatus} />
       {running && <ControlOfflineBanner status={daemonStatus} />}
       {running && <OvertempBanner latchReason={tel.latchReason} cutC={servoThermal.cutC} />}
