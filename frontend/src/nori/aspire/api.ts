@@ -7,6 +7,7 @@
 // `frame` events. Events are polled as JSON rather than streamed as SSE so one code path works
 // through the proxy and directly.
 
+import type { HarnessSnapshot } from "./harnesses";
 import { noriRequest } from "@/nori/api/client";
 import { ApiError, type Fetcher } from "@/lib/apiClient";
 
@@ -18,6 +19,8 @@ export interface TaskRecord {
   robot: string;
   instruction: string;
   status: TaskStatus;
+  constraints?: Record<string, unknown>;
+  authored_harness?: HarnessSnapshot;
   outcome?: Record<string, unknown> | null;
   waiting_for_answer?: boolean;
   waiting_for_instruction?: boolean;   // a continued task holding the arms for the next instruction

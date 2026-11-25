@@ -30,9 +30,11 @@ import {
   aspireApi, RobotBusyError, TERMINAL,
   type TaskEvent, type TaskRecord, type TaskStatus,
 } from "@/nori/aspire/api";
-import { CONTINUE_S, DEPTH_MODELS, LLM_CALLS, SECONDS, loadGoal, saveGoal, SPEED, TABLE_Z, loadSettings, parseTableZ, saveSettings, taskFields, type AgentSettings, PRIMITIVES } from "@/nori/aspire/settings";
+import { CONTINUE_S, DEPTH_MODELS, LLM_CALLS, SECONDS, loadGoal, saveGoal, SPEED, TABLE_Z, loadSettings, parseTableZ, saveSettings, taskFields, type AgentSettings } from "@/nori/aspire/settings";
 import { TuneSlider } from "@/nori/remote/TuneSlider";
 import { useAgentTask } from "@/nori/aspire/AgentTaskContext";
+import { HarnessSettings } from "@/nori/aspire/HarnessSettings";
+import { listHarnesses, rememberHarnessTask } from "@/nori/aspire/harnesses";
 import { RobotMemory } from "@/nori/aspire/RobotMemory";
 
 const EVENTS_MS = 1500;     // transcript poll
@@ -98,7 +100,9 @@ export function isAtBottom(el: { scrollHeight: number; scrollTop: number; client
 
 function settingsLine(s: Record<string, unknown>): string {
   const n = (v: unknown, unit = "") => (v == null ? "?" : `${String(v)}${unit}`);
-  return `speed ${n(s.speed_factor)} · table ${n(s.table_z, " m")} · depth ${n(s.depth_model)} · map ${s.world_session ? "on" : "off"} · base ${s.allow_base ? "on" : "off"} · recording ${s.record_episode ? "on" : "off"}` + (s.primitives ? ` · primitives ${String(s.primitives)}` : "");
+  return `speed ${n(s.speed_factor)} · table ${n(s.table_z, " m")} · depth ${n(s.depth_model)} · map ${s.world_session ? "on" : "off"} · base ${s.allow_base ? "on" : "off"} · recording ${s.record_episode ? "on" : "off"}` + (s.harness === "authored" ? " · model-built tools" : s.primitives ? ` · primitives ${String(s.primitives)}` : "")
+    + (s.reasoning_effort ? ` · reasoning ${String(s.reasoning_effort)}` : "")
+    + (s.model_speed ? ` · model speed ${String(s.model_speed)}` : "");
 }
 
 export const COMMENT_MAX = 400;   // the backend keeps the first 400 characters (Nori-Backend repo.py COMMENT_MAX_CHARS)
@@ -223,7 +227,14 @@ export function toRows(instruction: string, events: TaskEvent[]): Row[] {
         rows.push({ kind: "end", status: "done", text: `${head}${disagree}${e.summary ? ` — ${str(e.summary, 500)}` : ""}` });
         break;
       }
-      case "failed": rows.push({ kind: "end", status: "failed", text: `failed — ${str(e.reason)}` }); break;
+      case "failed": {
+        const reason = str(e.reason);
+        const message = reason.includes("constraints.primitives must be one of") && reason.includes("got 'authored'")
+          ? "This worker needs an update to run model-built tools."
+          : reason;
+        rows.push({ kind: "end", status: "failed", text: `failed — ${message}` });
+        break;
+      }
       case "cancelled": rows.push({ kind: "end", status: "cancelled", text: `■ stopped${e.reason ? ` — ${str(e.reason)}` : ""}` }); break;
       default: break;                                             // progress/collect events the page does not show
     }
@@ -247,7 +258,9 @@ const Agent = () => {
   const [showSettings, setShowSettings] = useState(true);
   const tune = (patch: Partial<AgentSettings>) => setSettings((s) => { const n = { ...s, ...patch }; saveSettings(n); return n; });
   const badTable = parseTableZ(settings.tableZ) === "invalid";
-  const { taskId, track } = useAgentTask();
+  const { taskId, track, harnessError } = useAgentTask();
+  const [selectedHarness, setSelectedHarness] = useState("");
+  useEffect(() => setSelectedHarness(""), [customer?.id]);
   const [record, setRecord] = useState<TaskRecord | null>(null);
   const [events, setEvents] = useState<TaskEvent[]>([]);
   const [answer, setAnswer] = useState("");
@@ -339,11 +352,11 @@ const Agent = () => {
   }, [appSessionUp, appSessionJoining, teleop, closeAppSession, robot, note]);
 
   // -- actions ---------------------------------------------------------------------------------------------------
-  const attach = useCallback((id: string) => {
+  const attach = (id: string, presence: boolean) => {
     sinceRef.current = 0;
-    setEvents([]); setRecord(null); setError(null); track(id, settings.stopOnClose);
+    setEvents([]); setRecord(null); setError(null); track(id, presence);
     note(`following task ${id.slice(0, 8)}`);
-  }, [note]);
+  };
 
   const start = async (clearFirst = false) => {
     if (busy || !goal.trim() || !robot || badTable) return;
@@ -359,19 +372,30 @@ const Agent = () => {
     }
     note(`start requested on ${robot}`);
     try {
+      const saved = selectedHarness && customer && settings.harness === "authored"
+        ? listHarnesses(customer.id, settings.model).find((h) => h.id === selectedHarness) : undefined;
+      if (selectedHarness && !saved) throw new Error("This local harness is unavailable. Choose another harness.");
+      const fields = taskFields(settings, saved?.snapshot);
       await yieldRobot();
-      const fields = taskFields(settings);
       const r = await api.start({
         robot, instruction: goal.trim(), budget: fields.budget,
         constraints: fields.constraints,
         caller: { kind: "lab_agent_page" },
       });
-      attach(r.task_id);
+      attach(r.task_id, fields.constraints.operator_presence === true);
+      if (settings.harness === "authored" && customer) {
+        try { rememberHarnessTask(customer.id, r.task_id); }
+        catch { setError("Local storage is unavailable. Keep this tab open to save the harness when storage is available."); }
+      }
     } catch (e) {
       note(`start failed: ${friendlyErrorMessage(e)}`);
       if (e instanceof RobotBusyError) {
         setError("This robot already has a task running" + (e.running ? " — showing it." : "."));
-        if (e.running) { await yieldRobot(); attach(e.running); }
+        if (e.running) {
+          await yieldRobot();
+          // The backend enforces presence only when the original task requested it.
+          attach(e.running, true);
+        }
       } else setError(friendlyErrorMessage(e));
     } finally { setBusy(false); }
   };
@@ -456,8 +480,10 @@ const Agent = () => {
               />
               {showSettings && (
                 <>
-                <fieldset disabled={active} className="space-y-2 rounded border border-nori-h14131a/12 p-3 text-[11px] text-muted-foreground">
-                  <TuneSlider label="speed" value={settings.speed} min={SPEED.min} max={SPEED.max}
+                <fieldset disabled={active || busy} className="space-y-2 rounded border border-nori-h14131a/12 p-3 text-[11px] text-muted-foreground">
+                  <HarnessSettings settings={settings} tune={tune} owner={customer?.id}
+                    selected={selectedHarness} onSelect={setSelectedHarness} />
+                  <TuneSlider label="robot speed" value={settings.speed} min={SPEED.min} max={SPEED.max}
                     title="How fast the robot moves, as a share of its full rate. A jog covers the same distance at any speed; contact is harder at higher speed."
                     onChange={(v) => tune({ speed: v })} />
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
@@ -483,14 +509,9 @@ const Agent = () => {
                         {DEPTH_MODELS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
                       </select>
                     </label>
-                    <label className="flex items-center gap-1.5" title="Which primitive set the agent gets. new: the target-based tools (move_to steers the hand to a point, locate_object, descend_until_contact, grasped, placed) next to the jog tools, with the position pick-and-place skill. old: the jog tools alone with the jog pick-and-place skill, as before 2026-11-06.">
-                      primitives
-                      <select value={settings.primitives} onChange={(e) => tune({ primitives: e.target.value as AgentSettings["primitives"] })} className="rounded border border-nori-h14131a/20 bg-transparent px-1 py-0.5">
-                        {PRIMITIVES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-                      </select>
-                    </label>
                     <label className="flex items-center gap-1.5" title="Build the 3D voxel map on every observe. About 5 s slower each time; only peek and where_to_look use it.">
-                      <input type="checkbox" checked={settings.worldMap} onChange={(e) => tune({ worldMap: e.target.checked })} />
+                      <input type="checkbox" disabled={settings.depthModel === "none"} checked={settings.depthModel !== "none" && settings.worldMap}
+                        onChange={(e) => tune({ worldMap: e.target.checked })} />
                       voxel map
                     </label>
                     <label className="flex items-center gap-1.5" title="Cancel the task (robot stopped first) if this tab closes. Switching pages or windows does not count.">
@@ -519,7 +540,11 @@ const Agent = () => {
                         onChange={(e) => tune({ continueS: Math.max(CONTINUE_S.min, Math.min(CONTINUE_S.max, Number(e.target.value) || 0)) })}
                         className="w-14 rounded border border-nori-h14131a/12 bg-nori-hfffdf7 px-1 py-0.5" aria-label="Seconds to hold for the next instruction" /> s
                     </label>
-                    <label className="flex items-center gap-1.5" title="At the end of the run the agent writes what it learned into this robot's memory (the card under the transcript) and reads it before the next task. Off runs the task without writing anything.">
+                    <label className="flex items-center gap-1.5" title="Include saved facts and advice from earlier runs on this robot in the agent's prompt.">
+                      <input type="checkbox" checked={settings.useLearnedEntries} onChange={(e) => tune({ useLearnedEntries: e.target.checked })} />
+                      use learned entries
+                    </label>
+                    <label className="flex items-center gap-1.5" title="Save what the agent learns from this run to the robot's memory.">
                       <input type="checkbox" checked={settings.learn} onChange={(e) => tune({ learn: e.target.checked })} />
                       learn from this run
                     </label>
@@ -568,8 +593,8 @@ const Agent = () => {
               </div>
             </div>
 
-            {error && (
-              <div className="rounded-md border border-nori-hb4442e/40 bg-nori-hfbecea p-3 text-[11px] text-nori-h8a2f20 shadow-sm">{error}</div>
+            {(error || harnessError) && (
+              <div className="rounded-md border border-nori-hb4442e/40 bg-nori-hfbecea p-3 text-[11px] text-nori-h8a2f20 shadow-sm">{error || harnessError}</div>
             )}
             {yieldedNote && (
               <div className="rounded-md border border-nori-hd98b3d/50 bg-nori-hfdf3e6 p-3 text-[11px] text-nori-hb06a1c shadow-sm">{yieldedNote}</div>

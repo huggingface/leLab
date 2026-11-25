@@ -47,6 +47,9 @@ describe("toRows", () => {
       .toMatchObject({ kind: "end", status: "done", text: "✓ goal reached — Picked it up." });
     expect(toRows("x", [ev(0, "done", { success_claim: false })]).at(-1)).toMatchObject({ text: "finished without success" });
     expect(toRows("x", [ev(0, "failed", { reason: "budget:llm_calls" })]).at(-1)).toMatchObject({ text: "failed — budget:llm_calls" });
+    const oldWorker = "ValueError: constraints.primitives must be one of ('position', 'jog'), got 'authored'";
+    expect(toRows("x", [ev(0, "failed", { reason: oldWorker })]).at(-1))
+      .toMatchObject({ text: "failed — This worker needs an update to run model-built tools." });
   });
 
   it("shows the agent's thinking and the settings a run used", () => {

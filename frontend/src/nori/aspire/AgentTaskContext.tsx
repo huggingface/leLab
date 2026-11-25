@@ -10,6 +10,7 @@ import { useApi } from "@/contexts/ApiContext";
 import { useTeleopSession } from "@/nori/TeleopSessionContext";
 import { useNori } from "@/nori/NoriContext";
 import { aspireApi, TERMINAL, type TaskStatus } from "@/nori/aspire/api";
+import { archiveTaskHarness, pendingHarnessTasks } from "./harnesses";
 import { backgroundTick, holdAwake } from "@/nori/aspire/backgroundTick";
 
 const PRESENCE_MS = 2000;       // the backend cancels after 6 s without a check-in
@@ -21,6 +22,7 @@ interface AgentTaskValue {
   taskId: string | null;
   status: TaskStatus | null;
   active: boolean;
+  harnessError: string | null;
   track: (id: string, presence: boolean) => void;
   stop: (reason: string) => Promise<void>;
 }
@@ -38,30 +40,72 @@ export const AgentTaskProvider = ({ children }: { children: ReactNode }) => {
   const api = useMemo(() => aspireApi(baseUrl, fetchWithHeaders), [baseUrl, fetchWithHeaders]);
   const [task, setTask] = useState<Tracked | null>(restore);
   const [status, setStatus] = useState<TaskStatus | null>(null);
+  const [harnessError, setHarnessError] = useState<string | null>(null);
+  const owner = customer?.id;
   const robot = activeRobotSerial ?? customer?.robot_serial_number ?? "the robot";
   const finished = status !== null && TERMINAL.has(status);
   const active = !!task && status !== null && !finished;
 
   const track = useCallback((id: string, presence: boolean) => {
-    setStatus(null); setTask({ id, presence });
+    setHarnessError(null); setStatus(null); setTask({ id, presence });
     try { sessionStorage.setItem(KEY, JSON.stringify({ id, presence })); } catch { /* a reload just loses the task view */ }
   }, []);
 
   // One tick drives both: the status read, and the check-in until the task has ended.
   useEffect(() => {
-    if (!task || finished) return;
+    if (!task || (finished && !harnessError)) return;
+    let stale = false;
+    let reading = false;
     const tick = () => {
-      if (task.presence) void api.presence(task.id).catch(() => { /* retried next tick */ });
-      void api.task(task.id).then((r) => setStatus(r.status)).catch(() => { /* retried next tick */ });
+      if (task.presence && !finished) void api.presence(task.id).catch(() => { /* retried next tick */ });
+      if (reading) return;
+      reading = true;
+      void api.task(task.id).then((r) => {
+        if (stale) return;
+        if (r.authored_harness || r.constraints?.harness === "authored") {
+          try {
+            if (!owner) throw new Error("Waiting for account");
+            archiveTaskHarness(owner, r);
+            setHarnessError(null);
+          } catch {
+            setHarnessError("Could not save the harness on this device. Check browser storage. Saving will retry.");
+          }
+        }
+        setStatus(r.status);
+      }).catch(() => { /* retried next tick */ }).finally(() => { reading = false; });
     };
     tick();
-    return backgroundTick(PRESENCE_MS, tick);
-  }, [api, task, finished]);
+    const stop = backgroundTick(PRESENCE_MS, tick);
+    return () => { stale = true; stop(); };
+  }, [api, task, finished, owner, harnessError]);
+
+  // Finish archiving runs started in a tab that has since closed, without taking over their presence check-ins.
+  useEffect(() => {
+    if (!owner) return;
+    let closed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    async function recover(account: string) {
+      try {
+        const ids = pendingHarnessTasks(account).filter((id) => id !== task?.id);
+        if (!ids.length) return;
+        for (const id of ids) {
+          if (closed) return;
+          try {
+            const record = await api.task(id);
+            if (!closed) archiveTaskHarness(account, record);
+          } catch { /* retry this run independently of other pending runs */ }
+        }
+      } catch { /* a later read can recover the saved task */ }
+      if (!closed) timer = setTimeout(() => void recover(account), 10000);
+    }
+    void recover(owner);
+    return () => { closed = true; clearTimeout(timer); };
+  }, [api, owner, task?.id]);
 
   useEffect(() => {
-    if (!finished) return;
+    if (!finished || harnessError) return;
     try { sessionStorage.removeItem(KEY); } catch { /* nothing to clean */ }
-  }, [finished]);
+  }, [finished, harnessError]);
 
   useEffect(() => (active ? holdAwake("nori-agent-task") : undefined), [active]);
 
@@ -75,7 +119,7 @@ export const AgentTaskProvider = ({ children }: { children: ReactNode }) => {
     if (task) await api.cancel(task.id, reason);
   }, [api, task]);
 
-  const value = useMemo(() => ({ taskId: task?.id ?? null, status, active, track, stop }), [task, status, active, track, stop]);
+  const value = useMemo(() => ({ taskId: task?.id ?? null, status, active, track, stop, harnessError }), [task, status, active, track, stop, harnessError]);
   return (
     <AgentTaskContext.Provider value={value}>
       {children}
