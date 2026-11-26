@@ -1217,12 +1217,21 @@ def _windows_cameras() -> list[dict[str, Any]]:
 
 
 def _v4l2_camera_name(index: int) -> str | None:
-    """Real camera name for /dev/video{index} from sysfs (Linux, no deps)."""
-    try:
-        with open(f"/sys/class/video4linux/video{index}/name", encoding="utf-8") as f:
-            return f.read().strip() or None
-    except OSError:
-        return None
+    """Real camera name for /dev/video{index} from sysfs (Linux, no deps).
+
+    Chrome labels a V4L2 camera with its USB interface string and falls back to
+    the card name only when there is none, so read them in the same order. The
+    card name can carry a "<product>: " prefix that Chrome's label lacks.
+    """
+    for leaf in ("device/interface", "name"):
+        try:
+            with open(f"/sys/class/video4linux/video{index}/{leaf}", encoding="utf-8") as f:
+                name = f.read().strip()
+        except OSError:
+            continue
+        if name:
+            return name
+    return None
 
 
 def _linux_cameras() -> list[dict[str, Any]]:

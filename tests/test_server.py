@@ -270,6 +270,39 @@ def test_v4l2_camera_name_returns_none_when_missing() -> None:
     assert server._v4l2_camera_name(999999) is None
 
 
+def _fake_sysfs(monkeypatch: pytest.MonkeyPatch, files: dict[str, str]) -> None:
+    import io
+
+    def fake_open(path, *args, **kwargs):
+        if path not in files:
+            raise FileNotFoundError(path)
+        return io.StringIO(files[path])
+
+    monkeypatch.setattr("builtins.open", fake_open)
+
+
+def test_v4l2_camera_name_prefers_usb_interface(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lelab import server
+
+    # uvcvideo names this camera "<product>: <interface>"; Chrome labels it by the interface.
+    _fake_sysfs(
+        monkeypatch,
+        {
+            "/sys/class/video4linux/video0/device/interface": "HD USB Camera\n",
+            "/sys/class/video4linux/video0/name": "USB 2.0 Camera: HD USB Camera\n",
+        },
+    )
+    assert server._v4l2_camera_name(0) == "HD USB Camera"
+
+
+def test_v4l2_camera_name_falls_back_to_card_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lelab import server
+
+    # No interface string (Logitech C270): Chrome falls back to the card name, and so do we.
+    _fake_sysfs(monkeypatch, {"/sys/class/video4linux/video2/name": "C270 HD WEBCAM\n"})
+    assert server._v4l2_camera_name(2) == "C270 HD WEBCAM"
+
+
 def test_import_model_route_returns_record(client, monkeypatch) -> None:
     from lelab import server
 
